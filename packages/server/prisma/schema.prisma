@@ -1,0 +1,1543 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  label       String
+  description String?
+  permissions String[]
+  isSystem    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  users       User[]
+
+  @@map("roles")
+}
+
+model User {
+  id                    String                @id @default(cuid())
+  email                 String                @unique
+  name                  String
+  passwordHash          String
+  department            Department
+  phone                 String?
+  active                Boolean               @default(true)
+  lastLoginAt           DateTime?
+  /// The three-person tier from the brief: the only accounts permitted to
+  /// create, disable, re-role or reset another account.
+  ///
+  /// Deliberately a database column AND gated by the SUPER_ADMIN_EMAILS
+  /// allowlist. The allowlist alone could not survive a direct database edit;
+  /// the column alone would let any administrator mint another super admin.
+  /// Granting it requires both: an existing super admin acting, and an email
+  /// that is on the configured list.
+  isSuperAdmin          Boolean               @default(false)
+  /// Provenance for `active = false`. Who switched the account off, when, and
+  /// why — the three questions asked the morning after someone loses access.
+  disabledAt            DateTime?
+  disabledReason        String?
+  disabledById          String?
+  createdById           String?
+  /// Set when an administrator resets a password, cleared on the next change.
+  /// The API refuses everything but /auth/me and /auth/change-password while true.
+  mustChangePassword    Boolean               @default(false)
+  passwordChangedAt     DateTime?
+  /// Per-account throttle, alongside the per-IP rate limit on /auth/login.
+  /// The IP limit stops one machine hammering many accounts; this stops many
+  /// machines hammering one account.
+  failedLoginCount      Int                   @default(0)
+  lockedUntil           DateTime?
+  roleId                String
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  activityLogs          ActivityLog[]
+  approvalsRequested    Approval[]            @relation("ApprovalRequestedBy")
+  attachments           Attachment[]
+  auditTrails           AuditTrail[]
+  importJobs            ImportJob[]
+  materialIssuesGiven   MaterialIssue[]       @relation("IssuedBy")
+  materialIssuesTaken   MaterialIssue[]       @relation("IssuedTo")
+  materialMovements     MaterialMovement[]
+  materialReservations  MaterialReservation[] @relation("ReservationBy")
+  notifications         Notification[]
+  completedStages       OrderStage[]          @relation("StageCompletedBy")
+  coordinatedOrders     Order[]               @relation("OrderCoordinator")
+  externalManagedOrders Order[]               @relation("OrderOutsideWorkManager")
+  productionRecords     ProductionRecord[]
+  proformaInvoices      ProformaInvoice[]     @relation("ProformaPreparedBy")
+  qualityAudits         QualityAudit[]
+  savedColumnMappings   SavedColumnMapping[]
+  taskComments          TaskComment[]
+  assignedTasks         Task[]                @relation("TaskAssignee")
+  completedTasks        Task[]                @relation("TaskCompletedBy")
+  createdBy             User?                 @relation("UserCreatedBy", fields: [createdById], references: [id])
+  createdUsers          User[]                @relation("UserCreatedBy")
+  disabledBy            User?                 @relation("UserDisabledBy", fields: [disabledById], references: [id])
+  disabledUsers         User[]                @relation("UserDisabledBy")
+  role                  Role                  @relation(fields: [roleId], references: [id])
+
+  @@index([department])
+  @@index([active])
+  @@index([isSuperAdmin])
+  @@map("users")
+}
+
+model Client {
+  id              String               @id @default(cuid())
+  name            String               @unique
+  code            String?
+  contactName     String?
+  email           String?
+  phone           String?
+  shippingAddress String?
+  billingAddress  String?
+  notes           String?
+  active          Boolean              @default(true)
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  orders          Order[]
+  columnMappings  SavedColumnMapping[]
+
+  @@map("clients")
+}
+
+model Factory {
+  id                 String              @id @default(cuid())
+  name               String              @unique
+  code               String?
+  address            String?
+  contact            String?
+  phone              String?
+  /// True for print/embroidery subcontractors such as AGE and Pro Print.
+  isExternal         Boolean             @default(false)
+  active             Boolean             @default(true)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  externalOperations ExternalOperation[]
+  externalOrders     Order[]             @relation("OrderExternalFactory")
+  orders             Order[]             @relation("OrderFactory")
+  qualityAudits      QualityAudit[]
+
+  @@map("factories")
+}
+
+/// Master colour list. `hex` drives the colour swatch in the quantity matrix.
+model RefColor {
+  id          String       @id @default(cuid())
+  name        String       @unique
+  hex         String?
+  position    Int          @default(0)
+  active      Boolean      @default(true)
+  bomItems    BomItem[]
+  orderColors OrderColor[]
+
+  @@map("ref_colors")
+}
+
+/// Master size list. `position` fixes the render order 2YXS → 3XL; sizes must
+/// never sort alphabetically.
+model RefSize {
+  id         String      @id @default(cuid())
+  name       String      @unique
+  /// The long form used on the Customer Order Ref sheet, e.g. "YOUTH 2X-SMALL".
+  longName   String?
+  position   Int         @default(0)
+  active     Boolean     @default(true)
+  orderSizes OrderSize[]
+
+  @@map("ref_sizes")
+}
+
+/// Generic single-column lookups from the Data-Base sheet, kept in one table
+/// keyed by `kind`. Ninety-odd fabrics and thirty item types do not each
+/// deserve their own table, and an admin can add a kind without a migration.
+model RefValue {
+  id       String  @id @default(cuid())
+  kind     RefKind
+  value    String
+  /// Arabic label where the sheet carries one (external work types are Arabic).
+  valueAr  String?
+  position Int     @default(0)
+  active   Boolean @default(true)
+
+  @@unique([kind, value])
+  @@index([kind, active])
+  @@map("ref_values")
+}
+
+model Order {
+  id                       String                @id @default(cuid())
+  /// Customer PO, e.g. "A302059B". Unique across the system.
+  poNumber                 String                @unique
+  orderName                String
+  season                   String
+  itemType                 String?
+  gender                   String?
+  styleNumber              String?
+  fit                      String?
+  blockPattern             String?
+  fabric                   String?
+  /// Secondary fabrics, from Order Details D21/D22.
+  fabric2                  String?
+  fabric3                  String?
+  fabricDescription        String?
+  shippingMethod           String?
+  /// Unit selling price in USD. 7.25 for A302059B.
+  pricePerPieceUsd         Decimal?              @db.Decimal(10, 4)
+  /// Cut allowance, stored as a fraction (0.05 = 5%). Drives the cut matrix.
+  cutPercentage            Decimal               @default(0.05) @db.Decimal(5, 4)
+  /// Accessory allowance, Order Details!D23.
+  accessoryPercentage      Decimal               @default(0.05) @db.Decimal(5, 4)
+  poDate                   DateTime?
+  promisedShippingDate     DateTime?
+  requiredDeliveryDate     DateTime?
+  fabricDeliveryToSupplier DateTime?
+  supplierDeliveryDate     DateTime?
+  externalReference        String?
+  externalWorkSort         String?
+  externalWorkType         String?
+  /// Addresses are snapshotted onto the order, not read live from the client:
+  /// a shipment that already left must keep the address it was sent to.
+  shippingAddress          String?
+  billingAddress           String?
+  priority                 Priority              @default(MEDIUM)
+  cancelled                Boolean               @default(false)
+  cancelledReason          String?
+  /// Denormalised roll-up, refreshed by the recompute service. Advisory only —
+  /// list queries sort on it, but every read path recomputes the truth from
+  /// @opsflow/shared. Never treated as authoritative.
+  cachedProgressPct        Int?                  @default(0)
+  cachedStatus             OrderStatus?          @default(DRAFT)
+  cachedStageKey           StageKey?
+  clientId                 String
+  factoryId                String?
+  externalFactoryId        String?
+  coordinatorId            String?
+  outsideWorkManagerId     String?
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
+  activityLogs             ActivityLog[]
+  approvals                Approval[]
+  attachments              Attachment[]
+  auditTrails              AuditTrail[]
+  bomItems                 BomItem[]
+  costing                  CostingRecord?
+  customInstructions       CustomInstruction[]
+  cuttingRecords           CuttingRecord[]
+  externalOperations       ExternalOperation[]
+  fabricRecords            FabricRecord[]
+  markers                  Marker[]
+  materialIssues           MaterialIssue[]
+  materialMovements        MaterialMovement[]
+  materialReservations     MaterialReservation[]
+  notifications            Notification[]
+  colors                   OrderColor[]
+  notes                    OrderNote[]
+  sizes                    OrderSize[]
+  stages                   OrderStage[]
+  client                   Client                @relation(fields: [clientId], references: [id])
+  coordinator              User?                 @relation("OrderCoordinator", fields: [coordinatorId], references: [id])
+  externalFactory          Factory?              @relation("OrderExternalFactory", fields: [externalFactoryId], references: [id])
+  factory                  Factory?              @relation("OrderFactory", fields: [factoryId], references: [id])
+  outsideWorkManager       User?                 @relation("OrderOutsideWorkManager", fields: [outsideWorkManagerId], references: [id])
+  packingLists             PackingList[]
+  productionRecords        ProductionRecord[]
+  proformaInvoices         ProformaInvoice[]
+  qualityAudits            QualityAudit[]
+  shipments                Shipment[]
+  quantities               StageQuantity[]
+  tasks                    Task[]
+
+  @@index([clientId])
+  @@index([coordinatorId])
+  @@index([season])
+  @@index([cachedStatus])
+  @@index([requiredDeliveryDate])
+  @@index([cancelled, cachedStatus])
+  @@map("orders")
+}
+
+/// The colour axis of this order's matrix.
+model OrderColor {
+  id          String          @id @default(cuid())
+  orderId     String
+  colorId     String
+  /// Per-colour product name — the Customer Order Ref sheet gives each colour a
+  /// team name ("CREW NECK SOCCER JERSEY - STRIKERS" for Sky Blue).
+  productName String?
+  position    Int             @default(0)
+  cartons     Carton[]
+  color       RefColor        @relation(fields: [colorId], references: [id])
+  order       Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  quantities  StageQuantity[]
+
+  @@unique([orderId, colorId])
+  @@index([orderId])
+  @@map("order_colors")
+}
+
+/// The size axis of this order's matrix.
+model OrderSize {
+  id         String          @id @default(cuid())
+  orderId    String
+  sizeId     String
+  position   Int             @default(0)
+  cartons    Carton[]
+  order      Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  size       RefSize         @relation(fields: [sizeId], references: [id])
+  quantities StageQuantity[]
+
+  @@unique([orderId, sizeId])
+  @@index([orderId])
+  @@map("order_sizes")
+}
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// THE quantity ledger.
+///
+/// Replaces nine parallel colour × size grids spread across 146 columns of the
+/// `Follow up` sheet plus the Main Order, Cut Order and Stock sheets. One row
+/// per (colour, size, ledger). Shortages are NOT stored — they are subtractions
+/// between ledgers, computed in @opsflow/shared. A stored shortage is a
+/// shortage that can disagree with its inputs.
+/// ─────────────────────────────────────────────────────────────────────────
+model StageQuantity {
+  id           String     @id @default(cuid())
+  orderId      String
+  orderColorId String
+  orderSizeId  String
+  ledger       QtyLedger
+  qty          Int        @default(0)
+  updatedAt    DateTime   @updatedAt
+  orderColor   OrderColor @relation(fields: [orderColorId], references: [id], onDelete: Cascade)
+  order        Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderSize    OrderSize  @relation(fields: [orderSizeId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, orderColorId, orderSizeId, ledger])
+  @@index([orderId, ledger])
+  @@map("stage_quantities")
+}
+
+/// The five free-text blocks the workbook copies between sheets by formula.
+/// One row each, read by many screens.
+model OrderNote {
+  id        String   @id @default(cuid())
+  orderId   String
+  kind      NoteKind
+  body      String
+  updatedAt DateTime @updatedAt
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, kind])
+  @@map("order_notes")
+}
+
+/// Per-order stage record. Holds dates and notes; its status and progress are
+/// derived from its tasks by @opsflow/shared, never written here.
+model OrderStage {
+  id                String       @id @default(cuid())
+  orderId           String
+  stageKey          StageKey
+  startedAt         DateTime?
+  dueDate           DateTime?
+  completedAt       DateTime?
+  notes             String?
+  completedById     String?
+  /// Required by the API whenever statusOverride is NOT_REQUIRED. Six weeks
+  /// later, "why did this order skip printing?" has an answer.
+  notRequiredReason String?
+  /// What a *person* has said about this step, overriding what the data implies.
+  ///
+  /// Null is the normal case: the step's state is derived from the order's own
+  /// facts by `deriveOrderSteps()` in @opsflow/shared. This column exists for
+  /// the three things the data cannot tell us:
+  ///
+  /// NOT_REQUIRED  this order does not need the step (with a reason)
+  /// WAITING       somebody is waiting on someone outside the system
+  /// COMPLETED     a step whose completion is a judgement, not a record —
+  /// "no special instructions" is a decision, not an absence
+  ///
+  /// A person's answer always beats the system's guess. Deriving over the top
+  /// of it would mean the coordinator's decision quietly disappeared.
+  statusOverride    StageStatus?
+  updatedAt         DateTime     @default(now()) @updatedAt
+  attachments       Attachment[]
+  completedBy       User?        @relation("StageCompletedBy", fields: [completedById], references: [id])
+  order             Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  tasks             Task[]
+
+  @@unique([orderId, stageKey])
+  @@index([orderId])
+  @@map("order_stages")
+}
+
+/// The reusable process definition — one row per line of Progress Status.
+/// Editable by an admin, so the factory can change its own process.
+model TaskTemplate {
+  key              String     @id
+  stageKey         StageKey
+  department       Department
+  title            String
+  requirementEn    String
+  /// Verbatim Arabic from Progress Status column H.
+  requirementAr    String
+  estimatedMinutes Int
+  sequence         Int
+  priority         Priority   @default(MEDIUM)
+  critical         Boolean    @default(false)
+  active           Boolean    @default(true)
+  position         Int        @default(0)
+  tasks            Task[]
+
+  @@index([sequence])
+  @@map("task_templates")
+}
+
+model Task {
+  id                 String        @id @default(cuid())
+  orderId            String
+  orderStageId       String
+  stageKey           StageKey
+  templateKey        String?
+  title              String
+  requirementEn      String?
+  requirementAr      String?
+  department         Department
+  sequence           Int           @default(0)
+  estimatedMinutes   Int?
+  /// Minutes actually spent — Progress Status column G, the "الوقت المستغرق الفعلى".
+  actualMinutes      Int?
+  status             TaskStatus    @default(NOT_STARTED)
+  priority           Priority      @default(MEDIUM)
+  dueDate            DateTime?
+  startedAt          DateTime?
+  completedAt        DateTime?
+  notes              String?
+  blockedReason      String?
+  assigneeId         String?
+  completedById      String?
+  /// Sequence dependency from Progress Status column I.
+  blockedByTaskId    String?
+  /// Set when the task was auto-created by a quality failure.
+  isCorrectiveAction Boolean       @default(false)
+  sourceAuditId      String?
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  attachments        Attachment[]
+  comments           TaskComment[]
+  assignee           User?         @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  blockedBy          Task?         @relation("TaskBlocking", fields: [blockedByTaskId], references: [id])
+  blocking           Task[]        @relation("TaskBlocking")
+  completedBy        User?         @relation("TaskCompletedBy", fields: [completedById], references: [id])
+  order              Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderStage         OrderStage    @relation(fields: [orderStageId], references: [id], onDelete: Cascade)
+  template           TaskTemplate? @relation(fields: [templateKey], references: [key])
+
+  @@index([orderId, status])
+  @@index([assigneeId, status])
+  @@index([department, status])
+  @@index([dueDate])
+  @@map("tasks")
+}
+
+model TaskComment {
+  id        String   @id @default(cuid())
+  taskId    String
+  authorId  String
+  body      String
+  createdAt DateTime @default(now())
+  author    User     @relation(fields: [authorId], references: [id])
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([taskId])
+  @@map("task_comments")
+}
+
+model BomItem {
+  id                  String                @id @default(cuid())
+  orderId             String
+  category            BomCategory
+  /// Where it goes, e.g. "Inside Top Back", "Main fabric", "ALL".
+  position            String?
+  item                String
+  description         String?
+  colorId             String?
+  /// Free-text colour for items whose colour is not in the master list ("DTF").
+  colorText           String?
+  /// Link to the factory's own stock record.
+  ///
+  /// Optional by design. A BOM line without it is still a valid requirement —
+  /// it simply cannot be checked against stock, reserved or issued from
+  /// inventory, and the material position reports it as UNLINKED rather than
+  /// pretending it is covered. Every BOM line imported before materials existed
+  /// keeps working unchanged.
+  materialId          String?
+  /// Consumption per piece — the sheet's "Coms./Piece" column.
+  consumptionPerPiece Decimal?              @db.Decimal(12, 6)
+  requiredQty         Decimal               @db.Decimal(14, 4)
+  unit                String
+  issuedQty           Decimal               @default(0) @db.Decimal(14, 4)
+  issuedByName        String?
+  issuedToName        String?
+  issuedAt            DateTime?
+  /// Set when a PO was raised for the shortfall.
+  purchaseOrderRef    String?
+  notes               String?
+  position_           Int                   @default(0) @map("sort_position")
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  color               RefColor?             @relation(fields: [colorId], references: [id])
+  material            Material?             @relation(fields: [materialId], references: [id])
+  order               Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  issues              MaterialIssue[]
+  movements           MaterialMovement[]
+  reservations        MaterialReservation[]
+
+  @@index([orderId, category])
+  @@index([materialId])
+  @@map("bom_items")
+}
+
+/// An issue event. BomItem.issuedQty is the running total; these rows are the
+/// audit trail behind it, carrying the issuer and receiver the workbook's
+/// warehouse step (Progress Status row 25) requires.
+model MaterialIssue {
+  id           String   @id @default(cuid())
+  orderId      String
+  bomItemId    String
+  qty          Decimal  @db.Decimal(14, 4)
+  unit         String
+  issuedAt     DateTime @default(now())
+  issuedById   String?
+  issuedToId   String?
+  /// Free text for recipients who are not system users (line supervisors).
+  issuedToName String?
+  notes        String?
+  bomItem      BomItem  @relation(fields: [bomItemId], references: [id], onDelete: Cascade)
+  issuedBy     User?    @relation("IssuedBy", fields: [issuedById], references: [id])
+  issuedTo     User?    @relation("IssuedTo", fields: [issuedToId], references: [id])
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([bomItemId])
+  @@map("material_issues")
+}
+
+/// Finished-goods stock deducted before cutting — Stock_Packing sheet.
+/// Held per colour/size in the STOCK ledger; this model records provenance.
+model StockRecord {
+  id           String   @id @default(cuid())
+  orderId      String
+  colorName    String
+  sizeName     String
+  availableQty Int      @default(0)
+  reservedQty  Int      @default(0)
+  usedQty      Int      @default(0)
+  location     String?
+  notes        String?
+  recordedAt   DateTime @default(now())
+
+  @@index([orderId])
+  @@map("stock_records")
+}
+
+model Material {
+  id           String                @id @default(cuid())
+  /// Factory's own code, e.g. "FAB-ROS-WHT". Unique when present.
+  code         String?               @unique
+  name         String
+  type         MaterialType
+  description  String?
+  /// Free text rather than a RefColor link: a supplier's "Ecru 4432" is not the
+  /// same vocabulary as the colours an order is sold in.
+  colorName    String?
+  /// Fabric only.
+  widthCm      Decimal?              @db.Decimal(8, 2)
+  composition  String?
+  gsm          Int?
+  /// Trims and packaging, e.g. "40x30x20" or "L".
+  sizeLabel    String?
+  /// The unit stock is *held* in. A BOM line in another unit is converted
+  /// explicitly, or refused — see convertQty() in @opsflow/shared.
+  unit         UnitOfMeasure
+  supplierName String?
+  supplierRef  String?
+  /// Reorder level. Null means the material is not monitored for low stock.
+  minimumQty   Decimal?              @db.Decimal(18, 4)
+  unitCostUsd  Decimal?              @db.Decimal(14, 6)
+  notes        String?
+  active       Boolean               @default(true)
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+  bomItems     BomItem[]
+  movements    MaterialMovement[]
+  reservations MaterialReservation[]
+  stock        MaterialStock[]
+
+  @@index([type, active])
+  @@index([name])
+  @@map("materials")
+}
+
+model InventoryLocation {
+  id        String             @id @default(cuid())
+  name      String             @unique
+  code      String?
+  /// Where finished goods or raw materials live, e.g. "Main store", "Cutting floor".
+  kind      String             @default("STORE")
+  notes     String?
+  active    Boolean            @default(true)
+  createdAt DateTime           @default(now())
+  movements MaterialMovement[]
+  stock     MaterialStock[]
+
+  @@map("inventory_locations")
+}
+
+model MaterialStock {
+  id          String             @id @default(cuid())
+  materialId  String
+  locationId  String?
+  /// Updated in the same transaction as every movement. Verifiable against the
+  /// ledger with reconcileStock().
+  physicalQty Decimal            @default(0) @db.Decimal(18, 4)
+  /// Where in the store it sits — a shelf reference, not an InventoryLocation.
+  binRef      String?
+  updatedAt   DateTime           @updatedAt
+  location    InventoryLocation? @relation(fields: [locationId], references: [id])
+  material    Material           @relation(fields: [materialId], references: [id], onDelete: Cascade)
+
+  @@unique([materialId, locationId])
+  @@index([materialId])
+  @@map("material_stock")
+}
+
+model MaterialMovement {
+  id            String               @id @default(cuid())
+  materialId    String
+  locationId    String?
+  type          MovementType
+  /// Always as entered. Direction comes from `type`; only ADJUSTMENT is signed.
+  qty           Decimal              @db.Decimal(18, 4)
+  unit          UnitOfMeasure
+  /// The balance immediately after this movement, so the ledger can be read as
+  /// a statement without re-summing it, and drift is visible at the row level.
+  balanceAfter  Decimal              @db.Decimal(18, 4)
+  orderId       String?
+  /// Which requirement this draws against, so a reservation can be drawn down.
+  reservationId String?
+  bomItemId     String?
+  /// Free text: "Issued to Cutting", "Returned unused", "Stock count".
+  reason        String?
+  batchLot      String?
+  reference     String?
+  /// Which production stage consumed it, where that applies.
+  stage         StageKey?
+  actorId       String?
+  /// Snapshotted so history survives a user being renamed or deactivated.
+  actorName     String
+  occurredAt    DateTime             @default(now())
+  createdAt     DateTime             @default(now())
+  actor         User?                @relation(fields: [actorId], references: [id])
+  bomItem       BomItem?             @relation(fields: [bomItemId], references: [id])
+  location      InventoryLocation?   @relation(fields: [locationId], references: [id])
+  material      Material             @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  order         Order?               @relation(fields: [orderId], references: [id])
+  reservation   MaterialReservation? @relation(fields: [reservationId], references: [id])
+
+  @@index([materialId, occurredAt])
+  @@index([orderId, occurredAt])
+  @@index([type, occurredAt])
+  @@map("material_movements")
+}
+
+model MaterialReservation {
+  id            String             @id @default(cuid())
+  materialId    String
+  orderId       String
+  /// The requirement this covers, where it came from a BOM line.
+  bomItemId     String?
+  qty           Decimal            @db.Decimal(18, 4)
+  consumedQty   Decimal            @default(0) @db.Decimal(18, 4)
+  unit          UnitOfMeasure
+  status        ReservationStatus  @default(ACTIVE)
+  reservedById  String?
+  releasedAt    DateTime?
+  releaseReason String?
+  notes         String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  movements     MaterialMovement[]
+  bomItem       BomItem?           @relation(fields: [bomItemId], references: [id])
+  material      Material           @relation(fields: [materialId], references: [id], onDelete: Cascade)
+  order         Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  reservedBy    User?              @relation("ReservationBy", fields: [reservedById], references: [id])
+
+  @@index([materialId, status])
+  @@index([orderId, status])
+  @@map("material_reservations")
+}
+
+model CuttingRecord {
+  id              String    @id @default(cuid())
+  orderId         String
+  cutDate         DateTime?
+  cuttingTeam     String?
+  cutByName       String?
+  inspectedByName String?
+  numberingByName String?
+  bundledByName   String?
+  approvedByName  String?
+  /// Actual pieces cut. Planned is derived from the ORDER/STOCK ledgers and the
+  /// cut percentage; only the actual is a fact worth storing.
+  actualCutQty    Int?
+  fabricUsedM     Decimal?  @db.Decimal(12, 3)
+  notes           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  order           Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("cutting_records")
+}
+
+model Marker {
+  id            String   @id @default(cuid())
+  orderId       String
+  markerNumber  String?
+  fabricName    String
+  fabricColor   String?
+  /// Which panel this marker cuts: ALL, Front, Back, Sleeve (R), Collar, ...
+  panel         String   @default("ALL")
+  /// Size ratio exactly as written on the sheet: "(YXS1), (YS1), (YM1), (YL1), (M1)".
+  /// Parsed by parseSizeRatio() in @opsflow/shared rather than pre-split, so the
+  /// planner's own notation survives round-tripping.
+  sizeRatio     String
+  layers        Int
+  markerLengthM Decimal  @db.Decimal(10, 3)
+  /// Metres the lay actually consumes — the sheet's own column X.
+  ///
+  /// Deliberately stored rather than derived from layers × markerLengthM: on
+  /// this order the two differ by ~7%, the end loss and splice allowance per
+  /// lay, which across six lays is 80 m. Deriving it would under-state the
+  /// fabric requirement, which is how a cutting floor runs short mid-lay.
+  totalLengthM  Decimal? @db.Decimal(12, 3)
+  nestPcs       Int?
+  efficiencyPct Decimal? @db.Decimal(6, 3)
+  maxLayer      Int?
+  notes         String?
+  position      Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("markers")
+}
+
+model FabricRecord {
+  id                 String   @id @default(cuid())
+  orderId            String
+  fabricName         String
+  colorName          String?
+  fabricType         String?
+  composition        String?
+  supplier           String?
+  requiredM          Decimal? @db.Decimal(12, 3)
+  availableM         Decimal? @db.Decimal(12, 3)
+  issuedM            Decimal? @db.Decimal(12, 3)
+  actualConsumptionM Decimal? @db.Decimal(12, 3)
+  responsibleName    String?
+  recordedAt         DateTime @default(now())
+  notes              String?
+  order              Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("fabric_records")
+}
+
+model ExternalOperation {
+  id                 String           @id @default(cuid())
+  orderId            String
+  externalFactoryId  String?
+  externalReference  String?
+  /// English label, e.g. "Full-piece printing".
+  operationType      String
+  /// The Arabic term the factory actually uses, e.g. "طباعة قطعة كاملة".
+  operationTypeAr    String?
+  /// Print | Embroidery
+  operationSort      String?
+  qty                Int
+  /// Per-piece rate, e.g. 0.035 met. of colour area on this order.
+  unitRate           Decimal?         @db.Decimal(12, 6)
+  unitPriceUsd       Decimal?         @db.Decimal(12, 4)
+  sentDate           DateTime?
+  expectedReturnDate DateTime?
+  actualReturnDate   DateTime?
+  status             ExternalOpStatus @default(NOT_SENT)
+  /// The enforceable version of External Order!M15 —
+  /// "برجاء عدم البدء ف طباعه الاوردر الا بعد موافقه العميل"
+  /// (do not begin printing before customer approval). When true, the API
+  /// refuses to move this operation to SENT/IN_PROGRESS without an APPROVED
+  /// approval. In the workbook this was a sentence; here it is a constraint.
+  requiresApproval   Boolean          @default(false)
+  approvalId         String?          @unique
+  notes              String?
+  /// Colours covered, as OrderColor ids.
+  colorIds           String[]
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+  attachments        Attachment[]
+  approval           Approval?        @relation(fields: [approvalId], references: [id])
+  externalFactory    Factory?         @relation(fields: [externalFactoryId], references: [id])
+  order              Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, status])
+  @@map("external_operations")
+}
+
+model Approval {
+  id                String             @id @default(cuid())
+  orderId           String
+  type              ApprovalType
+  status            ApprovalStatus     @default(PENDING)
+  /// When true, dependent work is hard-blocked until this clears.
+  blocking          Boolean            @default(true)
+  requestedDate     DateTime?
+  requestedById     String?
+  sentTo            String?
+  approvedDate      DateTime?
+  approvedByName    String?
+  comment           String?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  order             Order              @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  requestedBy       User?              @relation("ApprovalRequestedBy", fields: [requestedById], references: [id])
+  attachments       Attachment[]
+  externalOperation ExternalOperation?
+
+  @@index([orderId, status])
+  @@map("approvals")
+}
+
+/// Custom Instructions sheet — rich text plus images, visible to the
+/// departments that need them.
+model CustomInstruction {
+  id          String       @id @default(cuid())
+  orderId     String
+  title       String
+  /// HTML from the rich-text editor. Sanitised on write.
+  body        String
+  /// Which departments must see this instruction.
+  visibleTo   Department[]
+  position    Int          @default(0)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  attachments Attachment[]
+  order       Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("custom_instructions")
+}
+
+model ProductionRecord {
+  id           String              @id @default(cuid())
+  orderId      String
+  date         DateTime
+  operation    ProductionOperation
+  qty          Int
+  line         String?
+  team         String?
+  notes        String?
+  recordedById String?
+  createdAt    DateTime            @default(now())
+  order        Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  recordedBy   User?               @relation(fields: [recordedById], references: [id])
+
+  @@index([orderId, date])
+  @@index([orderId, operation])
+  @@map("production_records")
+}
+
+model QualityAudit {
+  id                     String          @id @default(cuid())
+  orderId                String
+  inspectionDate         DateTime
+  factoryId              String?
+  auditType              AuditType       @default(FINAL_AUDIT)
+  availableQty           Int
+  /// Defaults to the AQL band for availableQty; overridable by the auditor.
+  sampleSize             Int?
+  acceptedQty            Int?
+  rejectedQty            Int?
+  /// Verdict. Computed from the AQL table in @opsflow/shared; a manual override
+  /// is recorded in `overridden` so it is visible rather than silent.
+  result                 AuditResult     @default(PENDING)
+  overridden             Boolean         @default(false)
+  remarks                String?
+  correctiveAction       String?
+  /// Cleared when the corrective action task closes. Gates QUALITY_BLOCKED.
+  correctiveActionClosed Boolean         @default(false)
+  reinspectionOf         String?
+  reinspectFor           String?
+  auditorId              String?
+  factoryRepName         String?
+  colorsInspected        String[]
+  sizesInspected         String[]
+  createdAt              DateTime        @default(now())
+  updatedAt              DateTime        @updatedAt
+  attachments            Attachment[]
+  auditor                User?           @relation(fields: [auditorId], references: [id])
+  factory                Factory?        @relation(fields: [factoryId], references: [id])
+  order                  Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  defects                QualityDefect[]
+
+  @@index([orderId, result])
+  @@map("quality_audits")
+}
+
+model QualityDefect {
+  id             String         @id @default(cuid())
+  auditId        String
+  category       DefectCategory
+  qty            Int
+  comment        String?
+  /// True when found in the re-inspection pass rather than the first.
+  isReinspection Boolean        @default(false)
+  audit          QualityAudit   @relation(fields: [auditId], references: [id], onDelete: Cascade)
+
+  @@index([auditId])
+  @@map("quality_defects")
+}
+
+model PackingList {
+  id             String    @id @default(cuid())
+  orderId        String
+  reference      String?
+  /// Coordinator sign-off — Progress Status row 30 requires the review.
+  approved       Boolean   @default(false)
+  approvedAt     DateTime?
+  approvedByName String?
+  notes          String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  cartons        Carton[]
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("packing_lists")
+}
+
+model Carton {
+  id            String      @id @default(cuid())
+  packingListId String
+  cartonNumber  String
+  cartonSize    String?
+  orderColorId  String?
+  orderSizeId   String?
+  qty           Int
+  grossWeightKg Decimal?    @db.Decimal(10, 3)
+  netWeightKg   Decimal?    @db.Decimal(10, 3)
+  position      Int         @default(0)
+  orderColor    OrderColor? @relation(fields: [orderColorId], references: [id])
+  orderSize     OrderSize?  @relation(fields: [orderSizeId], references: [id])
+  packingList   PackingList @relation(fields: [packingListId], references: [id], onDelete: Cascade)
+
+  @@index([packingListId])
+  @@map("cartons")
+}
+
+model Shipment {
+  id                   String         @id @default(cuid())
+  orderId              String
+  method               String?
+  status               ShipmentStatus @default(NOT_READY)
+  qty                  Int            @default(0)
+  promisedShippingDate DateTime?
+  requiredDeliveryDate DateTime?
+  actualShippingDate   DateTime?
+  deliveredDate        DateTime?
+  trackingNumber       String?
+  carrier              String?
+  awbNumber            String?
+  containerSeal        String?
+  vesselVoyage         String?
+  finalDestination     String?
+  notes                String?
+  /// Set when an admin used shipment:override to ship more than was produced.
+  overrideApproved     Boolean        @default(false)
+  overrideReason       String?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+  attachments          Attachment[]
+  order                Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@map("shipments")
+}
+
+model CostingRecord {
+  id                     String     @id @default(cuid())
+  orderId                String     @unique
+  costingDate            DateTime?
+  /// EGP per USD. Accessory prices on the sheet are quoted in EGP and divided
+  /// by this (=0.4/$D$12), so it must be stored with the costing, not inferred.
+  dollarRate             Decimal    @default(48.5) @db.Decimal(10, 4)
+  dailyCostEgp           Decimal?   @db.Decimal(14, 4)
+  machineCount           Int?
+  machineDaysUsed        Int?
+  daysInLine             Int?
+  productionLineMachines Json?
+  sublimationCostUsd     Decimal?   @db.Decimal(14, 4)
+  embroideryCostUsd      Decimal?   @db.Decimal(14, 4)
+  externalOpCostUsd      Decimal?   @db.Decimal(14, 4)
+  notes                  String?
+  createdAt              DateTime   @default(now())
+  updatedAt              DateTime   @updatedAt
+  lines                  CostLine[]
+  order                  Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@map("costing_records")
+}
+
+model CostLine {
+  id           String        @id @default(cuid())
+  costingId    String
+  group        CostGroup
+  label        String
+  quantity     Decimal?      @db.Decimal(14, 4)
+  unit         String
+  unitPriceUsd Decimal?      @db.Decimal(14, 6)
+  /// Original EGP price where the sheet quoted one, kept for traceability.
+  unitPriceEgp Decimal?      @db.Decimal(14, 4)
+  position     Int           @default(0)
+  costing      CostingRecord @relation(fields: [costingId], references: [id], onDelete: Cascade)
+
+  @@index([costingId])
+  @@map("cost_lines")
+}
+
+model ProformaInvoice {
+  id                  String                @id @default(cuid())
+  orderId             String
+  /// C4 on the sheet. Free text: the factory's own numbering, not ours.
+  number              String?
+  /// H5. Defaults to the day it is created, but editable — a proforma is often
+  /// dated the day it was agreed, not the day somebody typed it in.
+  date                DateTime              @default(now())
+  /// The consignee block, B5:D13. Snapshotted onto the invoice rather than read
+  /// live from the client, for the same reason as Order.shippingAddress: a
+  /// document that has been sent must keep the details it was sent with.
+  consignee           String?
+  billingAddress      String?
+  email               String?
+  vesselVoyage        String?
+  containerSeal       String?
+  shippingDate        DateTime?
+  shipmentFrom        String?               @default("Cairo / Egypt")
+  shipmentTo          String?
+  consolidatingVendor String?
+  /// Currency of unitPrice on every line. USD throughout the workbook, but a
+  /// column beats an assumption baked into five screens.
+  currency            String                @default("USD")
+  /// B37:D47 on the sheet — origin, payment terms, bank details. Boilerplate,
+  /// but boilerplate that changes; stored per invoice so an old one still
+  /// reads as it was sent.
+  terms               String?
+  /// Null until somebody sends it. A sent proforma is the customer's copy and
+  /// the API refuses to edit its lines afterwards.
+  sentAt              DateTime?
+  preparedById        String?
+  createdAt           DateTime              @default(now())
+  updatedAt           DateTime              @updatedAt
+  lines               ProformaInvoiceLine[]
+  order               Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  preparedBy          User?                 @relation("ProformaPreparedBy", fields: [preparedById], references: [id])
+
+  @@index([orderId])
+  @@map("proforma_invoices")
+}
+
+model ProformaInvoiceLine {
+  id          String          @id @default(cuid())
+  invoiceId   String
+  /// B14 "Item / Description". One line per item as the factory writes it —
+  /// usually the style, sometimes split by colour.
+  description String
+  quantity    Decimal?        @db.Decimal(14, 4)
+  unit        String          @default("PCS")
+  unitPrice   Decimal?        @db.Decimal(14, 6)
+  position    Int             @default(0)
+  invoice     ProformaInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("proforma_invoice_lines")
+}
+
+model Attachment {
+  id                  String             @id @default(cuid())
+  orderId             String?
+  orderStageId        String?
+  stageKey            StageKey?
+  taskId              String?
+  approvalId          String?
+  externalOperationId String?
+  qualityAuditId      String?
+  shipmentId          String?
+  customInstructionId String?
+  fileName            String
+  documentType        DocumentType       @default(OTHER)
+  mimeType            String
+  sizeBytes           Int
+  /// Driver-agnostic key, never a filesystem path — so the local driver can be
+  /// swapped for S3 without touching a single row.
+  storageKey          String
+  storageDriver       String             @default("local")
+  /// Bumped when a file of the same name and type is re-uploaded.
+  version             Int                @default(1)
+  checksum            String?
+  uploadedById        String
+  createdAt           DateTime           @default(now())
+  approval            Approval?          @relation(fields: [approvalId], references: [id], onDelete: Cascade)
+  customInstruction   CustomInstruction? @relation(fields: [customInstructionId], references: [id], onDelete: Cascade)
+  externalOperation   ExternalOperation? @relation(fields: [externalOperationId], references: [id], onDelete: Cascade)
+  order               Order?             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderStage          OrderStage?        @relation(fields: [orderStageId], references: [id], onDelete: Cascade)
+  qualityAudit        QualityAudit?      @relation(fields: [qualityAuditId], references: [id], onDelete: Cascade)
+  shipment            Shipment?          @relation(fields: [shipmentId], references: [id], onDelete: Cascade)
+  task                Task?              @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  uploadedBy          User               @relation(fields: [uploadedById], references: [id])
+
+  @@index([orderId])
+  @@index([orderId, documentType])
+  @@map("attachments")
+}
+
+model ActivityLog {
+  id         String   @id @default(cuid())
+  orderId    String?
+  actorId    String?
+  /// Snapshotted so history survives a user being deactivated or renamed.
+  actorName  String
+  action     String
+  summary    String
+  entityType String?
+  entityId   String?
+  meta       Json?
+  createdAt  DateTime @default(now())
+  actor      User?    @relation(fields: [actorId], references: [id])
+  order      Order?   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, createdAt])
+  @@index([createdAt])
+  @@map("activity_logs")
+}
+
+/// Field-level change log. Written by Prisma middleware rather than by each
+/// route, so a future endpoint cannot forget to log.
+model AuditTrail {
+  id         String   @id @default(cuid())
+  orderId    String?
+  entityType String
+  entityId   String
+  /// CREATE | UPDATE | DELETE. Defaults to UPDATE because every row written
+  /// before the admin audit viewer existed was a field-level update.
+  action     String   @default("UPDATE")
+  field      String
+  oldValue   String?
+  newValue   String?
+  actorId    String?
+  actorName  String
+  /// Required for privileged overrides such as shipment:override.
+  reason     String?
+  createdAt  DateTime @default(now())
+  actor      User?    @relation(fields: [actorId], references: [id])
+  order      Order?   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([entityType, entityId])
+  @@index([orderId, createdAt])
+  @@index([actorId, createdAt])
+  @@index([entityType, createdAt])
+  @@map("audit_trails")
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  orderId   String?
+  type      NotificationType
+  title     String
+  body      String?
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+  order     Order?           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+/// Excel import job — the five-step pipeline in ARCHITECTURE.md §7.
+model ImportJob {
+  id                String       @id @default(cuid())
+  fileName          String
+  storageKey        String
+  status            ImportStatus @default(UPLOADED)
+  profile           String?
+  profileConfidence Decimal?     @db.Decimal(5, 4)
+  /// Detected sheets, resolved field mappings, and validation issues. JSON
+  /// because the shape is per-profile and the job is transient by nature.
+  detectedSheets    Json?
+  mappings          Json?
+  issues            Json?
+  preview           Json?
+  createdOrderId    String?
+  errorMessage      String?
+  uploadedById      String
+  createdAt         DateTime     @default(now())
+  committedAt       DateTime?
+  uploadedBy        User         @relation(fields: [uploadedById], references: [id])
+
+  @@index([uploadedById, status])
+  @@map("import_jobs")
+}
+
+model SavedColumnMapping {
+  id                String    @id @default(cuid())
+  /// Null for a mapping that applies to any customer with this header shape.
+  clientId          String?
+  label             String
+  /// Stable hash of the sorted, normalised header row, so the right saved
+  /// mapping is offered even when a customer sends several file shapes.
+  headerFingerprint String
+  /// { "order qty": "QUANTITY", "shade": "COLOR", … }
+  mapping           Json
+  /// Bumped every time the mapping is reused, so the list can show what earns
+  /// its keep and stale entries are obvious.
+  useCount          Int       @default(0)
+  lastUsedAt        DateTime?
+  createdById       String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  client            Client?   @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  createdBy         User?     @relation(fields: [createdById], references: [id])
+
+  @@unique([clientId, headerFingerprint])
+  @@index([headerFingerprint])
+  @@map("saved_column_mappings")
+}
+
+enum Department {
+  COORDINATOR
+  FACTORY_MANAGER
+  PRODUCTION_MANAGER
+  CUTTING_MARKER
+  WAREHOUSE
+  EXTERNAL_OPS
+  PACKING
+  QUALITY
+  FOLLOW_UP
+  FINANCE
+  ADMIN
+}
+
+enum RefKind {
+  SEASON
+  FABRIC
+  FIT
+  BLOCK_PATTERN
+  ITEM_TYPE
+  GENDER
+  SHIPPING_METHOD
+  EXTERNAL_WORK_SORT
+  EXTERNAL_WORK_TYPE
+  POSITION
+  UNIT
+  ITEM_SORT
+  THREAD_COLOR
+  REFERENCE
+  COLLAR
+  CUFF
+  SIZE_LABEL
+  FABRIC_COMPOSITION
+  BRAND_LOGO
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum OrderStatus {
+  DRAFT
+  WAITING_APPROVAL
+  READY_FOR_PRODUCTION
+  IN_PRODUCTION
+  PRODUCTION_DELAYED
+  QUALITY_CHECK
+  QUALITY_BLOCKED
+  PACKING
+  READY_TO_SHIP
+  SHIPPED
+  COMPLETED
+  CANCELLED
+}
+
+enum QtyLedger {
+  ORDER
+  STOCK
+  CUT
+  IN_LINE
+  OUT_LINE
+  PACKED
+  SHIPPED
+  SECOND_DEGREE
+}
+
+enum NoteKind {
+  GENERAL
+  SPREAD
+  CUT
+  PACKING
+  EXTERNAL
+}
+
+enum StageKey {
+  CUSTOMER_ORDER_REF
+  ORDER_DETAILS
+  MAIN_ORDER
+  PROGRESS_STATUS
+  CUT_ORDER
+  LAYING_FABRIC
+  BILL_OF_MATERIAL
+  CUSTOM_INSTRUCTIONS
+  EXTERNAL_ORDER
+  STOCK
+  FOLLOW_UP
+  PRODUCTION_FOLLOW_UP
+  PACKING
+  AUDIT
+  ACTUAL_COSTING
+  DATABASE
+  INVOICE
+  COMPLETED
+  PROFORMA_INVOICE
+}
+
+enum StageStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  WAITING
+  COMPLETED
+  BLOCKED
+  OVERDUE
+  /// "This order does not need this step." A decision somebody made and can be
+  /// asked about — not the same as a step nobody has got to yet.
+  NOT_REQUIRED
+}
+
+enum TaskStatus {
+  NOT_STARTED
+  IN_PROGRESS
+  WAITING
+  COMPLETED
+  BLOCKED
+}
+
+enum BomCategory {
+  FABRIC
+  THREAD
+  LABEL
+  TRANSFER
+  BADGE
+  LOGO
+  SPONSOR
+  SIZE
+  POLY_BAG
+  BUTTER_PAPER
+  STICKY_TAPE
+  BARCODE_PAPER
+  HALF_BOX
+  CARTON
+  TAPE
+  ACCESSORY
+  OTHER
+}
+
+enum MaterialType {
+  FABRIC
+  THREAD
+  TRIM
+  LABEL
+  BUTTON
+  ZIPPER
+  ELASTIC
+  PRINT_TRANSFER
+  BADGE
+  PACKAGING
+  CARTON
+  POLY_BAG
+  ACCESSORY
+  CHEMICAL
+  OTHER
+}
+
+enum MovementType {
+  RECEIPT
+  ISSUE
+  RETURN
+  ADJUSTMENT
+  WASTAGE
+  TRANSFER_IN
+  TRANSFER_OUT
+}
+
+enum ReservationStatus {
+  ACTIVE
+  FULFILLED
+  RELEASED
+  CANCELLED
+}
+
+enum UnitOfMeasure {
+  M
+  CM
+  YD
+  KG
+  G
+  PCS
+  DZN
+  ROLL
+  CONE
+  SET
+  BOX
+  L
+}
+
+enum ExternalOpStatus {
+  NOT_SENT
+  WAITING_APPROVAL
+  SENT
+  IN_PROGRESS
+  RETURNED
+  CANCELLED
+}
+
+enum ApprovalType {
+  PRINT_ARTWORK
+  EMBROIDERY
+  COLOR
+  SAMPLE
+  LABEL
+  PACKING
+  PRODUCTION
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CHANGES_REQUESTED
+}
+
+enum ProductionOperation {
+  CUTTING
+  SEWING
+  PRINTING
+  EMBROIDERY
+  WASHING
+  FINISHING
+  PACKING
+}
+
+enum AuditType {
+  FINAL_AUDIT
+  BEFORE_IRON
+  BEFORE_PACKING
+  IN_PACKING
+  INLINE
+}
+
+enum AuditResult {
+  PENDING
+  PASS
+  FAIL
+}
+
+enum DefectCategory {
+  COLOR_COMBINATION
+  FABRIC_DEFECT
+  CONSTRUCTION_STITCHING
+  TRIMMING
+  PRINT_EMBROIDERY
+  CLEANLINESS
+  PACKING
+  MEASUREMENTS
+}
+
+enum ShipmentStatus {
+  NOT_READY
+  READY
+  BOOKED
+  SHIPPED
+  DELIVERED
+}
+
+enum CostGroup {
+  FABRIC
+  ACCESSORY
+  EXTERNAL
+  LABOUR
+  OTHER
+}
+
+enum DocumentType {
+  CUSTOMER_PO
+  CUSTOMER_REFERENCE
+  ARTWORK
+  TECH_PACK
+  FABRIC_PHOTO
+  SAMPLE_PHOTO
+  MARKER_FILE
+  BOM
+  EXTERNAL_OP_DOC
+  PACKING_LIST
+  QUALITY_REPORT
+  INVOICE
+  SHIPPING_DOC
+  PROFORMA_INVOICE
+  OTHER
+}
+
+enum NotificationType {
+  TASK_ASSIGNED
+  TASK_OVERDUE
+  APPROVAL_REQUESTED
+  APPROVAL_RECEIVED
+  MATERIAL_SHORTAGE
+  PRODUCTION_DELAY
+  QUALITY_FAILURE
+  PACKING_COMPLETED
+  SHIPMENT_READY
+  ORDER_OVERDUE
+  MENTIONED
+}
+
+enum ImportStatus {
+  UPLOADED
+  DETECTED
+  MAPPED
+  VALIDATED
+  COMMITTED
+  FAILED
+}

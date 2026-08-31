@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: opsflow-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: opsflow
+      POSTGRES_PASSWORD: opsflow
+      POSTGRES_DB: opsflow
+    ports:
+      - "5433:5432"
+    volumes:
+      - opsflow-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U opsflow -d opsflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  opsflow-pgdata:

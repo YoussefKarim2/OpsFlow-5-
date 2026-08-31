@@ -1,0 +1,21 @@
+// Typecheck the seed scripts.
+//
+// The main config sets `rootDir: src`, which excludes `prisma/` — so the seed,
+// the single most runtime-fragile file in the repo, was never typechecked at
+// all. It runs once, against a live database, usually on someone else's
+// machine; a type error there surfaces as a failed `npm run setup`.
+//
+// Uses the same offline Prisma stub as tsconfig.offline.json, so it works
+// without generated engine binaries.
+//
+//   node tools/gen-prisma-stub.mjs
+//   npx tsc -p packages/server/tsconfig.seed.json
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "noImplicitAny": false
+  },
+  "include": ["prisma/**/*.ts", "tools/prisma-stub.d.ts"]
+}

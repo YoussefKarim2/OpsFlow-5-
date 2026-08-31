@@ -1,0 +1,21 @@
+// Typecheck the server WITHOUT a generated Prisma client.
+//
+// `prisma generate` needs to download engine binaries. Where that is not
+// possible (an air-gapped CI runner, a restricted network), this config swaps
+// in a structural stub generated from schema.prisma by tools/gen-prisma-stub.mjs.
+//
+//   node tools/gen-prisma-stub.mjs        # run from the repo root
+//   npx tsc -p packages/server/tsconfig.offline.json --noEmit
+//
+// The stub types delegate arguments loosely, so `noImplicitAny` is relaxed:
+// this catches genuine type errors, not inference that the real client supplies.
+// It is NOT a substitute for the real typecheck — run `npm run typecheck`
+// once `prisma generate` has succeeded.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noImplicitAny": false,
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "tools/prisma-stub.d.ts"]
+}

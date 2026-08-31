@@ -1,0 +1,19 @@
+/*
+ * Test build.
+ *
+ * The engine tests import siblings by their ESM `.js` specifier, which is what
+ * the compiled output uses. Node's type stripping does not rewrite that
+ * specifier back to `.ts`, so the tests are compiled first and run against the
+ * emitted JavaScript — the same output the API and the web client import.
+ *
+ * A side benefit: the test files are typechecked on every `npm test`.
+ */
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist-test",
+    "declaration": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "dist-test"]
+}

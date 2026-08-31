@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dist-test/
+.env
+.env.*
+!.env.example
+.storage/
+*.log
+.DS_Store
+
+# Prisma migrations ARE committed — they are the schema's history and a deploy
+# runs `prisma migrate deploy` against them. Only the local shadow-database
+# artefacts are ignored.
+packages/server/prisma/migrations/**/*.tmp

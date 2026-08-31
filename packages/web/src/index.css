@@ -1,0 +1,79 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+  html, body, #root { height: 100%; }
+  body {
+    @apply bg-ink-50 text-ink-900 antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'tnum';
+  }
+  /* Tabular figures everywhere numbers are compared in a column. */
+  .tnum { font-variant-numeric: tabular-nums; }
+}
+
+@layer components {
+  .card {
+    @apply rounded-lg border border-ink-200 bg-white shadow-card;
+  }
+  .card-header {
+    @apply flex items-center justify-between gap-3 border-b border-ink-200 px-4 py-3;
+  }
+  .card-title {
+    @apply text-sm font-semibold text-ink-900;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium
+           transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500
+           focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary  { @apply btn bg-accent-600 text-white hover:bg-accent-700; }
+  .btn-secondary{ @apply btn border border-ink-300 bg-white text-ink-700 hover:bg-ink-50; }
+  .btn-ghost    { @apply btn text-ink-600 hover:bg-ink-100 hover:text-ink-900; }
+  .btn-danger   { @apply btn bg-red-600 text-white hover:bg-red-700; }
+  .btn-sm       { @apply px-2 py-1 text-xs; }
+
+  .input {
+    @apply w-full rounded-md border border-ink-300 bg-white px-2.5 py-1.5 text-sm text-ink-900
+           placeholder:text-ink-400 focus:border-accent-500 focus:outline-none focus:ring-1
+           focus:ring-accent-500 disabled:bg-ink-50 disabled:text-ink-500;
+  }
+  .label { @apply mb-1 block text-xs font-medium text-ink-600; }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-2xs font-semibold
+           uppercase tracking-wide ring-1 ring-inset;
+  }
+
+  .th {
+    @apply whitespace-nowrap px-3 py-2 text-left text-2xs font-semibold uppercase
+           tracking-wider text-ink-500;
+  }
+  .td { @apply whitespace-nowrap px-3 py-2.5 text-sm text-ink-700; }
+
+  /* Free text from the workbook may be Arabic; dir is set per element in JS. */
+  .rtl-aware[dir='rtl'] { @apply text-right; }
+
+  /*
+   * Custom instructions, written by one member of staff and read by another.
+   * The server strips every tag but these on write, so this list is the whole
+   * vocabulary — anything else simply never reaches the page.
+   */
+  .prose-instruction p          { @apply mb-1.5 last:mb-0; }
+  .prose-instruction ul         { @apply mb-1.5 list-disc space-y-0.5 pl-5 last:mb-0; }
+  .prose-instruction ol         { @apply mb-1.5 list-decimal space-y-0.5 pl-5 last:mb-0; }
+  .prose-instruction h3         { @apply mb-1 text-sm font-semibold text-ink-900; }
+  .prose-instruction h4         { @apply mb-1 text-xs font-semibold uppercase tracking-wide text-ink-600; }
+  .prose-instruction blockquote { @apply border-l-2 border-ink-300 pl-3 italic text-ink-600; }
+  .prose-instruction strong     { @apply font-semibold text-ink-900; }
+}
+
+/* A thin, unobtrusive scrollbar — the quantity matrix scrolls horizontally a lot. */
+::-webkit-scrollbar { height: 10px; width: 10px; }
+::-webkit-scrollbar-track { @apply bg-ink-100; }
+::-webkit-scrollbar-thumb { @apply rounded-full bg-ink-300; }
+::-webkit-scrollbar-thumb:hover { @apply bg-ink-400; }

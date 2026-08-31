@@ -1,0 +1,26 @@
+{
+  "name": "opsflow",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Garment Order Control Centre — replaces the Excel order follow-up workbook",
+  "workspaces": [
+    "packages/shared",
+    "packages/server",
+    "packages/web"
+  ],
+  "scripts": {
+    "build": "npm run build -w @opsflow/shared && npm run build -w @opsflow/server && npm run build -w @opsflow/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test -w @opsflow/shared && npm run test -w @opsflow/server",
+    "dev": "concurrently -n api,web -c cyan,magenta \"npm run dev -w @opsflow/server\" \"npm run dev -w @opsflow/web\"",
+    "db:up": "docker compose up -d db",
+    "db:migrate": "npm run migrate -w @opsflow/server",
+    "db:seed": "npm run seed -w @opsflow/server",
+    "setup": "npm install && npm run build -w @opsflow/shared && npm run db:up && sleep 5 && npm run db:migrate && npm run db:seed"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.6.3"
+  },
+  "engines": { "node": ">=20" }
+}
