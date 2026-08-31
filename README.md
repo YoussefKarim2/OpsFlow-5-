@@ -1,5 +1,7 @@
 # OpsFlow — Garment Order Control Centre
 
+**Live:** https://opsflow-api-production.up.railway.app — deployed on Railway, auto-deploys on every push to `main`.
+
 Replaces the `PO No. 85 – A302059B Florida T Shirt Summer order 2026.xlsx` workbook — and every workbook
 like it — with one relational system.
 
