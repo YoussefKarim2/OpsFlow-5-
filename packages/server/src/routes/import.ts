@@ -303,17 +303,28 @@ importRouter.post('/:jobId/save-mapping', requirePermission('import:run'), async
   const fingerprint = headerFingerprint(result.analysis.columns.map((c) => c.header));
   const label = input.label ?? `${job.fileName} layout`;
 
-  const saved = await prisma.savedColumnMapping.upsert({
-    where: { clientId_headerFingerprint: { clientId: input.clientId ?? null, headerFingerprint: fingerprint } },
-    create: {
-      clientId: input.clientId ?? null,
-      label,
-      headerFingerprint: fingerprint,
-      mapping: mapping as never,
-      createdById: actor.id,
-    },
-    update: { mapping: mapping as never, label },
+  // Not a plain `upsert`: `clientId` is nullable, and Prisma's compound-unique
+  // lookup can't take null for a key field — SQL NULL is never equal to NULL,
+  // so the generated `where` type requires a non-null clientId there. Two
+  // steps instead, which also does the right thing for a mapping that applies
+  // to "any customer" (clientId: null).
+  const existing = await prisma.savedColumnMapping.findFirst({
+    where: { clientId: input.clientId ?? null, headerFingerprint: fingerprint },
   });
+  const saved = existing
+    ? await prisma.savedColumnMapping.update({
+        where: { id: existing.id },
+        data: { mapping: mapping as never, label },
+      })
+    : await prisma.savedColumnMapping.create({
+        data: {
+          clientId: input.clientId ?? null,
+          label,
+          headerFingerprint: fingerprint,
+          mapping: mapping as never,
+          createdById: actor.id,
+        },
+      });
 
   res.status(201).json({ id: saved.id, label: saved.label, columns: Object.keys(mapping).length });
 }));

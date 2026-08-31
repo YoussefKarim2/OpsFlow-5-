@@ -1,3 +1,6 @@
+import path from 'node:path';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import express, { type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -33,6 +36,13 @@ import { flushChanges } from './services/change-service.js';
  * on the database or on the notification system. It stays plumbing.
  */
 setChangeFlusher(flushChanges);
+
+// Present when `packages/web` has been built alongside this package (a
+// combined single-service deploy). Absent in local dev, where Vite serves
+// the frontend itself and proxies `/api` here instead.
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const webDist = path.resolve(__dirname, '../../web/dist');
+const hasWebBuild = fs.existsSync(path.join(webDist, 'index.html'));
 
 export function createApp() {
   const app = express();
@@ -77,6 +87,16 @@ export function createApp() {
   app.use('/api/import', importRouter);
   app.use('/api/changes', changesRouter);
   app.use('/api', referenceRouter);
+
+  if (hasWebBuild) {
+    app.use(express.static(webDist));
+    // SPA fallback: any non-API GET that didn't match a static asset gets
+    // index.html, so client-side routes (e.g. /orders/123) survive a refresh.
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api')) return next();
+      res.sendFile(path.join(webDist, 'index.html'));
+    });
+  }
 
   app.use((_req, res) => {
     res.status(404).json({ error: 'Endpoint not found', code: 'NOT_FOUND' });

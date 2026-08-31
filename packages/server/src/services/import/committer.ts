@@ -229,7 +229,7 @@ export async function commitImport(
       const axesColors: AxisRef[] = [...colorIds.entries()].map(([name, id], i) => ({ id, name, position: i }));
       const axesSizes: AxisRef[] = [...sizeIds.entries()].map(([name, id], i) => ({ id, name, position: i }));
       const cells: QtyCell[] = qtyRows.map((q) => ({
-        colorId: q.orderColorId, sizeId: q.orderSizeId, ledger: q.ledger as 'ORDER' | 'STOCK', qty: q.qty,
+        colorId: q.orderColorId, sizeId: q.orderSizeId, ledger: q.ledger as 'ORDER' | 'STOCK', qty: q.qty ?? 0,
       }));
       cutCells = computeCutMatrix(cells, axesColors, axesSizes, cutPct);
       if (cutCells.length > 0) {

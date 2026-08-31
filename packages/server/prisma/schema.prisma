@@ -61,6 +61,7 @@ model User {
   approvalsRequested    Approval[]            @relation("ApprovalRequestedBy")
   attachments           Attachment[]
   auditTrails           AuditTrail[]
+  changeEvents          ChangeEvent[]
   importJobs            ImportJob[]
   materialIssuesGiven   MaterialIssue[]       @relation("IssuedBy")
   materialIssuesTaken   MaterialIssue[]       @relation("IssuedTo")
@@ -228,6 +229,7 @@ model Order {
   attachments              Attachment[]
   auditTrails              AuditTrail[]
   bomItems                 BomItem[]
+  changeEvents             ChangeEvent[]
   costing                  CostingRecord?
   customInstructions       CustomInstruction[]
   cuttingRecords           CuttingRecord[]
@@ -1169,20 +1171,95 @@ model AuditTrail {
 }
 
 model Notification {
-  id        String           @id @default(cuid())
-  userId    String
-  orderId   String?
-  type      NotificationType
-  title     String
-  body      String?
-  link      String?
-  readAt    DateTime?
-  createdAt DateTime         @default(now())
-  order     Order?           @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id            String               @id @default(cuid())
+  userId        String
+  orderId       String?
+  changeEventId String?
+  type          NotificationType
+  priority      NotificationPriority @default(NORMAL)
+  title         String
+  body          String?
+  link          String?
+  readAt        DateTime?
+  createdAt     DateTime             @default(now())
+  changeEvent   ChangeEvent?         @relation(fields: [changeEventId], references: [id], onDelete: SetNull)
+  order         Order?               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user          User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, readAt])
   @@map("notifications")
+}
+
+/// One announcement of "what changed" — the record the in-app timeline, the
+/// notification bell and the outbound email all point back to. Written once
+/// the request that made the change has already succeeded (see
+/// `change-service.ts`); never on the path a user is waiting on.
+model ChangeEvent {
+  id              String               @id @default(cuid())
+  entityType      String
+  entityId        String
+  /// CREATE | UPDATE | DELETE.
+  action          String
+  category        ChangeCategory
+  subject         String?
+  summary         String
+  priority        NotificationPriority
+  orderId         String?
+  actorId         String?
+  actorName       String
+  link            String?
+  /// Required for privileged overrides — mirrors AuditTrail.reason.
+  reason          String?
+  createdAt       DateTime             @default(now())
+  order           Order?               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  actor           User?                @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  fields          ChangeEventField[]
+  notifications   Notification[]
+  emailDeliveries EmailDelivery[]
+
+  @@index([orderId, createdAt])
+  @@index([entityType, entityId])
+  @@index([category, createdAt])
+  @@map("change_events")
+}
+
+/// One before/after field on a ChangeEvent. Split out from ChangeEvent itself
+/// because one saved order edit can touch several columns, and the timeline
+/// renders them as a labelled list under a single event, not one event each.
+model ChangeEventField {
+  id            String      @id @default(cuid())
+  changeEventId String
+  field         String
+  label         String
+  oldValue      String?
+  newValue      String?
+  position      Int
+  changeEvent   ChangeEvent @relation(fields: [changeEventId], references: [id], onDelete: Cascade)
+
+  @@index([changeEventId])
+  @@map("change_event_fields")
+}
+
+/// The outbound email queue — see `email-queue.ts`. A row is the unit of
+/// retry: `nextAttemptAt` is the schedule, `attempts`/`lastError` are why a
+/// message is still PENDING instead of SENT.
+model EmailDelivery {
+  id            String       @id @default(cuid())
+  changeEventId String?
+  recipients    String[]
+  subject       String
+  bodyHtml      String
+  bodyText      String
+  status        EmailStatus  @default(PENDING)
+  attempts      Int          @default(0)
+  lastError     String?
+  sentAt        DateTime?
+  nextAttemptAt DateTime     @default(now())
+  createdAt     DateTime     @default(now())
+  changeEvent   ChangeEvent? @relation(fields: [changeEventId], references: [id], onDelete: SetNull)
+
+  @@index([status, nextAttemptAt])
+  @@map("email_deliveries")
 }
 
 /// Excel import job — the five-step pipeline in ARCHITECTURE.md §7.
@@ -1531,6 +1608,37 @@ enum NotificationType {
   SHIPMENT_READY
   ORDER_OVERDUE
   MENTIONED
+}
+
+/// Priority of a change announcement — distinct from the order-level
+/// `Priority` enum, and from `NORMAL` rather than `MEDIUM` deliberately, so a
+/// log line is never ambiguous about which "priority" it means.
+enum NotificationPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+/// Which part of the factory a change belongs to. Drives the What Changed filters.
+enum ChangeCategory {
+  ORDER
+  PRODUCTION
+  INVENTORY
+  MATERIALS
+  TASKS
+  QUALITY
+  SHIPMENT
+  APPROVALS
+  DOCUMENTS
+  ADMIN
+}
+
+/// Whether a notification email actually reached Microsoft 365.
+enum EmailStatus {
+  PENDING
+  SENT
+  FAILED
 }
 
 enum ImportStatus {
