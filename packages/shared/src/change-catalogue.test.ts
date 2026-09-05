@@ -16,6 +16,7 @@ import { NotificationPriority, ChangeCategory } from './enums.js';
 import {
   TRACKED_MODELS, fieldLabel, formatValue, derivePriority, summariseChange,
   describeFieldChange, highestPriority, CATEGORY_LABEL, PRIORITY_STYLE,
+  isSignificantQtyChange,
   type FieldChange,
 } from './change-catalogue.js';
 
@@ -259,5 +260,29 @@ describe('the catalogue is complete enough to use', () => {
     ]) {
       assert.ok(TRACKED_MODELS[model], `${model} is not tracked`);
     }
+  });
+});
+
+describe('a quantity change worth interrupting someone for', () => {
+  test('a one-piece correction on a large order is routine, not news', () => {
+    assert.equal(isSignificantQtyChange(1972, 1973), false);
+  });
+
+  test('a swing of a tenth or more is significant', () => {
+    assert.equal(isSignificantQtyChange(1000, 1100), true);
+    assert.equal(isSignificantQtyChange(1000, 900), true);
+  });
+
+  test('just under the threshold is not significant', () => {
+    assert.equal(isSignificantQtyChange(1000, 1099), false);
+  });
+
+  test('no change at all is never significant', () => {
+    assert.equal(isSignificantQtyChange(500, 500), false);
+  });
+
+  test('the first quantity ever entered is always significant — there is nothing to take a ratio of', () => {
+    assert.equal(isSignificantQtyChange(0, 1), true);
+    assert.equal(isSignificantQtyChange(0, 0), false);
   });
 });

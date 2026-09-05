@@ -68,6 +68,7 @@ model User {
   materialMovements     MaterialMovement[]
   materialReservations  MaterialReservation[] @relation("ReservationBy")
   notifications         Notification[]
+  notificationPreferences NotificationPreference[]
   completedStages       OrderStage[]          @relation("StageCompletedBy")
   coordinatedOrders     Order[]               @relation("OrderCoordinator")
   externalManagedOrders Order[]               @relation("OrderOutsideWorkManager")
@@ -235,6 +236,7 @@ model Order {
   cuttingRecords           CuttingRecord[]
   externalOperations       ExternalOperation[]
   fabricRecords            FabricRecord[]
+  layingImportJobs         ImportJob[]
   markers                  Marker[]
   materialIssues           MaterialIssue[]
   materialMovements        MaterialMovement[]
@@ -688,7 +690,7 @@ model MaterialReservation {
 }
 
 model CuttingRecord {
-  id              String    @id @default(cuid())
+  id              String     @id @default(cuid())
   orderId         String
   cutDate         DateTime?
   cuttingTeam     String?
@@ -700,68 +702,87 @@ model CuttingRecord {
   /// Actual pieces cut. Planned is derived from the ORDER/STOCK ledgers and the
   /// cut percentage; only the actual is a fact worth storing.
   actualCutQty    Int?
-  fabricUsedM     Decimal?  @db.Decimal(12, 3)
+  fabricUsedM     Decimal?   @db.Decimal(12, 3)
   notes           String?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
-  order           Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// Set when this row came from a Laying & Marking Excel import, rather than
+  /// manual entry — the audit trail for that import.
+  importJobId     String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  order           Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  importJob       ImportJob? @relation(fields: [importJobId], references: [id], onDelete: SetNull)
 
   @@index([orderId])
+  @@index([importJobId])
   @@map("cutting_records")
 }
 
 model Marker {
-  id            String   @id @default(cuid())
+  id            String     @id @default(cuid())
   orderId       String
   markerNumber  String?
   fabricName    String
   fabricColor   String?
   /// Which panel this marker cuts: ALL, Front, Back, Sleeve (R), Collar, ...
-  panel         String   @default("ALL")
+  panel         String     @default("ALL")
   /// Size ratio exactly as written on the sheet: "(YXS1), (YS1), (YM1), (YL1), (M1)".
   /// Parsed by parseSizeRatio() in @opsflow/shared rather than pre-split, so the
   /// planner's own notation survives round-tripping.
   sizeRatio     String
   layers        Int
-  markerLengthM Decimal  @db.Decimal(10, 3)
+  markerLengthM Decimal    @db.Decimal(10, 3)
+  /// The marker's width — a separate figure from its length, not previously
+  /// tracked; added for Excel imports that report both.
+  markerWidthM  Decimal?   @db.Decimal(10, 3)
   /// Metres the lay actually consumes — the sheet's own column X.
   ///
   /// Deliberately stored rather than derived from layers × markerLengthM: on
   /// this order the two differ by ~7%, the end loss and splice allowance per
   /// lay, which across six lays is 80 m. Deriving it would under-state the
   /// fabric requirement, which is how a cutting floor runs short mid-lay.
-  totalLengthM  Decimal? @db.Decimal(12, 3)
+  totalLengthM  Decimal?   @db.Decimal(12, 3)
   nestPcs       Int?
-  efficiencyPct Decimal? @db.Decimal(6, 3)
+  efficiencyPct Decimal?   @db.Decimal(6, 3)
+  /// Fabric wastage for this lay, as a percentage — reported by the sheet
+  /// directly rather than derived, matching totalLengthM's reasoning above.
+  wastagePct    Decimal?   @db.Decimal(6, 3)
   maxLayer      Int?
   notes         String?
-  position      Int      @default(0)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
-  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  position      Int        @default(0)
+  /// Set when this row came from a Laying & Marking Excel import.
+  importJobId   String?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  order         Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  importJob     ImportJob? @relation(fields: [importJobId], references: [id], onDelete: SetNull)
 
   @@index([orderId])
+  @@index([importJobId])
   @@map("markers")
 }
 
 model FabricRecord {
-  id                 String   @id @default(cuid())
+  id                 String     @id @default(cuid())
   orderId            String
   fabricName         String
   colorName          String?
   fabricType         String?
   composition        String?
   supplier           String?
-  requiredM          Decimal? @db.Decimal(12, 3)
-  availableM         Decimal? @db.Decimal(12, 3)
-  issuedM            Decimal? @db.Decimal(12, 3)
-  actualConsumptionM Decimal? @db.Decimal(12, 3)
+  requiredM          Decimal?   @db.Decimal(12, 3)
+  availableM         Decimal?   @db.Decimal(12, 3)
+  issuedM            Decimal?   @db.Decimal(12, 3)
+  actualConsumptionM Decimal?   @db.Decimal(12, 3)
   responsibleName    String?
-  recordedAt         DateTime @default(now())
+  recordedAt         DateTime   @default(now())
   notes              String?
-  order              Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// Set when this row came from a Laying & Marking Excel import.
+  importJobId        String?
+  order              Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  importJob          ImportJob? @relation(fields: [importJobId], references: [id], onDelete: SetNull)
 
   @@index([orderId])
+  @@index([importJobId])
   @@map("fabric_records")
 }
 
@@ -1190,6 +1211,44 @@ model Notification {
   @@map("notifications")
 }
 
+/// One user's notification settings for one category. A missing row for a
+/// (user, category) pair means "default" — in-app and email both on, every
+/// priority — so nobody misses anything until they explicitly opt out. Rows
+/// are only ever created when a user actually changes a setting.
+model NotificationPreference {
+  id          String               @id @default(cuid())
+  userId      String
+  category    ChangeCategory
+  minPriority NotificationPriority @default(LOW)
+  inApp       Boolean              @default(true)
+  email       Boolean              @default(true)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  user        User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, category])
+  @@map("notification_preferences")
+}
+
+/// Dedup state for the alert sweep (alert-worker.ts) — the last-seen severity
+/// and detail text for one alert on one entity, so "order X is overdue" is
+/// announced when it first becomes true and again if it gets materially
+/// worse, never once per sweep interval forever. `code`/`entityType` are
+/// plain strings, not enums: this tracks `AlertCode` values from
+/// `@opsflow/shared`, which lives outside Prisma's schema.
+model AlertState {
+  id             String   @id @default(cuid())
+  code           String
+  entityType     String
+  entityId       String
+  lastSnapshot   String
+  lastNotifiedAt DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  @@unique([code, entityType, entityId])
+  @@map("alert_states")
+}
+
 /// One announcement of "what changed" — the record the in-app timeline, the
 /// notification bell and the outbound email all point back to. Written once
 /// the request that made the change has already succeeded (see
@@ -1283,8 +1342,25 @@ model ImportJob {
   committedAt       DateTime?
   uploadedBy        User         @relation(fields: [uploadedById], references: [id])
 
+  /// What this job imports into. NEW_ORDER (the default) is the original,
+  /// unchanged flow; LAYING_MARKING imports into an order that already exists.
+  target         ImportTarget    @default(NEW_ORDER)
+  /// The order a LAYING_MARKING job imports into — known up front, unlike
+  /// createdOrderId above which is only known after a NEW_ORDER job commits.
+  targetOrderId  String?
+  targetOrder    Order?          @relation(fields: [targetOrderId], references: [id], onDelete: SetNull)
+  markers        Marker[]
+  cuttingRecords CuttingRecord[]
+  fabricRecords  FabricRecord[]
+
   @@index([uploadedById, status])
+  @@index([targetOrderId, target, status])
   @@map("import_jobs")
+}
+
+enum ImportTarget {
+  NEW_ORDER
+  LAYING_MARKING
 }
 
 model SavedColumnMapping {
@@ -1599,14 +1675,20 @@ enum DocumentType {
 enum NotificationType {
   TASK_ASSIGNED
   TASK_OVERDUE
+  TASK_COMPLETED
   APPROVAL_REQUESTED
   APPROVAL_RECEIVED
   MATERIAL_SHORTAGE
+  MATERIAL_UPDATED
   PRODUCTION_DELAY
+  PRODUCTION_UPDATED
   QUALITY_FAILURE
+  QUALITY_UPDATED
   PACKING_COMPLETED
   SHIPMENT_READY
   ORDER_OVERDUE
+  ORDER_UPDATED
+  SYSTEM_UPDATE
   MENTIONED
 }
 

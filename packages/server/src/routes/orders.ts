@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import {
   QtyLedger, LEDGER_LABEL, ChangeCategory, NotificationPriority,
-  buildMatrix, computeCutMatrix, type QtyCell,
+  buildMatrix, computeCutMatrix, isSignificantQtyChange, type QtyCell,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
@@ -353,7 +353,9 @@ ordersRouter.put('/:id/matrix', requirePermission('order:edit'), asyncHandler(as
   });
 
   const totalAfter = await ledgerTotal(order.id, ledger);
-  if (totalAfter !== totalBefore) {
+  // "A significant production quantity changes" — a one-piece correction is
+  // routine editing, not news; a swing of a tenth or more is.
+  if (isSignificantQtyChange(totalBefore, totalAfter)) {
     await announceChange({
       entityType: 'Order',
       entityId: order.id,

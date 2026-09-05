@@ -6,10 +6,14 @@
  * what the cut order requires — per size, not just in total.
  */
 
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { FileUp } from 'lucide-react';
 import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
+import { useAuth } from '../../lib/auth';
 import { api } from '../../lib/api';
 import { Card, CardHeader, StatTile, Num, Spinner, EmptyState, clsx } from '../../components/ui';
+import { LayingMarkingImportWizard } from './LayingMarkingImportWizard';
 
 interface Plan {
   lays: Array<{
@@ -33,9 +37,16 @@ interface FabricPos {
 }
 
 export function MarkerTab({ order }: { order: OrderDetailDto }) {
+  const { can } = useAuth();
+  const [importing, setImporting] = useState(false);
+
   const { data, isLoading } = useQuery({
     queryKey: ['markers', order.id],
     queryFn: () => api.materials.markers(order.id),
+  });
+  const { data: history } = useQuery({
+    queryKey: ['laying-import-history', order.id],
+    queryFn: () => api.layingImport.history(order.id),
   });
 
   if (isLoading) return <Spinner />;
@@ -75,6 +86,13 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
         <CardHeader
           title="Lay plan"
           subtitle="Each row is one marker: a size ratio, a layer count and a marker length"
+          action={
+            can('cutting:write') && (
+              <button className="btn-secondary btn-sm" onClick={() => setImporting(true)}>
+                <FileUp className="h-3.5 w-3.5" /> Import Laying & Marking Excel
+              </button>
+            )
+          }
         />
         {plan.lays.length === 0 ? (
           <EmptyState title="No lays recorded" detail="The cutting and marker department adds the lay plan here." />
@@ -238,6 +256,52 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
           )}
         </Card>
       </div>
+
+      {history && history.data.length > 0 && (
+        <Card>
+          <CardHeader title="Laying & Marking import history" subtitle="Every upload, who made it and what happened" />
+          <table className="w-full">
+            <thead className="border-b border-ink-200 bg-ink-50">
+              <tr>
+                <th className="th">File</th>
+                <th className="th">Uploaded by</th>
+                <th className="th">Date</th>
+                <th className="th text-right">Rows</th>
+                <th className="th">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-ink-100">
+              {history.data.map((h) => (
+                <tr key={h.id}>
+                  <td className="td text-xs">{h.fileName}</td>
+                  <td className="td text-xs">{h.uploadedBy.name}</td>
+                  <td className="td text-xs">{fmtDate(h.createdAt)}</td>
+                  <td className="td text-right tnum">{h.rowCount}</td>
+                  <td className="td">
+                    <span className={clsx(
+                      'chip',
+                      h.status === 'COMMITTED' ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20'
+                        : h.status === 'FAILED' ? 'bg-red-50 text-red-700 ring-red-600/20'
+                        : 'bg-ink-50 text-ink-600 ring-ink-300',
+                    )}>
+                      {h.status}
+                    </span>
+                    {h.errorMessage && <p className="mt-0.5 text-2xs text-red-600">{h.errorMessage}</p>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </Card>
+      )}
+
+      {importing && (
+        <LayingMarkingImportWizard
+          orderId={order.id}
+          orderPoNumber={order.poNumber}
+          onClose={() => setImporting(false)}
+        />
+      )}
     </div>
   );
 }

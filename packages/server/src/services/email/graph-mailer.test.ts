@@ -64,23 +64,54 @@ function withCredentials(fn: () => void | Promise<void>) {
   return out instanceof Promise ? out.finally(restore) : (restore(), out);
 }
 
+/**
+ * The mirror image: run `fn` with the four settings explicitly absent.
+ *
+ * Needed for the same reason `withCredentials` is. `config` is parsed from the
+ * real `.env` at import, so on any machine where Microsoft 365 is actually
+ * configured — which is every machine that has finished setting it up — the
+ * "unconfigured" case was silently testing a configured one, and the assertion
+ * that it rejects failed. A test must not depend on a setting being blank in
+ * the developer's environment.
+ */
+function withoutCredentials(fn: () => void | Promise<void>) {
+  const saved = {
+    t: writable.MICROSOFT_TENANT_ID, c: writable.MICROSOFT_CLIENT_ID,
+    s: writable.MICROSOFT_CLIENT_SECRET, e: writable.MICROSOFT_SENDER_EMAIL,
+  };
+  writable.MICROSOFT_TENANT_ID = undefined;
+  writable.MICROSOFT_CLIENT_ID = undefined;
+  writable.MICROSOFT_CLIENT_SECRET = undefined;
+  writable.MICROSOFT_SENDER_EMAIL = undefined;
+  const restore = () => {
+    writable.MICROSOFT_TENANT_ID = saved.t;
+    writable.MICROSOFT_CLIENT_ID = saved.c;
+    writable.MICROSOFT_CLIENT_SECRET = saved.s;
+    writable.MICROSOFT_SENDER_EMAIL = saved.e;
+  };
+  const out = fn();
+  return out instanceof Promise ? out.finally(restore) : (restore(), out);
+}
+
 beforeEach(() => resetTokenCache());
 
 describe('configuration is checked before anything is attempted', () => {
   test('an unconfigured system says exactly what is missing', async () => {
-    const { fetcher, calls } = stubFetch([TOKEN_OK]);
-    await assert.rejects(
-      () => sendMail({ to: ['a@b.com'], subject: 's', html: 'h', text: 't' }, fetcher),
-      (err: Error) => {
-        assert.ok(err instanceof GraphNotConfiguredError);
-        assert.match(err.message, /MICROSOFT_TENANT_ID/);
-        // It must also say the factory keeps working, because that is true and
-        // is the first thing somebody reading this error needs to know.
-        assert.match(err.message, /works fully without this/);
-        return true;
-      },
-    );
-    assert.equal(calls.length, 0, 'nothing should be sent before the settings exist');
+    await withoutCredentials(async () => {
+      const { fetcher, calls } = stubFetch([TOKEN_OK]);
+      await assert.rejects(
+        () => sendMail({ to: ['a@b.com'], subject: 's', html: 'h', text: 't' }, fetcher),
+        (err: Error) => {
+          assert.ok(err instanceof GraphNotConfiguredError);
+          assert.match(err.message, /MICROSOFT_TENANT_ID/);
+          // It must also say the factory keeps working, because that is true and
+          // is the first thing somebody reading this error needs to know.
+          assert.match(err.message, /works fully without this/);
+          return true;
+        },
+      );
+      assert.equal(calls.length, 0, 'nothing should be sent before the settings exist');
+    });
   });
 
   test('missingGraphConfig names every absent setting, and no present one', () => {

@@ -286,19 +286,19 @@ export const COST_LINES: Array<{ group: string; label: string; unit: string; uni
  * the factory's real people, given accounts and roles.
  */
 export const USERS: Array<{ name: string; email: string; roleKey: string; department: string }> = [
-  { name: 'Amr Sheha',      email: 'admin@age-factory.com',       roleKey: 'ADMIN',              department: 'ADMIN' },
-  { name: 'Hassona',        email: 'hassona@age-factory.com',     roleKey: 'COORDINATOR',        department: 'COORDINATOR' },
-  { name: 'Ahmed Samy',     email: 'ahmed.samy@age-factory.com',  roleKey: 'COORDINATOR',        department: 'COORDINATOR' },
-  { name: 'Aya Mahmed',     email: 'aya@age-factory.com',         roleKey: 'COORDINATOR',        department: 'COORDINATOR' },
-  { name: 'Ibrahem Samy',   email: 'ibrahem@age-factory.com',     roleKey: 'FACTORY_MANAGER',    department: 'FACTORY_MANAGER' },
-  { name: 'Abdo Mahmoud',   email: 'abdo@age-factory.com',        roleKey: 'PRODUCTION_MANAGER', department: 'PRODUCTION_MANAGER' },
-  { name: 'Tamer',          email: 'tamer@age-factory.com',       roleKey: 'FACTORY_MANAGER',    department: 'CUTTING_MARKER' },
-  { name: 'Khaled',         email: 'khaled@age-factory.com',      roleKey: 'WAREHOUSE',          department: 'WAREHOUSE' },
-  { name: 'Helmy',          email: 'helmy@age-factory.com',       roleKey: 'EXTERNAL_OPS',       department: 'EXTERNAL_OPS' },
-  { name: 'Shimaa',         email: 'shimaa@age-factory.com',      roleKey: 'QUALITY',            department: 'QUALITY' },
-  { name: 'Sabry Khamis',   email: 'sabry@age-factory.com',       roleKey: 'PACKING',            department: 'PACKING' },
-  { name: 'Aya Fawzy',      email: 'aya.fawzy@age-factory.com',   roleKey: 'FOLLOW_UP',          department: 'FOLLOW_UP' },
-  { name: 'Magdy',          email: 'magdy@age-factory.com',       roleKey: 'FINANCE',            department: 'FINANCE' },
+  { name: 'Amr Sheha',      email: 'admin@soccertex.biz',       roleKey: 'ADMIN',              department: 'ADMIN' },
+  { name: 'Hassona',        email: 'hassona@soccertex.biz',     roleKey: 'COORDINATOR',        department: 'COORDINATOR' },
+  { name: 'Ahmed Samy',     email: 'ahmed.samy@soccertex.biz',  roleKey: 'COORDINATOR',        department: 'COORDINATOR' },
+  { name: 'Aya Mahmed',     email: 'aya@soccertex.biz',         roleKey: 'COORDINATOR',        department: 'COORDINATOR' },
+  { name: 'Ibrahem Samy',   email: 'ibrahem@soccertex.biz',     roleKey: 'FACTORY_MANAGER',    department: 'FACTORY_MANAGER' },
+  { name: 'Abdo Mahmoud',   email: 'abdo@soccertex.biz',        roleKey: 'PRODUCTION_MANAGER', department: 'PRODUCTION_MANAGER' },
+  { name: 'Tamer',          email: 'tamer@soccertex.biz',       roleKey: 'FACTORY_MANAGER',    department: 'CUTTING_MARKER' },
+  { name: 'Khaled',         email: 'khaled@soccertex.biz',      roleKey: 'WAREHOUSE',          department: 'WAREHOUSE' },
+  { name: 'Helmy',          email: 'helmy@soccertex.biz',       roleKey: 'EXTERNAL_OPS',       department: 'EXTERNAL_OPS' },
+  { name: 'Shimaa',         email: 'shimaa@soccertex.biz',      roleKey: 'QUALITY',            department: 'QUALITY' },
+  { name: 'Sabry Khamis',   email: 'sabry@soccertex.biz',       roleKey: 'PACKING',            department: 'PACKING' },
+  { name: 'Aya Fawzy',      email: 'aya.fawzy@soccertex.biz',   roleKey: 'FOLLOW_UP',          department: 'FOLLOW_UP' },
+  { name: 'Magdy',          email: 'magdy@soccertex.biz',       roleKey: 'FINANCE',            department: 'FINANCE' },
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════

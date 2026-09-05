@@ -87,7 +87,8 @@ export function EmailStatusPanel() {
         <div className="flex items-start gap-2 border-b border-ink-100 bg-emerald-50 px-4 py-3">
           <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
           <p className="text-sm text-emerald-900">
-            Microsoft 365 is configured. Change notifications are sent to every active OpsFlow user.
+            Microsoft 365 is configured. Change notifications go to whoever is responsible for that
+            order or department, not to every active user — see Notification preferences above.
           </p>
         </div>
       ) : (

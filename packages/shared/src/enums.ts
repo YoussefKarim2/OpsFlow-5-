@@ -160,6 +160,28 @@ export const ChangeCategory = {
 } as const;
 export type ChangeCategory = (typeof ChangeCategory)[keyof typeof ChangeCategory];
 
+/** What kind of thing a Notification/ChangeEvent is about — mirrors the Prisma enum. */
+export const NotificationType = {
+  TASK_ASSIGNED: 'TASK_ASSIGNED',
+  TASK_OVERDUE: 'TASK_OVERDUE',
+  TASK_COMPLETED: 'TASK_COMPLETED',
+  APPROVAL_REQUESTED: 'APPROVAL_REQUESTED',
+  APPROVAL_RECEIVED: 'APPROVAL_RECEIVED',
+  MATERIAL_SHORTAGE: 'MATERIAL_SHORTAGE',
+  MATERIAL_UPDATED: 'MATERIAL_UPDATED',
+  PRODUCTION_DELAY: 'PRODUCTION_DELAY',
+  PRODUCTION_UPDATED: 'PRODUCTION_UPDATED',
+  QUALITY_FAILURE: 'QUALITY_FAILURE',
+  QUALITY_UPDATED: 'QUALITY_UPDATED',
+  PACKING_COMPLETED: 'PACKING_COMPLETED',
+  SHIPMENT_READY: 'SHIPMENT_READY',
+  ORDER_OVERDUE: 'ORDER_OVERDUE',
+  ORDER_UPDATED: 'ORDER_UPDATED',
+  SYSTEM_UPDATE: 'SYSTEM_UPDATE',
+  MENTIONED: 'MENTIONED',
+} as const;
+export type NotificationType = (typeof NotificationType)[keyof typeof NotificationType];
+
 /** Whether a notification email actually reached Microsoft 365. */
 export const EmailStatus = {
   PENDING: 'PENDING',

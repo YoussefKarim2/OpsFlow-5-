@@ -23,6 +23,8 @@ import { qualityRouter } from './routes/quality.js';
 import { packingRouter } from './routes/packing.js';
 import { dashboardRouter } from './routes/dashboard.js';
 import { importRouter } from './routes/import.js';
+import { layingImportRouter } from './routes/laying-import.js';
+import { notificationPreferencesRouter } from './routes/notification-preferences.js';
 import { referenceRouter } from './routes/reference.js';
 import { stepsRouter } from './routes/steps.js';
 import { changesRouter } from './routes/changes.js';
@@ -85,6 +87,8 @@ export function createApp() {
   app.use('/api/quality', qualityRouter);
   app.use('/api/packing', packingRouter);
   app.use('/api/import', importRouter);
+  app.use('/api/orders/:orderId/laying-import', layingImportRouter);
+  app.use('/api/notification-preferences', notificationPreferencesRouter);
   app.use('/api/changes', changesRouter);
   app.use('/api', referenceRouter);
 

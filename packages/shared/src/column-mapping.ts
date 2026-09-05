@@ -54,6 +54,29 @@ export const ImportConcept = {
   NOTES: 'NOTES',
   UNIT: 'UNIT',
   CONSUMPTION_PER_PIECE: 'CONSUMPTION_PER_PIECE',
+
+  // ── Laying & Marking (packages/server/src/services/import/laying-extractor.ts) ──
+  //
+  // A fabric name and a colour mean the same thing whether the sheet is
+  // creating an order or reporting a lay plan, so FABRIC and COLOR above are
+  // reused rather than duplicated here — cross-flow scoring is prevented by
+  // the `allowedConcepts` allowlist each caller passes to `analyseColumns`,
+  // not by giving every flow its own copy of the same concept.
+  LAY_NUMBER: 'LAY_NUMBER',
+  MARKER_NUMBER: 'MARKER_NUMBER',
+  PANEL: 'PANEL',
+  SIZE_RATIO: 'SIZE_RATIO',
+  LAYERS: 'LAYERS',
+  MARKER_LENGTH: 'MARKER_LENGTH',
+  MARKER_WIDTH: 'MARKER_WIDTH',
+  TOTAL_LENGTH: 'TOTAL_LENGTH',
+  FABRIC_CONSUMPTION: 'FABRIC_CONSUMPTION',
+  WASTAGE: 'WASTAGE',
+  NEST_PCS: 'NEST_PCS',
+  EFFICIENCY: 'EFFICIENCY',
+  CUT_DATE: 'CUT_DATE',
+  RESPONSIBLE_PERSON: 'RESPONSIBLE_PERSON',
+
   /** Recognised as a column, but not something the importer uses. */
   IGNORE: 'IGNORE',
 } as const;
@@ -96,6 +119,22 @@ export const CONCEPT_META: Record<ImportConcept, ConceptMeta> = {
   NOTES:          { concept: 'NOTES',          label: 'Special instructions', field: 'generalNotes',         type: 'string' },
   UNIT:           { concept: 'UNIT',           label: 'Unit of measure',      field: null,                   type: 'string' },
   CONSUMPTION_PER_PIECE: { concept: 'CONSUMPTION_PER_PIECE', label: 'Consumption per piece', field: null, type: 'number' },
+
+  LAY_NUMBER:         { concept: 'LAY_NUMBER',         label: 'Lay number',        field: 'position',          type: 'number' },
+  MARKER_NUMBER:      { concept: 'MARKER_NUMBER',      label: 'Marker number',     field: 'markerNumber',      type: 'string' },
+  PANEL:              { concept: 'PANEL',              label: 'Panel',             field: 'panel',             type: 'string' },
+  SIZE_RATIO:         { concept: 'SIZE_RATIO',         label: 'Size ratio',        field: 'sizeRatio',         type: 'string' },
+  LAYERS:             { concept: 'LAYERS',             label: 'Layers / plies',    field: 'layers',            type: 'number', essential: true },
+  MARKER_LENGTH:      { concept: 'MARKER_LENGTH',      label: 'Marker length (m)', field: 'markerLengthM',     type: 'number', essential: true },
+  MARKER_WIDTH:       { concept: 'MARKER_WIDTH',       label: 'Marker width (m)',  field: 'markerWidthM',      type: 'number' },
+  TOTAL_LENGTH:       { concept: 'TOTAL_LENGTH',       label: 'Total length (m)',  field: 'totalLengthM',      type: 'number' },
+  FABRIC_CONSUMPTION: { concept: 'FABRIC_CONSUMPTION', label: 'Fabric consumption (m)', field: 'actualConsumptionM', type: 'number' },
+  WASTAGE:            { concept: 'WASTAGE',            label: 'Wastage (%)',       field: 'wastagePct',        type: 'number' },
+  NEST_PCS:           { concept: 'NEST_PCS',           label: 'Pieces per lay',    field: 'nestPcs',           type: 'number' },
+  EFFICIENCY:         { concept: 'EFFICIENCY',         label: 'Efficiency (%)',    field: 'efficiencyPct',     type: 'number' },
+  CUT_DATE:           { concept: 'CUT_DATE',           label: 'Cut date',          field: 'cutDate',           type: 'date' },
+  RESPONSIBLE_PERSON: { concept: 'RESPONSIBLE_PERSON', label: 'Responsible person', field: 'cutByName',        type: 'string' },
+
   IGNORE:         { concept: 'IGNORE',         label: 'Ignore this column',   field: null,                   type: 'string' },
 };
 
@@ -154,6 +193,25 @@ export const CONCEPT_SYNONYMS: Record<ImportConcept, readonly string[]> = {
   NOTES: ['notes', 'note', 'remarks', 'comment', 'comments', 'special instructions', 'instructions'],
   UNIT: ['unit', 'uom', 'unit of measure', 'measure'],
   CONSUMPTION_PER_PIECE: ['consumption', 'cons per piece', 'coms piece', 'consumption per piece', 'usage per piece', 'per piece'],
+
+  LAY_NUMBER: ['lay no', 'lay number', 'lay #', 'lay', 'lay num', 'cut no'],
+  MARKER_NUMBER: ['marker no', 'marker number', 'marker #', 'marker ref', 'marker code'],
+  PANEL: ['panel', 'part', 'panel name', 'cutting panel', 'component'],
+  SIZE_RATIO: ['size ratio', 'ratio', 'size combination', 'size set', 'marker ratio'],
+  LAYERS: [
+    'layers', 'no of layers', 'number of layers', 'ply', 'plies', 'no of ply',
+    'no of plies', 'ply count', 'lay height', 'nb of layers',
+  ],
+  MARKER_LENGTH: ['marker length', 'length', 'marker len', 'marker length m', 'lay length'],
+  MARKER_WIDTH: ['marker width', 'width', 'marker wid'],
+  TOTAL_LENGTH: ['total length', 'lay length total', 'total lay length', 'total consumption', 'length used'],
+  FABRIC_CONSUMPTION: ['fabric consumption', 'actual consumption', 'cons', 'usage', 'meters used', 'metres used'],
+  WASTAGE: ['wastage', 'waste', 'wastage pct', 'waste percent', 'wastage percent', 'loss', 'loss percent'],
+  NEST_PCS: ['nest', 'nest pcs', 'pieces per lay', 'pcs per marker', 'output per lay', 'marker output'],
+  EFFICIENCY: ['efficiency', 'marker efficiency', 'efficiency percent', 'eff', 'fabric efficiency'],
+  CUT_DATE: ['cut date', 'cutting date', 'lay date'],
+  RESPONSIBLE_PERSON: ['cut by', 'responsible', 'done by', 'operator', 'marker by', 'prepared by'],
+
   IGNORE: [],
 };
 
@@ -221,6 +279,7 @@ export const AUTO_ACCEPT_CONFIDENCE = 0.8;
 export function guessConcept(
   header: string,
   sampleValues: readonly unknown[] = [],
+  allowedConcepts?: ReadonlySet<ImportConcept>,
 ): ConceptGuess[] {
   const h = normaliseHeader(header);
   if (!h) return [{ concept: ImportConcept.IGNORE, confidence: 1, reason: 'Blank header' }];
@@ -229,6 +288,7 @@ export function guessConcept(
 
   for (const [concept, synonyms] of Object.entries(CONCEPT_SYNONYMS) as Array<[ImportConcept, readonly string[]]>) {
     if (synonyms.length === 0) continue;
+    if (allowedConcepts && !allowedConcepts.has(concept)) continue;
     let best = 0;
     let reason = '';
 
@@ -351,6 +411,7 @@ export function analyseColumns(
   headers: readonly string[],
   rows: ReadonlyArray<readonly unknown[]>,
   savedMapping: Readonly<Record<string, ImportConcept>> = {},
+  allowedConcepts?: ReadonlySet<ImportConcept>,
 ): ColumnAnalysis[] {
   const analyses: ColumnAnalysis[] = headers.map((header, index) => {
     const samples = rows
@@ -368,7 +429,7 @@ export function analyseColumns(
     if (saved) {
       return {
         index, header, samples,
-        guesses: guessConcept(header, columnValues),
+        guesses: guessConcept(header, columnValues, allowedConcepts),
         concept: saved,
         confidence: 1,
         needsConfirmation: false,
@@ -376,7 +437,7 @@ export function analyseColumns(
       };
     }
 
-    const guesses = guessConcept(header, columnValues);
+    const guesses = guessConcept(header, columnValues, allowedConcepts);
     const top = guesses[0]!;
     return {
       index, header, samples, guesses,
@@ -443,9 +504,12 @@ export const MATRIX_ESSENTIALS: readonly ImportConcept[] = [
   ImportConcept.QUANTITY,
 ];
 
-export function assessMapping(analyses: readonly ColumnAnalysis[]): MappingReadiness {
+export function assessMapping(
+  analyses: readonly ColumnAnalysis[],
+  essentials: readonly ImportConcept[] = MATRIX_ESSENTIALS,
+): MappingReadiness {
   const assigned = new Set(analyses.map((a) => a.concept));
-  const missing = MATRIX_ESSENTIALS.filter((c) => !assigned.has(c));
+  const missing = essentials.filter((c) => !assigned.has(c));
 
   return {
     ready: missing.length === 0,

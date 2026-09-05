@@ -34,13 +34,13 @@ Then open **http://localhost:5173** and sign in:
 
 | Email | Role | What they can do |
 |---|---|---|
-| `hassona@age-factory.com` | Order Coordinator | **Start here.** The brief's most important user. |
-| `admin@age-factory.com` | Administrator | Everything operational, plus visibility of accounts and the audit log. Cannot create or disable an account. |
+| `hassona@soccertex.biz` | Order Coordinator | **Start here.** The brief's most important user. |
+| `admin@soccertex.biz` | Administrator | Everything operational, plus visibility of accounts and the audit log. Cannot create or disable an account. |
 | `ahmed@soccertex.biz` | Super Administrator | The only tier that can create, disable, re-role and reset accounts. |
 | `laila@soccertex.biz` | Super Administrator | The second named super administrator. |
-| `khaled@age-factory.com` | Warehouse | Issue materials — watch the shortage alert clear. |
-| `helmy@age-factory.com` | External Operations | Try to release printing before the approval lands. |
-| `shimaa@age-factory.com` | Quality | Record an audit; fail it and watch the order block. |
+| `khaled@soccertex.biz` | Warehouse | Issue materials — watch the shortage alert clear. |
+| `helmy@soccertex.biz` | External Operations | Try to release printing before the approval lands. |
+| `shimaa@soccertex.biz` | Quality | Record an audit; fail it and watch the order block. |
 
 Password for all of them: `opsflow-demo-2026`
 

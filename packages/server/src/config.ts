@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { z } from 'zod';
-import { parseSuperAdminEmails } from '@opsflow/shared';
+import { parseSuperAdminEmails, parseEmailList } from '@opsflow/shared';
 
 /**
  * The two addresses the brief names. They are the *default*, not a hardcoding:
@@ -86,6 +86,14 @@ const schema = z.object({
   EMAIL_RETRY_INTERVAL_SECONDS: z.coerce.number().int().min(10).default(60),
 
   /**
+   * How often the alert sweep re-checks every open order for deadlines,
+   * overdue status and material shortages (see alert-worker.ts). Hourly by
+   * default — these conditions change over hours or days, not seconds, so
+   * there is nothing to gain from checking more often than that.
+   */
+  ALERT_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(60).default(3600),
+
+  /**
    * Whether the person who made a change is also emailed about it.
    *
    * Off by default. Telling somebody what they just did is the fastest way to
@@ -93,6 +101,26 @@ const schema = z.object({
    * then gets missed with the rest.
    */
   NOTIFY_ACTOR: envBool(false),
+
+  /**
+   * Addresses that are emailed about **every** change, whatever it is.
+   *
+   * The department table in `notification-routing.ts` answers "who owns this
+   * kind of work", which is the right question for the factory floor and the
+   * wrong one for the two or three people who need to see everything —
+   * ownership, an auditor, whoever is watching a rollout. Those people are not
+   * a department, and inventing one for them would distort the routing for
+   * everybody else.
+   *
+   * An environment setting rather than a flag on `User` because the list is
+   * deployment policy, not a property of a person, and because an address here
+   * does **not** have to be an OpsFlow account. A shared mailbox nobody signs
+   * in to is a perfectly good place to keep a copy of everything.
+   *
+   * Email only: an in-app notification needs a `User` row to belong to, and
+   * these addresses may not have one.
+   */
+  ALWAYS_NOTIFY_EMAILS: z.string().default(''),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -129,6 +157,12 @@ if (SUPER_ADMIN_EMAILS.length === 0) {
     'so no user accounts can be created or managed.',
   );
 }
+
+/**
+ * Addresses copied on every change email, regardless of category, priority,
+ * department or anyone's notification preferences. Parsed once, at boot.
+ */
+export const ALWAYS_NOTIFY_EMAILS: readonly string[] = parseEmailList(config.ALWAYS_NOTIFY_EMAILS);
 
 /**
  * Whether an address is *permitted* to be a super admin. Necessary, never

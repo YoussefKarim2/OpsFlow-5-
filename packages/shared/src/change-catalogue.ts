@@ -19,6 +19,21 @@
 
 import { NotificationPriority, ChangeCategory } from './enums.js';
 
+/**
+ * How much a quantity has to move, proportionally, before it is worth a
+ * notification rather than routine noise — the brief's "a significant
+ * production quantity changes", not "any quantity changes". A change from
+ * zero (the first quantity ever entered) is always significant: there is no
+ * proportion to measure against nothing.
+ */
+export const SIGNIFICANT_QTY_DELTA_PCT = 0.1;
+
+export function isSignificantQtyChange(before: number, after: number): boolean {
+  if (before === after) return false;
+  if (before === 0) return after !== 0;
+  return Math.abs(after - before) / Math.abs(before) >= SIGNIFICANT_QTY_DELTA_PCT;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Which models produce a change event, and what to call them
 // ─────────────────────────────────────────────────────────────────────────────
@@ -135,7 +150,7 @@ export const TRACKED_MODELS: Readonly<Record<string, TrackedModel>> = {
 
   Task: {
     category: ChangeCategory.TASKS, label: 'Task',
-    createdVerb: 'created', createIsAnEvent: false,
+    createdVerb: 'created', createIsAnEvent: true,
     basePriority: NotificationPriority.LOW,
   },
   TaskComment: {
@@ -369,6 +384,11 @@ const FIELD_PRIORITY: Readonly<Record<string, NotificationPriority>> = {
   cancelledReason: NotificationPriority.URGENT,
   result: NotificationPriority.HIGH,
   status: NotificationPriority.NORMAL,
+  // A stage marked complete (or blocked/waiting) is the "production stage
+  // completed" / "production status changed" signal from the brief — worth
+  // more than OrderStage's LOW floor, which would otherwise let a coordinator
+  // with a NORMAL preference threshold miss it entirely.
+  statusOverride: NotificationPriority.NORMAL,
   priority: NotificationPriority.NORMAL,
   active: NotificationPriority.HIGH,
   isSuperAdmin: NotificationPriority.URGENT,

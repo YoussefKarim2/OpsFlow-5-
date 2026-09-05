@@ -13,6 +13,7 @@ import { api, ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { ChangePasswordForm } from './ChangePassword';
 import { EmailStatusPanel } from './admin/EmailStatusPanel';
+import { NotificationPreferencesPanel } from '../components/NotificationPreferencesPanel';
 import {
   Card, CardHeader, StatTile, Num, ProgressBar, Field, Spinner, ErrorNote,
   EmptyState, Avatar, HealthBadge, StatusBadge, clsx,
@@ -23,7 +24,7 @@ import {
 export function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState('hassona@age-factory.com');
+  const [email, setEmail] = useState('hassona@soccertex.biz');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -70,11 +71,11 @@ export function LoginPage() {
         <div className="mt-4 rounded-md border border-ink-200 bg-white/70 px-3 py-2.5">
           <p className="text-2xs font-semibold uppercase tracking-wider text-ink-500">Demo accounts</p>
           <ul className="mt-1.5 space-y-0.5 text-2xs text-ink-600">
-            <li><code>hassona@age-factory.com</code> — Order Coordinator</li>
-            <li><code>admin@age-factory.com</code> — Administrator</li>
-            <li><code>khaled@age-factory.com</code> — Warehouse</li>
-            <li><code>helmy@age-factory.com</code> — External Operations</li>
-            <li><code>shimaa@age-factory.com</code> — Quality</li>
+            <li><code>hassona@soccertex.biz</code> — Order Coordinator</li>
+            <li><code>admin@soccertex.biz</code> — Administrator</li>
+            <li><code>khaled@soccertex.biz</code> — Warehouse</li>
+            <li><code>helmy@soccertex.biz</code> — External Operations</li>
+            <li><code>shimaa@soccertex.biz</code> — Quality</li>
             <li><code>ahmed@soccertex.biz</code> — Super Administrator</li>
           </ul>
           <p className="mt-1.5 text-2xs text-ink-500">Password: <code>opsflow-demo-2026</code></p>
@@ -478,6 +479,8 @@ export function SettingsPage() {
         <CardHeader title="Password" subtitle="Changing it signs out nothing else — your current session continues." />
         <ChangePasswordForm />
       </Card>
+
+      <NotificationPreferencesPanel />
 
       {/* Behind audit:read, the same gate as the audit log — the delivery log
           names every recipient of every message, which is a staff directory. */}

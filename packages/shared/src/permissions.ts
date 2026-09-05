@@ -122,13 +122,22 @@ export function normaliseEmail(email: string): string {
 }
 
 /**
- * Parse the `SUPER_ADMIN_EMAILS` setting: a comma- or whitespace-separated list.
+ * Parse a comma-, semicolon- or whitespace-separated list of addresses from a
+ * single environment variable, normalised and de-duplicated.
+ *
  * Kept here rather than in the server config so the same parsing is available
- * to the seed script and to any future admin UI that previews the allowlist.
+ * to the seed script and to any future admin UI that previews one of these
+ * lists — and so that two settings which are both "a list of addresses" cannot
+ * drift into two slightly different notions of what that means.
  */
-export function parseSuperAdminEmails(raw: string | null | undefined): string[] {
+export function parseEmailList(raw: string | null | undefined): string[] {
   if (!raw) return [];
   return [...new Set(raw.split(/[,;\s]+/).map(normaliseEmail).filter((e) => e.includes('@')))];
+}
+
+/** The `SUPER_ADMIN_EMAILS` setting. See {@link parseEmailList}. */
+export function parseSuperAdminEmails(raw: string | null | undefined): string[] {
+  return parseEmailList(raw);
 }
 
 /**

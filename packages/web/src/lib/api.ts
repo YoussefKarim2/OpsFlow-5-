@@ -340,6 +340,47 @@ export interface ImportAnalysisDto extends ImportPreviewDto {
   } | null;
 }
 
+export interface LayingRowDto {
+  rowNumber: number;
+  markerNumber: string | null;
+  fabricName: string | null;
+  fabricColor: string | null;
+  panel: string | null;
+  sizeRatio: string | null;
+  layers: number | null;
+  markerLengthM: number | null;
+  markerWidthM: number | null;
+  totalLengthM: number | null;
+  nestPcs: number | null;
+  efficiencyPct: number | null;
+  wastagePct: number | null;
+  fabricConsumptionM: number | null;
+  cutDate: string | null;
+  cutByName: string | null;
+  poNumber: string | null;
+}
+
+/** What the Laying & Marking importer worked out about a file, scoped to one order. */
+export interface LayingImportAnalysisDto {
+  jobId: string;
+  fileName: string;
+  sheetName: string;
+  candidateSheets: Array<{ name: string; rows: number }>;
+  columns: ColumnAnalysis[];
+  rows: LayingRowDto[];
+  conflicts: Array<{
+    key: string;
+    existing: {
+      id: string; markerNumber: string | null; fabricName: string; fabricColor: string | null;
+      layers: number; markerLengthM: string; totalLengthM: string | null;
+    };
+  }>;
+  issues: Array<{ level: 'ERROR' | 'WARNING' | 'INFO'; field: string | null; sheet: string | null; cell: string | null; message: string }>;
+  detectedPoNumbers: string[];
+  priorImportExists: boolean;
+  canCommit: boolean;
+}
+
 export interface MaterialRow {
   id: string;
   code: string | null;
@@ -548,6 +589,17 @@ export const api = {
     }>('/changes/emails/test'),
   },
 
+  notificationPreferences: {
+    list: () => get<{
+      data: Array<{
+        category: ChangeCategory; label: string;
+        inApp: boolean; email: boolean; minPriority: NotificationPriority;
+      }>;
+    }>('/notification-preferences'),
+    save: (rows: Array<{ category: ChangeCategory; inApp: boolean; email: boolean; minPriority: NotificationPriority }>) =>
+      put<{ ok: true }>('/notification-preferences', rows),
+  },
+
   orders: {
     list: (filters: Record<string, unknown> = {}) => get<Paginated<OrderSummaryDto>>(`/orders${qs(filters)}`),
     search: (q: string) => get<{ data: OrderSummaryDto[] }>(`/orders/search${qs({ q })}`),
@@ -740,5 +792,28 @@ export const api = {
     }>(`/import/mappings${qs({ clientId })}`),
     deleteMapping: (id: string) => del(`/import/mappings/${id}`),
     history: () => get<{ data: unknown[] }>('/import'),
+  },
+
+  layingImport: {
+    upload: (orderId: string, file: File) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      return request<LayingImportAnalysisDto>(`/orders/${orderId}/laying-import/upload`, { method: 'POST', body: fd });
+    },
+    remap: (orderId: string, jobId: string, body: { sheetName?: string; columnMapping?: Record<string, string> }) =>
+      post<LayingImportAnalysisDto>(`/orders/${orderId}/laying-import/${jobId}/remap`, body),
+    saveMapping: (orderId: string, jobId: string, label?: string) =>
+      post<{ id: string }>(`/orders/${orderId}/laying-import/${jobId}/save-mapping`, { label }),
+    commit: (orderId: string, jobId: string, resolutions: Record<string, 'KEEP' | 'REPLACE' | 'ADD_NEW'>) =>
+      post<{
+        markersCreated: number; markersUpdated: number; markersSkipped: number;
+        cuttingRecordsCreated: number; fabricRecordsCreated: number;
+      }>(`/orders/${orderId}/laying-import/${jobId}/commit`, { resolutions }),
+    history: (orderId: string) => get<{
+      data: Array<{
+        id: string; fileName: string; status: string; createdAt: string; committedAt: string | null;
+        uploadedBy: { name: string; email: string }; errorMessage: string | null; rowCount: number;
+      }>;
+    }>(`/orders/${orderId}/laying-import`),
   },
 };

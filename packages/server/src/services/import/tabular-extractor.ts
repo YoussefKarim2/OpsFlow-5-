@@ -82,7 +82,7 @@ const MIN_HEADER_COLUMNS = 3;
  * row, every candidate is scored as a table and the best one wins, because
  * "first" and "best" are not the same row in a file with a title block.
  */
-function findHeaderCandidates(sheet: ExcelJS.Worksheet): number[] {
+export function findHeaderCandidates(sheet: ExcelJS.Worksheet): number[] {
   const limit = Math.min(sheet.rowCount || MAX_SCAN_ROWS, 30);
   const candidates: number[] = [];
 
@@ -131,7 +131,15 @@ export function readSheetTable(sheet: ExcelJS.Worksheet): SheetTable | null {
   return best;
 }
 
-function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): SheetTable | null {
+/**
+ * Read one specific row as a table's header, regardless of how it scores.
+ *
+ * Exported so a caller with its own concept set (see laying-extractor.ts)
+ * can pick the best header row by ITS OWN scoring instead of `scoreTable`
+ * below, which is weighted toward order-matrix concepts (colour, size,
+ * quantity) and is the wrong judge for a differently-shaped table.
+ */
+export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): SheetTable | null {
   const headerRow = sheet.getRow(headerRowIndex);
   const headers: string[] = [];
   const columns: number[] = [];

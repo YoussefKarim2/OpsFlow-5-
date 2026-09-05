@@ -564,11 +564,11 @@ async function main(): Promise<void> {
 
   console.log(`\nDone.\n`);
   console.log(`  Sign in with any of these — password: ${DEFAULT_PASSWORD}`);
-  console.log(`    hassona@age-factory.com   Order Coordinator  (the main user)`);
-  console.log(`    admin@age-factory.com     Administrator`);
-  console.log(`    khaled@age-factory.com    Warehouse`);
-  console.log(`    helmy@age-factory.com     External Operations`);
-  console.log(`    shimaa@age-factory.com    Quality`);
+  console.log(`    hassona@soccertex.biz   Order Coordinator  (the main user)`);
+  console.log(`    admin@soccertex.biz     Administrator`);
+  console.log(`    khaled@soccertex.biz    Warehouse`);
+  console.log(`    helmy@soccertex.biz     External Operations`);
+  console.log(`    shimaa@soccertex.biz    Quality`);
   console.log(`\n  Super administrators — must set a new password on first sign-in:`);
   for (const sa of SUPER_ADMINS) console.log(`    ${sa.email.padEnd(25)} ${sa.name}`);
   console.log('');
