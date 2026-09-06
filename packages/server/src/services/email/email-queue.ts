@@ -37,20 +37,44 @@ export interface EnqueueInput {
  * the credentials on tomorrow delivers what happened today rather than losing
  * it.
  */
+/**
+ * Split an addressed list into what may actually be sent and what may not.
+ *
+ * Pure, exported and tested for the same reason `backoff.ts` is its own module:
+ * the decision matters, and it should be checkable without a database standing
+ * behind it.
+ *
+ * An empty allowlist means no restriction — every address is deliverable. That
+ * is the default and it has to be, because a misread empty setting that
+ * suppressed everything would silently stop all mail, which is a worse failure
+ * than the bounces the setting exists to prevent.
+ *
+ * Applied at the queue rather than in the routing rules on purpose. Routing
+ * answers "who should be told about this"; the allowlist answers "whose mailbox
+ * can receive mail at all". Merging the two would let a dead address quietly
+ * change who is considered responsible for an order.
+ */
+export function partitionByAllowlist(
+  addressed: readonly string[],
+  allowlist: readonly string[],
+): { deliverable: string[]; suppressed: string[] } {
+  if (allowlist.length === 0) return { deliverable: [...addressed], suppressed: [] };
+  const allowed = new Set(allowlist.map((a) => a.trim().toLowerCase()));
+  const deliverable: string[] = [];
+  const suppressed: string[] = [];
+  for (const address of addressed) {
+    (allowed.has(address.trim().toLowerCase()) ? deliverable : suppressed).push(address);
+  }
+  return { deliverable, suppressed };
+}
+
 export async function enqueueEmail(input: EnqueueInput): Promise<string | null> {
   const addressed = [...new Set(input.recipients.map((r) => r.trim().toLowerCase()))].filter(Boolean);
   if (addressed.length === 0) return null;
 
-  // Drop anyone whose mailbox is known not to exist. Applied here, at the one
-  // door every message goes through, rather than in the routing rules: routing
-  // answers "who should be told", which is a different question from "whose
-  // mailbox can receive mail", and conflating them would mean an address that
-  // bounces quietly changes who is considered responsible for an order.
-  const recipients = EMAIL_RECIPIENT_ALLOWLIST.length === 0
-    ? addressed
-    : addressed.filter((r) => EMAIL_RECIPIENT_ALLOWLIST.includes(r));
-
-  const suppressed = addressed.filter((r) => !recipients.includes(r));
+  const { deliverable: recipients, suppressed } = partitionByAllowlist(
+    addressed, EMAIL_RECIPIENT_ALLOWLIST,
+  );
   if (suppressed.length > 0) {
     // Said out loud, every time. The alternative is mail that silently reaches
     // fewer people than the system believes, which is the same class of problem

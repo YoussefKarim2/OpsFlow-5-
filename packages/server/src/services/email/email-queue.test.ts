@@ -17,6 +17,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { nextAttemptDelayMs, MAX_ATTEMPTS } from './backoff.js';
+import { partitionByAllowlist } from './email-queue.js';
 
 describe('the retry schedule', () => {
   test('backs off geometrically rather than hammering', () => {
@@ -57,5 +58,57 @@ describe('the retry schedule', () => {
     const total = Array.from({ length: MAX_ATTEMPTS }, (_, i) => nextAttemptDelayMs(i))
       .reduce((a, b) => a + b, 0);
     assert.ok(total / 3600_000 > 12, `gives up after only ${(total / 3600_000).toFixed(1)} hours`);
+  });
+});
+
+describe('the recipient allowlist', () => {
+  // The twenty mailboxes that exist in the tenant. Everything else is an
+  // address somebody typed into a seed file and nobody ever owned.
+  const REAL = [
+    'hassona@soccertex.biz', 'abdo@soccertex.biz', 'ahmed@soccertex.biz',
+    'laila@soccertex.biz', 'youssefk@soccertex.biz',
+  ];
+
+  test('an empty allowlist restricts nothing', () => {
+    // The default, and it must stay permissive: a setting misread as empty that
+    // suppressed everything would stop all mail, which is worse than a bounce.
+    const { deliverable, suppressed } = partitionByAllowlist(['anyone@example.com'], []);
+    assert.deepEqual(deliverable, ['anyone@example.com']);
+    assert.deepEqual(suppressed, []);
+  });
+
+  test('a mailbox that does not exist never reaches Graph', () => {
+    // The exact failure that started this: Graph accepts the message, records
+    // it SENT with no error, and Exchange bounces it afterwards where nothing
+    // in the application can see.
+    const { deliverable, suppressed } = partitionByAllowlist(
+      ['abdo@soccertex.biz', 'admin@soccertex.biz'], REAL,
+    );
+    assert.deepEqual(deliverable, ['abdo@soccertex.biz']);
+    assert.deepEqual(suppressed, ['admin@soccertex.biz']);
+  });
+
+  test('a real recipient still gets the message when a fake one shares it', () => {
+    // One bad address must not cost everybody else their notification.
+    const { deliverable } = partitionByAllowlist(
+      ['khaled@soccertex.biz', 'hassona@soccertex.biz', 'tamer@soccertex.biz'], REAL,
+    );
+    assert.deepEqual(deliverable, ['hassona@soccertex.biz']);
+  });
+
+  test('case and stray whitespace do not smuggle an address past the list', () => {
+    const { deliverable, suppressed } = partitionByAllowlist(
+      ['  ABDO@Soccertex.BIZ  ', 'ADMIN@soccertex.biz'], REAL,
+    );
+    assert.equal(deliverable.length, 1);
+    assert.equal(suppressed.length, 1);
+  });
+
+  test('every address suppressed leaves nothing to send', () => {
+    const { deliverable, suppressed } = partitionByAllowlist(
+      ['magdy@soccertex.biz', 'tamer@soccertex.biz'], REAL,
+    );
+    assert.deepEqual(deliverable, []);
+    assert.equal(suppressed.length, 2);
   });
 });
