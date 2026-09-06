@@ -1,6 +1,6 @@
 # OpsFlow — Garment Order Control Centre
 
-**Live:** https://opsflow-api-production.up.railway.app — deployed on Railway, auto-deploys on every push to `main`.
+**Live:** https://opsflow-api-production.up.railway.app — deployed on Railway from the `main` branch of `YoussefKarim2/OpsFlow-5-`. Every push to `main` builds and deploys automatically, running `prisma migrate deploy` before the server starts.
 
 Replaces the `PO No. 85 – A302059B Florida T Shirt Summer order 2026.xlsx` workbook — and every workbook
 like it — with one relational system.
@@ -262,13 +262,32 @@ Then make a real change to an order and watch it arrive in every active user's i
 
 ### Who receives them
 
-Every **active** user, read live from the `users` table. Disabled accounts are excluded by the same
-`active` column the sign-in check uses, so an account stops receiving mail at the moment it stops
-being able to sign in. Nobody is hard-coded anywhere.
+Not everybody. A change is routed by its category to the department that owns that kind of work —
+order and production changes to the production manager, materials and stock to the warehouse,
+quality to quality, shipment to packing, accounts to admin — always joined by the order's own
+coordinator and outside-work manager, and, for a task, its assignee. An URGENT change additionally
+reaches the admin department and every super admin. The table is `DEPARTMENTS_FOR` in
+`notification-routing.ts`.
 
-The person who made the change is not emailed about their own action — telling somebody what they
-just did is the fastest way to teach a factory that OpsFlow mail is noise. Set `NOTIFY_ACTOR=true`
-if you disagree; it is one setting.
+Each person then filters that further with their own `NotificationPreference` rows: a category they
+have turned off, a minimum priority, or one channel but not the other. No preference row means
+everything, on both channels — a new account is never silently under-notified.
+
+Recipients are read live from the `users` table, and a disabled account is excluded by the same
+`active` column the sign-in check uses, so it stops receiving mail at the moment it stops being able
+to sign in.
+
+Two settings adjust this without a deploy:
+
+- `NOTIFY_ACTOR` — whether the person who made a change is also told about it. Off by default:
+  telling somebody what they just did is the fastest way to teach a factory that OpsFlow mail is
+  noise. When on, the actor is *added* to the recipients, not merely left in them.
+- `ALWAYS_NOTIFY_EMAILS` — a comma-separated list copied on **every** change email, whatever the
+  category, priority or department, and regardless of anyone's preferences. Ownership and auditors
+  are not a department, and inventing one for them would distort the routing for everybody else. An
+  address here does not have to be an OpsFlow account; a shared mailbox nobody signs in to is a
+  perfectly good place to keep a copy of everything. Email only — an in-app notification needs a
+  user row to belong to.
 
 ---
 
