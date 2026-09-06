@@ -16,7 +16,7 @@
 
 import { EmailStatus } from '@opsflow/shared';
 import { prisma } from '../../db.js';
-import { config } from '../../config.js';
+import { config, EMAIL_RECIPIENT_ALLOWLIST } from '../../config.js';
 import { sendMail, isGraphConfigured, missingGraphConfig, GraphNotConfiguredError } from './graph-mailer.js';
 import { nextAttemptDelayMs, MAX_ATTEMPTS } from './backoff.js';
 
@@ -38,7 +38,28 @@ export interface EnqueueInput {
  * it.
  */
 export async function enqueueEmail(input: EnqueueInput): Promise<string | null> {
-  const recipients = [...new Set(input.recipients.map((r) => r.trim().toLowerCase()))].filter(Boolean);
+  const addressed = [...new Set(input.recipients.map((r) => r.trim().toLowerCase()))].filter(Boolean);
+  if (addressed.length === 0) return null;
+
+  // Drop anyone whose mailbox is known not to exist. Applied here, at the one
+  // door every message goes through, rather than in the routing rules: routing
+  // answers "who should be told", which is a different question from "whose
+  // mailbox can receive mail", and conflating them would mean an address that
+  // bounces quietly changes who is considered responsible for an order.
+  const recipients = EMAIL_RECIPIENT_ALLOWLIST.length === 0
+    ? addressed
+    : addressed.filter((r) => EMAIL_RECIPIENT_ALLOWLIST.includes(r));
+
+  const suppressed = addressed.filter((r) => !recipients.includes(r));
+  if (suppressed.length > 0) {
+    // Said out loud, every time. The alternative is mail that silently reaches
+    // fewer people than the system believes, which is the same class of problem
+    // as the bounces this setting exists to stop.
+    console.warn(
+      `EMAIL RECIPIENTS SUPPRESSED (not on EMAIL_RECIPIENT_ALLOWLIST) — ` +
+      `"${input.subject}": ${suppressed.join(', ')}`,
+    );
+  }
   if (recipients.length === 0) return null;
 
   const row = await prisma.emailDelivery.create({

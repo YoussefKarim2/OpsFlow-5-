@@ -121,6 +121,26 @@ const schema = z.object({
    * these addresses may not have one.
    */
   ALWAYS_NOTIFY_EMAILS: z.string().default(''),
+
+  /**
+   * The addresses that actually exist, when that is not every address OpsFlow
+   * knows about. Empty — the default — means no filtering at all.
+   *
+   * This exists because of a failure mode the queue cannot see. A message to a
+   * mailbox that does not exist is accepted by Microsoft Graph, recorded here as
+   * SENT with no error, and only then rejected by Exchange, which reports the
+   * failure by emailing the *sender*. Nothing OpsFlow can read ever changes. So
+   * "did it arrive" is not a question this application is able to answer, and
+   * the only defence is to not address mail to a mailbox that isn't there.
+   *
+   * Names an address, not a domain: the whole problem is that thirteen accounts
+   * share a domain the company does own and mailboxes it does not have.
+   *
+   * Filtering, never rewriting. A message whose recipients are all filtered out
+   * is not sent to somebody else instead — silently redirecting mail to a person
+   * it was not addressed to is worse than not sending it.
+   */
+  EMAIL_RECIPIENT_ALLOWLIST: z.string().default(''),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -163,6 +183,12 @@ if (SUPER_ADMIN_EMAILS.length === 0) {
  * department or anyone's notification preferences. Parsed once, at boot.
  */
 export const ALWAYS_NOTIFY_EMAILS: readonly string[] = parseEmailList(config.ALWAYS_NOTIFY_EMAILS);
+
+/**
+ * Addresses mail may actually be sent to, or empty for "no restriction".
+ * Parsed once, at boot. See `EMAIL_RECIPIENT_ALLOWLIST` above.
+ */
+export const EMAIL_RECIPIENT_ALLOWLIST: readonly string[] = parseEmailList(config.EMAIL_RECIPIENT_ALLOWLIST);
 
 /**
  * Whether an address is *permitted* to be a super admin. Necessary, never
