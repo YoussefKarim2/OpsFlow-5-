@@ -69,6 +69,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
     'order:create', 'order:edit',
     'task:assign', 'task:complete',
     'material:edit',
+    'cutting:write',
     'external:write',
     'approval:request', 'approval:record',
     'packing:write', 'packing:approve',
@@ -87,19 +88,19 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
     'costing:read',
   ],
 
-  PRODUCTION_MANAGER: [...READ_ONLY, 'production:write', 'task:complete'],
+  PRODUCTION_MANAGER: [...READ_ONLY, 'production:write', 'cutting:write', 'task:complete'],
 
-  WAREHOUSE: [...READ_ONLY, 'material:issue', 'material:edit', 'task:complete', 'costing:write'],
+  WAREHOUSE: [...READ_ONLY, 'material:issue', 'material:edit', 'cutting:write', 'task:complete', 'costing:write'],
 
-  QUALITY: [...READ_ONLY, 'quality:audit', 'task:complete', 'task:assign'],
+  QUALITY: [...READ_ONLY, 'quality:audit', 'cutting:write', 'task:complete', 'task:assign'],
 
-  EXTERNAL_OPS: [...READ_ONLY, 'external:write', 'approval:request', 'task:complete'],
+  EXTERNAL_OPS: [...READ_ONLY, 'external:write', 'cutting:write', 'approval:request', 'task:complete'],
 
-  PACKING: [...READ_ONLY, 'packing:write', 'task:complete'],
+  PACKING: [...READ_ONLY, 'packing:write', 'cutting:write', 'task:complete'],
 
-  FOLLOW_UP: [...READ_ONLY, 'production:write', 'task:complete'],
+  FOLLOW_UP: [...READ_ONLY, 'production:write', 'cutting:write', 'task:complete'],
 
-  FINANCE: [...READ_ONLY, 'costing:read', 'costing:write'],
+  FINANCE: [...READ_ONLY, 'costing:read', 'costing:write', 'cutting:write'],
 };
 
 export const ROLE_LABEL: Record<RoleKey, string> = {
