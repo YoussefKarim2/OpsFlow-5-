@@ -171,3 +171,91 @@ describe('super-admin allowlist parsing', () => {
     assert.deepEqual(parseSuperAdminEmails('   '), []);
   });
 });
+
+/**
+ * Laying & marking import access, kept apart from cutting write access.
+ *
+ * These two permissions were briefly the same one. Gating the import on
+ * `cutting:write` meant that making the button reachable for coordinators also
+ * handed Finance and Packing the ability to add markers and regenerate a cut
+ * order. The tests below are the record of which half each role is meant to
+ * have, so the two cannot quietly collapse back together.
+ *
+ * Named against the people the model was written for, because "COORDINATOR has
+ * import:laying" is a fact about a table and "Hassouna can file the sheet" is
+ * the thing that was actually asked for.
+ */
+describe('laying import is separate from cutting', () => {
+  const has = (role: RoleKey, p: Permission) => ROLE_PERMISSIONS[role].includes(p);
+
+  // Who files the laying & marking sheet.
+  const MAY_IMPORT: RoleKey[] = [
+    'SUPER_ADMIN',      // administrators, by construction
+    'ADMIN',
+    'COORDINATOR',      // Hassouna, Ibrahim Abozeid, Ahmed Samy Abozeid
+    'FACTORY_MANAGER',  // Ahmed Aarfa, Serag Mohamed, Mahmoud Mostafa
+    'EXTERNAL_OPS',     // Helmy
+    'PACKING',          // Sabry
+  ];
+
+  // Who actually cuts. Unchanged by the import work, and that is the point.
+  const MAY_CUT: RoleKey[] = ['SUPER_ADMIN', 'ADMIN', 'FACTORY_MANAGER'];
+
+  for (const role of MAY_IMPORT) {
+    test(`${role} can run the laying import`, () => {
+      assert.ok(has(role, 'import:laying'), `${role} should hold import:laying`);
+    });
+  }
+
+  for (const role of ROLE_KEYS.filter((r) => !MAY_IMPORT.includes(r))) {
+    test(`${role} cannot run the laying import`, () => {
+      assert.ok(!has(role, 'import:laying'), `${role} should not hold import:laying`);
+    });
+  }
+
+  test('Finance gets neither half', () => {
+    // Explicitly required: Finance had no reason to reach either, and only ever
+    // held cutting:write because the import gate borrowed it.
+    assert.ok(!has('FINANCE', 'cutting:write'));
+    assert.ok(!has('FINANCE', 'import:laying'));
+  });
+
+  for (const role of ROLE_KEYS.filter((r) => !MAY_CUT.includes(r))) {
+    test(`${role} cannot write cutting data`, () => {
+      assert.ok(!has(role, 'cutting:write'), `${role} should not hold cutting:write`);
+    });
+  }
+
+  test('the roles that cut kept the permission to cut', () => {
+    // The cutters must not lose access as a side effect of narrowing the import.
+    for (const role of MAY_CUT) assert.ok(has(role, 'cutting:write'), `${role} lost cutting:write`);
+  });
+
+  test('a coordinator can import without being able to cut', () => {
+    // The whole purpose of splitting the permission, in one assertion.
+    assert.ok(has('COORDINATOR', 'import:laying'));
+    assert.ok(!has('COORDINATOR', 'cutting:write'));
+  });
+
+  test('narrowing the import did not disturb the rest of a coordinator', () => {
+    for (const p of ['order:create', 'order:edit', 'material:edit', 'packing:approve',
+                     'shipment:write', 'costing:write', 'import:run'] as Permission[]) {
+      assert.ok(has('COORDINATOR', p), `COORDINATOR lost ${p}`);
+    }
+  });
+
+  test('nor the factory manager, nor Finance', () => {
+    for (const p of ['production:write', 'order:edit', 'approval:record'] as Permission[]) {
+      assert.ok(has('FACTORY_MANAGER', p), `FACTORY_MANAGER lost ${p}`);
+    }
+    for (const p of ['costing:read', 'costing:write'] as Permission[]) {
+      assert.ok(has('FINANCE', p), `FINANCE lost ${p}`);
+    }
+  });
+
+  test('import:laying is a real permission, not a typo that silently never matches', () => {
+    assert.ok(PERMISSIONS.includes('import:laying'));
+    // The general workbook import is a different thing and still exists.
+    assert.ok(PERMISSIONS.includes('import:run'));
+  });
+});

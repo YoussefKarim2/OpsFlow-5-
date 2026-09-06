@@ -10,7 +10,7 @@ import { parseSuperAdminEmails, parseEmailList } from '@opsflow/shared';
  * A default exists at all so that a fresh install is never left with nobody who
  * can create an account.
  */
-const DEFAULT_SUPER_ADMIN_EMAILS = 'ahmed@soccertex.biz,laila@soccertex.biz';
+const DEFAULT_SUPER_ADMIN_EMAILS = 'ahmed@soccertex.biz,laila@soccertex.biz,youssefk@soccertex.biz';
 
 /**
  * A boolean from an environment variable.

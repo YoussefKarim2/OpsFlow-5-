@@ -87,7 +87,7 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
           title="Lay plan"
           subtitle="Each row is one marker: a size ratio, a layer count and a marker length"
           action={
-            can('cutting:write') && (
+            can('import:laying') && (
               <button className="btn-secondary btn-sm" onClick={() => setImporting(true)}>
                 <FileUp className="h-3.5 w-3.5" /> Import Laying & Marking Excel
               </button>

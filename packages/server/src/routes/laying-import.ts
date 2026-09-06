@@ -104,7 +104,7 @@ async function persistJob(jobId: string, extraction: LayingExtractionResult): Pr
   });
 }
 
-layingImportRouter.post('/upload', requirePermission('cutting:write'), upload.single('file'), asyncHandler(async (req, res) => {
+layingImportRouter.post('/upload', requirePermission('import:laying'), upload.single('file'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   const order = await resolveOrder(req.params.orderId!);
   if (!req.file) throw new BadRequestError('No file was uploaded.');
@@ -148,7 +148,7 @@ const remapSchema = z.object({
   columnMapping: z.record(z.string()).optional(),
 });
 
-layingImportRouter.post('/:jobId/remap', requirePermission('cutting:write'), asyncHandler(async (req, res) => {
+layingImportRouter.post('/:jobId/remap', requirePermission('import:laying'), asyncHandler(async (req, res) => {
   const order = await resolveOrder(req.params.orderId!);
   const input = remapSchema.parse(req.body ?? {});
   const job = await prisma.importJob.findFirst({ where: { id: req.params.jobId, targetOrderId: order.id, target: 'LAYING_MARKING' } });
@@ -163,7 +163,7 @@ layingImportRouter.post('/:jobId/remap', requirePermission('cutting:write'), asy
   res.json(await buildResponse(job.id, job.fileName, order.id, extraction));
 }));
 
-layingImportRouter.post('/:jobId/save-mapping', requirePermission('cutting:write'), asyncHandler(async (req, res) => {
+layingImportRouter.post('/:jobId/save-mapping', requirePermission('import:laying'), asyncHandler(async (req, res) => {
   const order = await resolveOrder(req.params.orderId!);
   const job = await prisma.importJob.findFirst({ where: { id: req.params.jobId, targetOrderId: order.id, target: 'LAYING_MARKING' } });
   if (!job) throw new NotFoundError('Import job');
@@ -190,7 +190,7 @@ const commitSchema = z.object({
   resolutions: z.record(z.enum(['KEEP', 'REPLACE', 'ADD_NEW'])).default({}),
 });
 
-layingImportRouter.post('/:jobId/commit', requirePermission('cutting:write'), asyncHandler(async (req, res) => {
+layingImportRouter.post('/:jobId/commit', requirePermission('import:laying'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   const order = await resolveOrder(req.params.orderId!);
   const input = commitSchema.parse(req.body ?? {});
