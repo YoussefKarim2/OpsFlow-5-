@@ -294,11 +294,22 @@ export const USERS: Array<{ name: string; email: string; roleKey: string; depart
   { name: 'Abdo Mahmoud',   email: 'abdo@soccertex.biz',        roleKey: 'PRODUCTION_MANAGER', department: 'PRODUCTION_MANAGER' },
   { name: 'Tamer',          email: 'tamer@soccertex.biz',       roleKey: 'FACTORY_MANAGER',    department: 'CUTTING_MARKER' },
   { name: 'Khaled',         email: 'khaled@soccertex.biz',      roleKey: 'WAREHOUSE',          department: 'WAREHOUSE' },
-  { name: 'Helmy',          email: 'helmy@soccertex.biz',       roleKey: 'EXTERNAL_OPS',       department: 'EXTERNAL_OPS' },
+  { name: 'Helmy',          email: 'helmy@soccertex.biz',       roleKey: 'COORDINATOR',        department: 'EXTERNAL_OPS' },
   { name: 'Shimaa',         email: 'shimaa@soccertex.biz',      roleKey: 'QUALITY',            department: 'QUALITY' },
-  { name: 'Sabry Khamis',   email: 'sabry@soccertex.biz',       roleKey: 'PACKING',            department: 'PACKING' },
+  { name: 'Sabry Khamis',   email: 'sabry@soccertex.biz',       roleKey: 'COORDINATOR',        department: 'PACKING' },
   { name: 'Aya Fawzy',      email: 'aya.fawzy@soccertex.biz',   roleKey: 'FOLLOW_UP',          department: 'FOLLOW_UP' },
   { name: 'Magdy',          email: 'magdy@soccertex.biz',       roleKey: 'FINANCE',            department: 'FINANCE' },
+
+  // The people confirmed against the Microsoft 365 tenant. Listed here so a
+  // fresh install produces the same organisation as production; the accounts
+  // themselves were added to the running database by migration, because a seed
+  // does not run against a live system.
+  { name: 'Ahmed Aarfa',       email: 'arafaa@soccertex.biz',   roleKey: 'FACTORY_MANAGER',  department: 'CUTTING_MARKER' },
+  { name: 'Serag Mohamed',     email: 'serag@soccertex.biz',    roleKey: 'FACTORY_MANAGER',  department: 'CUTTING_MARKER' },
+  { name: 'Ibrahim Abozeid',   email: 'ibrahim@soccertex.biz',  roleKey: 'COORDINATOR',      department: 'COORDINATOR' },
+  { name: 'Ahmed Samy Abozeid', email: 'samy@soccertex.biz',    roleKey: 'LEAD_COORDINATOR', department: 'COORDINATOR' },
+  { name: 'Mahmoud Mostafa',   email: 'mahmoud@soccertex.biz',  roleKey: 'FACTORY_MANAGER',  department: 'FACTORY_MANAGER' },
+  { name: 'Mahmoud Ragab',     email: 'ragab@soccertex.biz',    roleKey: 'FINANCE',          department: 'FINANCE' },
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 
 import {
   PERMISSIONS, ROLE_PERMISSIONS, ROLE_KEYS, ROLE_LABEL,
-  SUPER_ADMIN_ONLY_PERMISSIONS, can, canAny, computeLockout,
+  SUPER_ADMIN_ONLY_PERMISSIONS, SYSTEM_ADMIN_PERMISSIONS, can, canAny, computeLockout,
   normaliseEmail, parseSuperAdminEmails,
   type Permission, type RoleKey,
 } from './permissions.js';
@@ -190,16 +190,15 @@ describe('laying import is separate from cutting', () => {
 
   // Who files the laying & marking sheet.
   const MAY_IMPORT: RoleKey[] = [
-    'SUPER_ADMIN',      // administrators, by construction
+    'SUPER_ADMIN',       // administrators, by construction
     'ADMIN',
-    'COORDINATOR',      // Hassouna, Ibrahim Abozeid, Ahmed Samy Abozeid
-    'FACTORY_MANAGER',  // Ahmed Aarfa, Serag Mohamed, Mahmoud Mostafa
-    'EXTERNAL_OPS',     // Helmy
-    'PACKING',          // Sabry
+    'LEAD_COORDINATOR',  // Ahmed Samy Abozeid
+    'COORDINATOR',       // Hassouna, Ibrahim Abozeid, Sabry, Helmy
+    'FACTORY_MANAGER',   // Ahmed Aarfa, Serag Mohamed, Mahmoud Mostafa
   ];
 
   // Who actually cuts. Unchanged by the import work, and that is the point.
-  const MAY_CUT: RoleKey[] = ['SUPER_ADMIN', 'ADMIN', 'FACTORY_MANAGER'];
+  const MAY_CUT: RoleKey[] = ['SUPER_ADMIN', 'ADMIN', 'LEAD_COORDINATOR', 'FACTORY_MANAGER'];
 
   for (const role of MAY_IMPORT) {
     test(`${role} can run the laying import`, () => {
@@ -257,5 +256,54 @@ describe('laying import is separate from cutting', () => {
     assert.ok(PERMISSIONS.includes('import:laying'));
     // The general workbook import is a different thing and still exists.
     assert.ok(PERMISSIONS.includes('import:run'));
+  });
+});
+
+/**
+ * The Lead Coordinator: every operational power, no administrative ones.
+ *
+ * The role exists because "may edit essentially everything" and "may create
+ * accounts" kept being treated as the same request. They are not, and the tests
+ * below are what keeps them apart — particularly the last one, which fails if
+ * somebody later widens the role by reaching for ADMIN.
+ */
+describe('lead coordinator', () => {
+  const lead = ROLE_PERMISSIONS.LEAD_COORDINATOR;
+
+  test('can do everything a coordinator can', () => {
+    for (const p of ROLE_PERMISSIONS.COORDINATOR) {
+      assert.ok(lead.includes(p), `LEAD_COORDINATOR is missing the coordinator's ${p}`);
+    }
+  });
+
+  test('adds the operational reach a coordinator lacks', () => {
+    for (const p of ['cutting:write', 'import:laying', 'production:write',
+                     'material:issue', 'quality:audit'] as Permission[]) {
+      assert.ok(lead.includes(p), `LEAD_COORDINATOR should hold ${p}`);
+    }
+  });
+
+  test('administers orders, not OpsFlow', () => {
+    // The distinction the role was created to draw. Broad authority over the
+    // factory is not a reason to hold the power to mint an account, and a role
+    // that can grant itself more is bounded by nothing.
+    for (const p of SYSTEM_ADMIN_PERMISSIONS) {
+      assert.ok(!lead.includes(p), `LEAD_COORDINATOR must not hold ${p}`);
+    }
+  });
+
+  test('holds no super-admin-only permission', () => {
+    for (const p of SUPER_ADMIN_ONLY_PERMISSIONS) assert.ok(!lead.includes(p));
+  });
+
+  test('is narrower than ADMIN, which is the reason it exists', () => {
+    assert.ok(lead.length < ROLE_PERMISSIONS.ADMIN.length);
+    assert.ok(lead.length > ROLE_PERMISSIONS.COORDINATOR.length);
+  });
+
+  test('packing and external ops no longer borrow the laying import', () => {
+    // They only ever held it to reach Sabry and Helmy, who are coordinators now.
+    assert.ok(!ROLE_PERMISSIONS.PACKING.includes('import:laying'));
+    assert.ok(!ROLE_PERMISSIONS.EXTERNAL_OPS.includes('import:laying'));
   });
 });

@@ -43,9 +43,24 @@ export const SUPER_ADMIN_ONLY_PERMISSIONS: readonly Permission[] = [
   'user:create', 'user:disable', 'user:reset-password', 'role:assign', 'settings:manage',
 ];
 
+/**
+ * Running the company, as opposed to running the factory.
+ *
+ * Managing accounts, editing roles, changing settings and reading the audit log
+ * are the things a person does *to* OpsFlow rather than to an order. The
+ * distinction exists so that a role can be given every operational power in the
+ * building without also being handed the ability to grant itself more.
+ */
+export const SYSTEM_ADMIN_PERMISSIONS: readonly Permission[] = [
+  'user:manage', 'user:create', 'user:disable', 'user:reset-password',
+  'role:manage', 'role:assign',
+  'settings:manage', 'audit:read',
+];
+
 export const ROLE_KEYS = [
-  'SUPER_ADMIN', 'ADMIN', 'COORDINATOR', 'FACTORY_MANAGER', 'PRODUCTION_MANAGER',
-  'WAREHOUSE', 'QUALITY', 'EXTERNAL_OPS', 'PACKING', 'FOLLOW_UP', 'FINANCE',
+  'SUPER_ADMIN', 'ADMIN', 'LEAD_COORDINATOR', 'COORDINATOR', 'FACTORY_MANAGER',
+  'PRODUCTION_MANAGER', 'WAREHOUSE', 'QUALITY', 'EXTERNAL_OPS', 'PACKING',
+  'FOLLOW_UP', 'FINANCE',
 ] as const;
 export type RoleKey = (typeof ROLE_KEYS)[number];
 
@@ -65,6 +80,24 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
   // three named people run the user list.
   ADMIN: PERMISSIONS.filter(
     (p) => !SUPER_ADMIN_ONLY_PERMISSIONS.includes(p),
+  ) as Permission[],
+
+  /**
+   * Everything the factory does, and nothing that administers OpsFlow itself.
+   *
+   * Defined by subtraction from the full permission set, the same way ADMIN is,
+   * because "may edit essentially everything operationally" is a statement about
+   * what is *excluded* — a lead coordinator who cannot issue material or sign off
+   * quality is not one. Listing the inclusions instead would mean a permission
+   * added next year silently misses this role.
+   *
+   * The subtracted set is `SYSTEM_ADMIN_PERMISSIONS`: accounts, roles, settings
+   * and the audit log. Broad operational authority is not a reason to hold the
+   * power to create accounts, and a role that could grant itself more is not
+   * bounded by anything.
+   */
+  LEAD_COORDINATOR: PERMISSIONS.filter(
+    (p) => !SYSTEM_ADMIN_PERMISSIONS.includes(p),
   ) as Permission[],
 
   // The most important user. Sees everything, owns the order end to end,
@@ -100,9 +133,9 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
 
   QUALITY: [...READ_ONLY, 'quality:audit', 'task:complete', 'task:assign'],
 
-  EXTERNAL_OPS: [...READ_ONLY, 'external:write', 'import:laying', 'approval:request', 'task:complete'],
+  EXTERNAL_OPS: [...READ_ONLY, 'external:write', 'approval:request', 'task:complete'],
 
-  PACKING: [...READ_ONLY, 'packing:write', 'import:laying', 'task:complete'],
+  PACKING: [...READ_ONLY, 'packing:write', 'task:complete'],
 
   FOLLOW_UP: [...READ_ONLY, 'production:write', 'task:complete'],
 
@@ -112,6 +145,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
 export const ROLE_LABEL: Record<RoleKey, string> = {
   SUPER_ADMIN: 'Super Administrator',
   ADMIN: 'Administrator',
+  LEAD_COORDINATOR: 'Lead Coordinator',
   COORDINATOR: 'Order Coordinator',
   FACTORY_MANAGER: 'Factory Manager',
   PRODUCTION_MANAGER: 'Production Manager',
