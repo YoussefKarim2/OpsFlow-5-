@@ -13,10 +13,11 @@
  */
 
 import { useState } from 'react';
+import { InstructionLines } from '../../components/InstructionLines';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, Trash2 } from 'lucide-react';
 import { DEPARTMENT_LABEL, fmtDate, type Department } from '@opsflow/shared';
-import { api, type InstructionDto } from '../../lib/api';
+import { api, type InstructionDto, type InstructionLineDto } from '../../lib/api';
 import { Card, Modal, Field, Spinner, EmptyState, ConfirmDialog, clsx, useToast } from '../../components/ui';
 
 const DEPARTMENTS: Department[] = [
@@ -29,9 +30,10 @@ interface Draft {
   title: string;
   body: string;
   visibleTo: string[];
+  lines: InstructionLineDto[];
 }
 
-const EMPTY: Draft = { id: null, title: '', body: '', visibleTo: [] };
+const EMPTY: Draft = { id: null, title: '', body: '', visibleTo: [], lines: [] };
 
 export function InstructionsTab({ orderId }: { orderId: string }) {
   const qc = useQueryClient();
@@ -52,8 +54,8 @@ export function InstructionsTab({ orderId }: { orderId: string }) {
   const save = useMutation({
     mutationFn: (d: Draft) =>
       d.id
-        ? api.steps.updateInstruction(orderId, d.id, { title: d.title, body: d.body, visibleTo: d.visibleTo })
-        : api.steps.addInstruction(orderId, { title: d.title, body: d.body, visibleTo: d.visibleTo }),
+        ? api.steps.updateInstruction(orderId, d.id, { title: d.title, body: d.body, visibleTo: d.visibleTo, lines: d.lines })
+        : api.steps.addInstruction(orderId, { title: d.title, body: d.body, visibleTo: d.visibleTo, lines: d.lines }),
     onSuccess: () => { refresh(); setDraft(null); toast.success('Instruction saved'); },
     onError: (e) => toast.error(e),
   });
@@ -103,6 +105,10 @@ export function InstructionsTab({ orderId }: { orderId: string }) {
                       // every attribute are stripped before it is ever stored.
                       dangerouslySetInnerHTML={{ __html: r.body }}
                     />
+
+                    {/* Read-only here; the table is edited alongside the prose. */}
+                    <InstructionLines lines={r.lines ?? []} readOnly />
+
                     <div className="mt-2 flex flex-wrap items-center gap-1.5">
                       <span className="text-2xs text-ink-500">Must be read by:</span>
                       {r.visibleTo.map((d) => (
@@ -116,7 +122,7 @@ export function InstructionsTab({ orderId }: { orderId: string }) {
                   <div className="flex shrink-0 gap-1">
                     <button
                       className="btn-ghost btn-sm"
-                      onClick={() => setDraft({ id: r.id, title: r.title, body: r.body, visibleTo: r.visibleTo })}
+                      onClick={() => setDraft({ id: r.id, title: r.title, body: r.body, visibleTo: r.visibleTo, lines: r.lines ?? [] })}
                     >
                       <Pencil className="h-3.5 w-3.5" />
                     </button>
@@ -175,6 +181,11 @@ export function InstructionsTab({ orderId }: { orderId: string }) {
                 onChange={(e) => setDraft({ ...draft, body: e.target.value })}
               />
             </Field>
+
+            <InstructionLines
+              lines={draft.lines}
+              onChange={(lines) => setDraft({ ...draft, lines })}
+            />
 
             <Field label="Who must read it?" hint="At least one. An instruction nobody is routed to is a note in a drawer.">
               <div className="flex flex-wrap gap-1.5">

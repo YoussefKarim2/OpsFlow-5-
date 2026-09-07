@@ -6,12 +6,50 @@
  * and explains what is missing, which is the whole difference.
  */
 
+import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { fmtNumber, type OrderDetailDto } from '@opsflow/shared';
-import { Info } from 'lucide-react';
+import { Info, Calculator } from 'lucide-react';
+import { api } from '../../lib/api';
+import { useAuth } from '../../lib/auth';
+import { CostingEditor } from '../../components/CostingEditor';
 import { Card, CardHeader, StatTile, Num, ProgressBar, EmptyState, clsx } from '../../components/ui';
 
 export function CostingTab({ order }: { order: OrderDetailDto }) {
   const c = order.costing;
+  const { can } = useAuth();
+  const [editing, setEditing] = useState(false);
+
+  // Loaded whether or not a costing exists: before the first save, `derived`
+  // is what the production sections would contribute, and showing that is how
+  // somebody sees the screen is working rather than empty.
+  const costing = useQuery({
+    queryKey: ['costing', order.id],
+    queryFn: () => api.steps.costing(order.id),
+    enabled: can('costing:read'),
+  });
+
+  const editor = editing ? (
+    <div className="p-5">
+      <Card>
+        <CardHeader
+          title="Actual costing"
+          subtitle="Figures the production sections support, plus anything you add by hand."
+          action={<button className="btn-secondary btn-sm" onClick={() => setEditing(false)}>Done</button>}
+        />
+        <div className="p-4">
+          <CostingEditor
+            orderId={order.id}
+            record={costing.data?.data ?? null}
+            derived={costing.data?.derived ?? []}
+            onSaved={() => setEditing(false)}
+          />
+        </div>
+      </Card>
+    </div>
+  ) : null;
+
+  if (editor) return editor;
 
   if (!c) {
     return (
@@ -20,6 +58,11 @@ export function CostingTab({ order }: { order: OrderDetailDto }) {
           <EmptyState
             title="No costing record yet"
             detail="The warehouse records what was actually issued and its price; the coordinator records the production days. Until then there is nothing to cost."
+            action={can('costing:write') ? (
+              <button className="btn-primary btn-sm" onClick={() => setEditing(true)}>
+                <Calculator className="h-3.5 w-3.5" /> Start the costing
+              </button>
+            ) : undefined}
           />
         </Card>
       </div>
@@ -30,6 +73,14 @@ export function CostingTab({ order }: { order: OrderDetailDto }) {
 
   return (
     <div className="space-y-4 p-5">
+      {can('costing:write') && (
+        <div className="flex justify-end">
+          <button className="btn-secondary btn-sm" onClick={() => setEditing(true)}>
+            <Calculator className="h-3.5 w-3.5" /> Recalculate or add costs
+          </button>
+        </div>
+      )}
+
       {unavailable && (
         <div className="flex items-start gap-2.5 rounded-md border border-blue-200 bg-blue-50 px-4 py-3">
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />

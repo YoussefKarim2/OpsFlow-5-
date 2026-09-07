@@ -98,6 +98,70 @@ const cartonSchema = z.object({
   netWeightKg: z.number().nonnegative().optional(),
 });
 
+/**
+ * Add several sizes to one packing list in a single save.
+ *
+ * A packing list has always held many cartons and each carton has always named
+ * one colour and one size, so multiple sizes per list was never a schema
+ * limitation — it was a data-entry one. Filling a size grid meant one request
+ * per row, and a list half-entered when the fourth request failed.
+ *
+ * Reuses the per-carton rules rather than restating them: the approval lock and
+ * the weight check below are the same ones the single-carton route applies, and
+ * the PACKED ledger is incremented the same way, so the funnel and the dashboard
+ * still agree with the cartons. The difference is that all of it happens in one
+ * transaction, so the grid is either wholly saved or wholly not.
+ */
+packingRouter.post('/list/:listId/cartons/bulk', requirePermission('packing:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const rows = z.array(cartonSchema).min(1, 'Add at least one size.').parse(req.body.cartons);
+
+  const list = await prisma.packingList.findUnique({ where: { id: req.params.listId } });
+  if (!list) throw new NotFoundError('Packing list');
+  if (list.approved) {
+    throw new ValidationError('This packing list has been approved. Reopen it before adding cartons.');
+  }
+  for (const r of rows) {
+    if (r.netWeightKg != null && r.grossWeightKg != null && r.netWeightKg > r.grossWeightKg) {
+      throw new ValidationError(`Carton ${r.cartonNumber}: net weight cannot exceed gross weight.`);
+    }
+  }
+
+  const start = await prisma.carton.count({ where: { packingListId: list.id } });
+
+  await prisma.$transaction(async (tx) => {
+    for (const [i, input] of rows.entries()) {
+      await tx.carton.create({ data: { ...input, packingListId: list.id, position: start + i } });
+      if (input.orderColorId && input.orderSizeId) {
+        await tx.stageQuantity.upsert({
+          where: {
+            orderId_orderColorId_orderSizeId_ledger: {
+              orderId: list.orderId, orderColorId: input.orderColorId,
+              orderSizeId: input.orderSizeId, ledger: 'PACKED',
+            },
+          },
+          create: {
+            orderId: list.orderId, orderColorId: input.orderColorId,
+            orderSizeId: input.orderSizeId, ledger: 'PACKED', qty: input.qty,
+          },
+          update: { qty: { increment: input.qty } },
+        });
+      }
+    }
+  });
+
+  const total = rows.reduce((a, r) => a + r.qty, 0);
+  await logActivity({
+    orderId: list.orderId, actorId: actor.id, actorName: actor.name,
+    action: 'CARTONS_ADDED',
+    summary: `packed ${rows.length} carton${rows.length === 1 ? '' : 's'} — ${total.toLocaleString()} pcs`,
+    entityType: 'PackingList', entityId: list.id,
+  });
+
+  await refreshOrderCache(list.orderId);
+  res.status(201).json({ count: rows.length, qty: total });
+}));
+
 packingRouter.post('/list/:listId/cartons', requirePermission('packing:write'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   const input = cartonSchema.parse(req.body);

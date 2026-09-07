@@ -77,6 +77,20 @@ export const ImportConcept = {
   CUT_DATE: 'CUT_DATE',
   RESPONSIBLE_PERSON: 'RESPONSIBLE_PERSON',
 
+  // ── Manual-entry sections that documents also carry ─────────────────────
+  //
+  // A customer's workbook often holds the name-and-number list for shirt
+  // printing, a per-item price, or a packed-carton count. Those belong to
+  // Custom Instructions, the BOM and Packing respectively, and recognising them
+  // here is what lets the importer fill those sections instead of leaving a
+  // coordinator to retype a sheet the system already read.
+  PLAYER_NAME: 'PLAYER_NAME',
+  PLAYER_NUMBER: 'PLAYER_NUMBER',
+  ITEM_UNIT_PRICE: 'ITEM_UNIT_PRICE',
+  SUPPLIER: 'SUPPLIER',
+  CARTON_NUMBER: 'CARTON_NUMBER',
+  CARTON_QTY: 'CARTON_QTY',
+
   /** Recognised as a column, but not something the importer uses. */
   IGNORE: 'IGNORE',
 } as const;
@@ -105,6 +119,12 @@ export const CONCEPT_META: Record<ImportConcept, ConceptMeta> = {
   SIZE:           { concept: 'SIZE',           label: 'Size',                 field: null,                   type: 'string', essential: true,  hint: 'Becomes a column of the quantity matrix' },
   QUANTITY:       { concept: 'QUANTITY',       label: 'Quantity',             field: null,                   type: 'number', essential: true,  hint: 'Pieces for this colour and size' },
   UNIT_PRICE:     { concept: 'UNIT_PRICE',     label: 'Unit price',           field: 'pricePerPieceUsd',     type: 'number' },
+  PLAYER_NAME:    { concept: 'PLAYER_NAME',    label: 'Name',                 field: null,                   type: 'string', hint: 'A printing name — becomes a Custom Instructions row' },
+  PLAYER_NUMBER:  { concept: 'PLAYER_NUMBER',  label: 'Number',               field: null,                   type: 'string', hint: 'A printing number — becomes a Custom Instructions row' },
+  ITEM_UNIT_PRICE:{ concept: 'ITEM_UNIT_PRICE',label: 'Item price',           field: null,                   type: 'number', hint: 'Price of a BOM material or accessory' },
+  SUPPLIER:       { concept: 'SUPPLIER',       label: 'Supplier',             field: null,                   type: 'string', hint: 'Who supplies a BOM item' },
+  CARTON_NUMBER:  { concept: 'CARTON_NUMBER',  label: 'Carton number',        field: null,                   type: 'string', hint: 'Becomes a packing carton' },
+  CARTON_QTY:     { concept: 'CARTON_QTY',     label: 'Carton quantity',      field: null,                   type: 'number', hint: 'Pieces in the carton' },
   CURRENCY:       { concept: 'CURRENCY',       label: 'Currency',             field: null,                   type: 'string' },
   MATERIAL:       { concept: 'MATERIAL',       label: 'Material',             field: 'fabric',               type: 'string' },
   FABRIC:         { concept: 'FABRIC',         label: 'Fabric',               field: 'fabric',               type: 'string' },
@@ -146,6 +166,33 @@ export const CONCEPT_META: Record<ImportConcept, ConceptMeta> = {
  * `"order qty"` are one entry. Add to this list rather than to the algorithm.
  */
 export const CONCEPT_SYNONYMS: Record<ImportConcept, readonly string[]> = {
+  PLAYER_NAME: [
+    'name', 'player', 'player name', 'nome', 'nombre', 'print name', 'printing name',
+    'shirt name', 'back name', 'surname', 'staff name',
+  ],
+  PLAYER_NUMBER: [
+    'no', 'number', 'player no', 'player number', 'shirt no', 'shirt number',
+    'back number', 'print number', 'printing number', 'squad no', 'jersey no',
+  ],
+  ITEM_UNIT_PRICE: [
+    // Deliberately narrow. A bare 'cost', 'rate' or 'unit cost' already belongs
+    // to UNIT_PRICE — the price of the *garment* — and a header that ambiguous
+    // is better left unmapped for the coordinator to assign than guessed at,
+    // because guessing wrong prices the order instead of the trim.
+    'item price', 'material price', 'accessory price', 'material cost',
+    'accessory cost', 'unit rate', 'buying price', 'purchase price',
+  ],
+  SUPPLIER: [
+    'supplier', 'vendor', 'source', 'supplied by', 'manufacturer', 'mill',
+  ],
+  CARTON_NUMBER: [
+    'carton', 'carton no', 'carton number', 'box', 'box no', 'box number',
+    'ctn', 'ctn no', 'case no',
+  ],
+  CARTON_QTY: [
+    'carton qty', 'per carton', 'pcs per carton', 'qty per box', 'box qty',
+    'pack qty', 'packed qty', 'pcs/ctn',
+  ],
   PO_NUMBER: [
     'po', 'po no', 'po number', 'po num', 'purchase order', 'purchase order no',
     'order no', 'order number', 'order ref', 'order id', 'po ref', 'ponumber', 'po#', 'order#',

@@ -1,13 +1,22 @@
 /**
- * Bill of materials. The shortage column is the point: `issued − required`,
- * derived on read, shown prominently as the brief's section 13 asks.
+ * Bill of materials.
+ *
+ * Two views of the same rows, because they answer different questions. The
+ * shortage view is unchanged and still the point of the screen — `issued −
+ * required`, derived on read, shown prominently as the brief's section 13 asks.
+ * Beside it is the editor, which is how the BOM gets filled when a document
+ * could not be read or came in wrong.
+ *
+ * Importing still populates this table. Editing is an addition to that, not a
+ * replacement for it.
  */
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PackagePlus, AlertTriangle } from 'lucide-react';
 import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
-import { api, ApiError } from '../../lib/api';
+import { api, ApiError, type BomRowDto } from '../../lib/api';
+import { BomEditor } from '../../components/BomEditor';
 import { useAuth } from '../../lib/auth';
 import {
   Card, CardHeader, StatTile, Num, ProgressBar, Modal, Field, Spinner, ErrorNote, clsx,
@@ -34,6 +43,10 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
   const qc = useQueryClient();
   const { can } = useAuth();
   const [issuing, setIssuing] = useState<BomRow | null>(null);
+  const [editing, setEditing] = useState(false);
+
+  // Only for the type suggestions; the screen works without it.
+  const { data: lookups } = useQuery({ queryKey: ['lookups'], queryFn: api.reference.lookups });
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['bom', order.id],
@@ -43,6 +56,48 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
   if (isLoading) return <Spinner />;
   if (error) return <div className="p-5"><ErrorNote error={error} /></div>;
   if (!data) return null;
+
+  if (editing) {
+    const rows: BomRowDto[] = (data.items as Array<Record<string, unknown>>).map((r) => ({
+      id: r.id as string,
+      category: (r.category as string) ?? 'ACCESSORY',
+      item: (r.item as string) ?? '',
+      description: (r.description as string) ?? null,
+      colorText: (r.colorText as string) ?? (r.color as string) ?? null,
+      unit: (r.unit as string) ?? 'PCS',
+      requiredQty: Number(r.requiredQty ?? 0),
+      unitPriceUsd: r.unitPriceUsd == null ? null : Number(r.unitPriceUsd),
+      supplier: (r.supplier as string) ?? null,
+      notes: (r.notes as string) ?? null,
+      sizes: ((r.sizes as Array<{ sizeLabel: string; qty: number }>) ?? []).map((z) => ({
+        sizeLabel: z.sizeLabel, qty: z.qty,
+      })),
+    }));
+
+    return (
+      <div className="space-y-4 p-5">
+        <Card>
+          <CardHeader
+            title="Edit the bill of materials"
+            subtitle="Add, correct or remove items. Anything an import brought in can be changed here."
+            action={
+              <button className="btn-secondary btn-sm" onClick={() => setEditing(false)}>
+                Back to shortages
+              </button>
+            }
+          />
+          <div className="p-4">
+            <BomEditor
+              orderId={order.id}
+              initial={rows}
+              itemTypes={(lookups?.values?.BOM_ITEM_TYPE ?? []).map((v) => v.value)}
+              onSaved={() => setEditing(false)}
+            />
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   const rows = data.items as unknown as BomRow[];
   const s = data.summary;
@@ -55,6 +110,14 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
 
   return (
     <div className="space-y-4 p-5">
+      {can('material:edit') && (
+        <div className="flex justify-end">
+          <button className="btn-secondary btn-sm" onClick={() => setEditing(true)}>
+            <PackagePlus className="h-3.5 w-3.5" /> Add or edit items
+          </button>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatTile label="BOM lines" value={s.totalItems} />
         <StatTile label="Short" value={s.shortItems} tone={s.shortItems > 0 ? 'red' : 'emerald'} />

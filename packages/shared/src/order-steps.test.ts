@@ -94,32 +94,36 @@ describe('the step list matches the workbook', () => {
     );
   });
 
-  test('the sequence is the workbook’s hyperlink menu', () => {
-    // Cells A4:A21 of every sheet, in order. This is the factory's SOP, and it
-    // is transcribed from the file rather than from memory — the first version
-    // of this test asserted a transcription that had Production and Audit two
-    // places too early and replaced the workbook's Database sheet with an
-    // invented "Complete" step. A test that agrees with the code it is testing
-    // is not a test.
+  test('the sequence is the order the factory works in', () => {
+    // Originally cells A4:A21 of the workbook's hyperlink menu. It is no longer
+    // that, and deliberately so: External Work now comes *after* Cut Order,
+    // Laying & Marker and the Bill of Materials, because you cannot send work
+    // out of the building before you know what has been cut and what it needs.
+    // The workbook listed it fifth, which is where the spreadsheet's author put
+    // the hyperlink, not where the work happens. Finished Stock moved up for the
+    // same reason: what is already in stock changes what has to be made.
+    //
+    // Still transcribed rather than derived. A test that computed the expected
+    // order from the same table it is checking would agree with any mistake.
     assert.deepEqual(ORDER_STEPS.map((s) => s.key), [
-      StageKey.CUSTOMER_ORDER_REF,   // A4
-      StageKey.ORDER_DETAILS,        // A5
-      StageKey.MAIN_ORDER,           // A6
-      StageKey.PROFORMA_INVOICE,     // A7
-      StageKey.EXTERNAL_ORDER,       // A8
-      StageKey.PROGRESS_STATUS,      // A9
-      StageKey.CUT_ORDER,            // A10
-      StageKey.LAYING_FABRIC,        // A11
-      StageKey.BILL_OF_MATERIAL,     // A12
-      StageKey.CUSTOM_INSTRUCTIONS,  // A13
-      StageKey.PACKING,              // A14
-      StageKey.STOCK,                // A15
-      StageKey.FOLLOW_UP,            // A16
-      StageKey.PRODUCTION_FOLLOW_UP, // A17
-      StageKey.AUDIT,                // A18
-      StageKey.ACTUAL_COSTING,       // A19
-      StageKey.DATABASE,             // A20
-      StageKey.INVOICE,              // A21
+      StageKey.CUSTOMER_ORDER_REF,
+      StageKey.ORDER_DETAILS,
+      StageKey.MAIN_ORDER,
+      StageKey.PROFORMA_INVOICE,
+      StageKey.PROGRESS_STATUS,
+      StageKey.STOCK,
+      StageKey.CUT_ORDER,
+      StageKey.LAYING_FABRIC,
+      StageKey.BILL_OF_MATERIAL,
+      StageKey.EXTERNAL_ORDER,       // after cutting, laying and the BOM
+      StageKey.CUSTOM_INSTRUCTIONS,
+      StageKey.FOLLOW_UP,
+      StageKey.PRODUCTION_FOLLOW_UP,
+      StageKey.PACKING,
+      StageKey.AUDIT,
+      StageKey.ACTUAL_COSTING,
+      StageKey.DATABASE,
+      StageKey.INVOICE,
     ]);
   });
 

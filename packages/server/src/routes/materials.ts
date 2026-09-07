@@ -31,7 +31,11 @@ materialsRouter.get('/:orderId/bom', requirePermission('material:read'), asyncHa
 
   const items = await prisma.bomItem.findMany({
     where: { orderId: order.id },
-    include: { color: true, issues: { include: { issuedBy: true, issuedTo: true }, orderBy: { issuedAt: 'desc' } } },
+    include: {
+      color: true,
+      sizes: { orderBy: { position: 'asc' } },
+      issues: { include: { issuedBy: true, issuedTo: true }, orderBy: { issuedAt: 'desc' } },
+    },
     orderBy: [{ category: 'asc' }, { position_: 'asc' }],
   });
 
@@ -55,6 +59,13 @@ materialsRouter.get('/:orderId/bom', requirePermission('material:read'), asyncHa
         issuedToName: row.issuedToName,
         issuedAt: row.issuedAt?.toISOString() ?? null,
         purchaseOrderRef: row.purchaseOrderRef,
+        unitPriceUsd: dec(row.unitPriceUsd),
+        supplier: row.supplier,
+        colorId: row.colorId,
+        colorText: row.colorText,
+        sizes: row.sizes.map((sz) => ({
+          id: sz.id, sizeLabel: sz.sizeLabel, qty: Number(sz.qty.toString()),
+        })),
         notes: row.notes,
         issues: row.issues.map((iss) => ({
           id: iss.id, qty: Number(iss.qty.toString()), unit: iss.unit,
@@ -78,8 +89,99 @@ const bomItemSchema = z.object({
   consumptionPerPiece: z.number().nonnegative().optional(),
   requiredQty: z.number().nonnegative(),
   unit: z.string().min(1),
+  unitPriceUsd: z.number().nonnegative().optional(),
+  supplier: z.string().optional(),
   notes: z.string().optional(),
 });
+
+/** One size of one item: "Logo Badge / Medium / 150". */
+const bomSizeSchema = z.object({
+  sizeLabel: z.string().min(1, 'Every size row needs a size.'),
+  qty: z.number().nonnegative(),
+});
+
+/**
+ * A whole BOM row, as the table editor sends it.
+ *
+ * `id` present means an existing row, absent means a new one. Sending the whole
+ * table rather than a row at a time is the Proforma Invoice's pattern and is
+ * kept deliberately: a coordinator adds three items and edits a fourth before
+ * pressing Save once, and four separate requests would leave the BOM in a state
+ * nobody asked for if the third failed.
+ */
+const bomRowSchema = bomItemSchema.extend({
+  id: z.string().optional(),
+  sizes: z.array(bomSizeSchema).default([]),
+});
+
+/**
+ * Replace the whole bill of materials for one order.
+ *
+ * Additive to the per-row POST/PATCH/DELETE below, which the import committer
+ * and the issue flow still use. This is the manual editor's door: it diffs what
+ * was sent against what is stored, so a row nobody touched keeps its id — and
+ * with it its issues, movements and reservations, which are keyed on that id and
+ * would be orphaned by a delete-and-recreate.
+ *
+ * `requiredQty` is recomputed as the sum of the size rows whenever any exist.
+ * The shortage arithmetic in calc/materials.ts reads that one number, so the
+ * breakdown has to roll up into it rather than sit beside it — otherwise a badge
+ * needed in three sizes would be counted once, or three times, depending on
+ * which field the reader trusted.
+ */
+materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const rows = z.array(bomRowSchema).parse(req.body.items);
+
+  const order = await prisma.order.findFirst({
+    where: { OR: [{ id: req.params.orderId }, { poNumber: req.params.orderId }] },
+    select: { id: true },
+  });
+  if (!order) throw new NotFoundError('Order');
+
+  const existing = await prisma.bomItem.findMany({
+    where: { orderId: order.id }, select: { id: true },
+  });
+  const keep = new Set(rows.map((r) => r.id).filter((id): id is string => !!id));
+  const removed = existing.filter((e) => !keep.has(e.id)).map((e) => e.id);
+
+  await prisma.$transaction(async (tx) => {
+    // Deleting first frees any unique constraint the rewritten rows might want.
+    if (removed.length > 0) await tx.bomItem.deleteMany({ where: { id: { in: removed } } });
+
+    for (const [i, row] of rows.entries()) {
+      const { id, sizes, ...fields } = row;
+      const total = sizes.length > 0
+        ? sizes.reduce((a, s) => a + s.qty, 0)
+        : fields.requiredQty;
+      const data = { ...fields, requiredQty: total, position_: i };
+
+      const itemId = id
+        ? (await tx.bomItem.update({ where: { id }, data, select: { id: true } })).id
+        : (await tx.bomItem.create({ data: { ...data, orderId: order.id }, select: { id: true } })).id;
+
+      // The breakdown is small and wholly owned by its item, so replacing it is
+      // simpler than diffing and nothing else references these rows.
+      await tx.bomItemSize.deleteMany({ where: { bomItemId: itemId } });
+      if (sizes.length > 0) {
+        await tx.bomItemSize.createMany({
+          data: sizes.map((sz, n) => ({ bomItemId: itemId, sizeLabel: sz.sizeLabel, qty: sz.qty, position: n })),
+        });
+      }
+    }
+  });
+
+  await logActivity({
+    orderId: order.id, actorId: actor.id, actorName: actor.name,
+    action: 'BOM_SAVED',
+    summary: `saved the bill of materials — ${rows.length} item${rows.length === 1 ? '' : 's'}` +
+             (removed.length > 0 ? `, ${removed.length} removed` : ''),
+    entityType: 'Order', entityId: order.id,
+  });
+
+  await refreshOrderCache(order.id);
+  res.json({ ok: true, count: rows.length, removed: removed.length });
+}));
 
 materialsRouter.post('/:orderId/bom', requirePermission('material:edit'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);

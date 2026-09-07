@@ -1,5 +1,7 @@
 /** Packing lists, cartons and shipments. */
 
+import { PackingSizeGrid } from '../../components/PackingSizeGrid';
+
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, PackageCheck, Truck } from 'lucide-react';
@@ -39,6 +41,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
   const qc = useQueryClient();
   const { can } = useAuth();
   const [addingCarton, setAddingCarton] = useState<string | null>(null);
+  const [addingSizes, setAddingSizes] = useState<string | null>(null);
   const [shipping, setShipping] = useState(false);
 
   const lists = useQuery({ queryKey: ['packing', order.id], queryFn: () => api.packing.lists(order.id) });
@@ -110,9 +113,15 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
                   <span>GW <strong className="tnum">{l.totals.grossWeightKg.toFixed(1)}</strong> kg</span>
                   <span>NW <strong className="tnum">{l.totals.netWeightKg.toFixed(1)}</strong> kg</span>
                   {can('packing:write') && !l.approved && (
-                    <button onClick={() => setAddingCarton(l.id)} className="btn-secondary btn-sm">
-                      <Plus className="h-3 w-3" /> Carton
-                    </button>
+                    <>
+                      <button onClick={() => setAddingCarton(l.id)} className="btn-secondary btn-sm">
+                        <Plus className="h-3 w-3" /> Carton
+                      </button>
+                      {/* The whole size run at once, rather than one dialog per size. */}
+                      <button onClick={() => setAddingSizes(l.id)} className="btn-secondary btn-sm">
+                        <Plus className="h-3 w-3" /> Sizes
+                      </button>
+                    </>
                   )}
                   {can('packing:approve') && !l.approved && l.cartons.length > 0 && (
                     <button onClick={() => approve.mutate(l.id)} className="btn-primary btn-sm">Approve</button>
@@ -203,6 +212,12 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
         )}
       </Card>
 
+      <SizeGridModal
+        listId={addingSizes}
+        order={order}
+        onClose={() => setAddingSizes(null)}
+        onDone={() => { setAddingSizes(null); invalidate(); }}
+      />
       <CartonModal
         listId={addingCarton} order={order}
         onClose={() => setAddingCarton(null)}
@@ -402,6 +417,47 @@ function ShipmentModal({
           </div>
         )}
       </div>
+    </Modal>
+  );
+}
+
+/**
+ * The size grid, in the dialog the single-carton form already uses.
+ *
+ * Colours and sizes come from the order's own matrix, so a packing list can
+ * only name a size the order was actually sold in.
+ */
+function SizeGridModal({
+  listId, order, onClose, onDone,
+}: {
+  listId: string | null; order: OrderDetailDto; onClose: () => void; onDone: () => void;
+}) {
+  const { data: matrix } = useQuery({
+    queryKey: ['matrix', order.id],
+    queryFn: () => api.orders.matrix(order.id),
+    enabled: !!listId,
+  });
+
+  if (!listId) return null;
+
+  const colors = ((matrix?.colors ?? []) as Array<{ id: string; name: string }>);
+  const sizes = ((matrix?.sizes ?? []) as Array<{ id: string; name: string }>);
+
+  return (
+    <Modal open onClose={onClose} title="Pack several sizes">
+      {colors.length === 0 || sizes.length === 0 ? (
+        <p className="text-sm text-ink-600">
+          This order has no colours or sizes yet, so there is nothing to pack against.
+        </p>
+      ) : (
+        <PackingSizeGrid
+          listId={listId}
+          orderId={order.id}
+          colors={colors}
+          sizes={sizes}
+          onDone={onDone}
+        />
+      )}
     </Modal>
   );
 }

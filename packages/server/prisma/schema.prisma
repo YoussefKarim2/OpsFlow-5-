@@ -22,14 +22,14 @@ model Role {
 }
 
 model User {
-  id                    String                @id @default(cuid())
-  email                 String                @unique
-  name                  String
-  passwordHash          String
-  department            Department
-  phone                 String?
-  active                Boolean               @default(true)
-  lastLoginAt           DateTime?
+  id                      String                   @id @default(cuid())
+  email                   String                   @unique
+  name                    String
+  passwordHash            String
+  department              Department
+  phone                   String?
+  active                  Boolean                  @default(true)
+  lastLoginAt             DateTime?
   /// The three-person tier from the brief: the only accounts permitted to
   /// create, disable, re-role or reset another account.
   ///
@@ -38,52 +38,52 @@ model User {
   /// the column alone would let any administrator mint another super admin.
   /// Granting it requires both: an existing super admin acting, and an email
   /// that is on the configured list.
-  isSuperAdmin          Boolean               @default(false)
+  isSuperAdmin            Boolean                  @default(false)
   /// Provenance for `active = false`. Who switched the account off, when, and
   /// why — the three questions asked the morning after someone loses access.
-  disabledAt            DateTime?
-  disabledReason        String?
-  disabledById          String?
-  createdById           String?
+  disabledAt              DateTime?
+  disabledReason          String?
+  disabledById            String?
+  createdById             String?
   /// Set when an administrator resets a password, cleared on the next change.
   /// The API refuses everything but /auth/me and /auth/change-password while true.
-  mustChangePassword    Boolean               @default(false)
-  passwordChangedAt     DateTime?
+  mustChangePassword      Boolean                  @default(false)
+  passwordChangedAt       DateTime?
   /// Per-account throttle, alongside the per-IP rate limit on /auth/login.
   /// The IP limit stops one machine hammering many accounts; this stops many
   /// machines hammering one account.
-  failedLoginCount      Int                   @default(0)
-  lockedUntil           DateTime?
-  roleId                String
-  createdAt             DateTime              @default(now())
-  updatedAt             DateTime              @updatedAt
-  activityLogs          ActivityLog[]
-  approvalsRequested    Approval[]            @relation("ApprovalRequestedBy")
-  attachments           Attachment[]
-  auditTrails           AuditTrail[]
-  changeEvents          ChangeEvent[]
-  importJobs            ImportJob[]
-  materialIssuesGiven   MaterialIssue[]       @relation("IssuedBy")
-  materialIssuesTaken   MaterialIssue[]       @relation("IssuedTo")
-  materialMovements     MaterialMovement[]
-  materialReservations  MaterialReservation[] @relation("ReservationBy")
-  notifications         Notification[]
+  failedLoginCount        Int                      @default(0)
+  lockedUntil             DateTime?
+  roleId                  String
+  createdAt               DateTime                 @default(now())
+  updatedAt               DateTime                 @updatedAt
+  activityLogs            ActivityLog[]
+  approvalsRequested      Approval[]               @relation("ApprovalRequestedBy")
+  attachments             Attachment[]
+  auditTrails             AuditTrail[]
+  changeEvents            ChangeEvent[]
+  importJobs              ImportJob[]
+  materialIssuesGiven     MaterialIssue[]          @relation("IssuedBy")
+  materialIssuesTaken     MaterialIssue[]          @relation("IssuedTo")
+  materialMovements       MaterialMovement[]
+  materialReservations    MaterialReservation[]    @relation("ReservationBy")
+  notifications           Notification[]
   notificationPreferences NotificationPreference[]
-  completedStages       OrderStage[]          @relation("StageCompletedBy")
-  coordinatedOrders     Order[]               @relation("OrderCoordinator")
-  externalManagedOrders Order[]               @relation("OrderOutsideWorkManager")
-  productionRecords     ProductionRecord[]
-  proformaInvoices      ProformaInvoice[]     @relation("ProformaPreparedBy")
-  qualityAudits         QualityAudit[]
-  savedColumnMappings   SavedColumnMapping[]
-  taskComments          TaskComment[]
-  assignedTasks         Task[]                @relation("TaskAssignee")
-  completedTasks        Task[]                @relation("TaskCompletedBy")
-  createdBy             User?                 @relation("UserCreatedBy", fields: [createdById], references: [id])
-  createdUsers          User[]                @relation("UserCreatedBy")
-  disabledBy            User?                 @relation("UserDisabledBy", fields: [disabledById], references: [id])
-  disabledUsers         User[]                @relation("UserDisabledBy")
-  role                  Role                  @relation(fields: [roleId], references: [id])
+  completedStages         OrderStage[]             @relation("StageCompletedBy")
+  coordinatedOrders       Order[]                  @relation("OrderCoordinator")
+  externalManagedOrders   Order[]                  @relation("OrderOutsideWorkManager")
+  productionRecords       ProductionRecord[]
+  proformaInvoices        ProformaInvoice[]        @relation("ProformaPreparedBy")
+  qualityAudits           QualityAudit[]
+  savedColumnMappings     SavedColumnMapping[]
+  taskComments            TaskComment[]
+  assignedTasks           Task[]                   @relation("TaskAssignee")
+  completedTasks          Task[]                   @relation("TaskCompletedBy")
+  createdBy               User?                    @relation("UserCreatedBy", fields: [createdById], references: [id])
+  createdUsers            User[]                   @relation("UserCreatedBy")
+  disabledBy              User?                    @relation("UserDisabledBy", fields: [disabledById], references: [id])
+  disabledUsers           User[]                   @relation("UserDisabledBy")
+  role                    Role                     @relation(fields: [roleId], references: [id])
 
   @@index([department])
   @@index([active])
@@ -493,6 +493,10 @@ model BomItem {
   issuedAt            DateTime?
   /// Set when a PO was raised for the shortfall.
   purchaseOrderRef    String?
+  /// What the item costs, so Actual Costing can derive an accessory cost from
+  /// the BOM instead of waiting for somebody to retype it.
+  unitPriceUsd        Decimal?              @db.Decimal(14, 6)
+  supplier            String?
   notes               String?
   position_           Int                   @default(0) @map("sort_position")
   createdAt           DateTime              @default(now())
@@ -503,6 +507,7 @@ model BomItem {
   issues              MaterialIssue[]
   movements           MaterialMovement[]
   reservations        MaterialReservation[]
+  sizes               BomItemSize[]
 
   @@index([orderId, category])
   @@index([materialId])
@@ -852,19 +857,64 @@ model Approval {
 
 /// Custom Instructions sheet — rich text plus images, visible to the
 /// departments that need them.
+/// One size of one BOM item.
+///
+/// A badge is ordered in small, medium and large and the counts differ; the
+/// single `requiredQty` on the item above cannot say that. Rows here are the
+/// breakdown, and `requiredQty` stays the total — recomputed from them when any
+/// exist, so the shortage arithmetic in calc/materials.ts keeps reading one
+/// number and cannot double-count.
+///
+/// `sizeLabel` is free text rather than a link to OrderSize: a carton is
+/// "40x30x20" and a badge is "Small", and neither is a garment size the order
+/// was sold in.
+model BomItemSize {
+  id        String  @id @default(cuid())
+  bomItemId String
+  sizeLabel String
+  qty       Decimal @db.Decimal(14, 4)
+  position  Int     @default(0)
+  bomItem   BomItem @relation(fields: [bomItemId], references: [id], onDelete: Cascade)
+
+  @@index([bomItemId])
+  @@map("bom_item_sizes")
+}
+
+/// A named line on a custom instruction: "Ronaldo, 7, L, 2".
+///
+/// The instruction's own `title` and `body` are unchanged and still carry the
+/// prose. This is the part that is a table rather than a sentence — a name-and-
+/// number list for shirt printing — so it can be imported from a spreadsheet
+/// column and edited row by row.
+model InstructionLine {
+  id            String            @id @default(cuid())
+  instructionId String
+  name          String?
+  number        String?
+  sizeLabel     String?
+  qty           Decimal?          @db.Decimal(14, 4)
+  note          String?
+  position      Int               @default(0)
+  instruction   CustomInstruction @relation(fields: [instructionId], references: [id], onDelete: Cascade)
+
+  @@index([instructionId])
+  @@map("instruction_lines")
+}
+
 model CustomInstruction {
-  id          String       @id @default(cuid())
+  id          String            @id @default(cuid())
   orderId     String
   title       String
   /// HTML from the rich-text editor. Sanitised on write.
   body        String
   /// Which departments must see this instruction.
   visibleTo   Department[]
-  position    Int          @default(0)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+  position    Int               @default(0)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
   attachments Attachment[]
-  order       Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  lines       InstructionLine[]
+  order       Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([orderId])
   @@map("custom_instructions")
@@ -1040,6 +1090,17 @@ model CostLine {
   unitPriceUsd Decimal?      @db.Decimal(14, 6)
   /// Original EGP price where the sheet quoted one, kept for traceability.
   unitPriceEgp Decimal?      @db.Decimal(14, 4)
+  /// Where the number came from. DERIVED lines are recomputed from the
+  /// production sections on every save and must not be hand-edited; MANUAL ones
+  /// are typed by a person and survive untouched. Without the distinction a
+  /// recalculation would either erase somebody's correction or quietly stop
+  /// updating, and there would be no way to tell which had happened.
+  source       CostSource    @default(MANUAL)
+  /// What a derived line was computed from, e.g. "bom:FABRIC" or
+  /// "external:PRINTING" — so a number on the costing screen can be traced back
+  /// to the section that produced it.
+  sourceRef    String?
+  note         String?
   position     Int           @default(0)
   costing      CostingRecord @relation(fields: [costingId], references: [id], onDelete: Cascade)
 
@@ -1422,6 +1483,10 @@ enum RefKind {
   SIZE_LABEL
   FABRIC_COMPOSITION
   BRAND_LOGO
+  /// Material and accessory types offered on the BOM. Reference data rather
+  /// than an enum so the factory can add its own without a deploy — and the BOM
+  /// item name stays free text, so an item nobody has listed is still typeable.
+  BOM_ITEM_TYPE
 }
 
 enum Priority {
@@ -1644,6 +1709,11 @@ enum ShipmentStatus {
   BOOKED
   SHIPPED
   DELIVERED
+}
+
+enum CostSource {
+  DERIVED
+  MANUAL
 }
 
 enum CostGroup {

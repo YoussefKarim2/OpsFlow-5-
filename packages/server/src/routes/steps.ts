@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 import { Router } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
-import { StageKey, StageStatus, STEP_BY_KEY } from '@opsflow/shared';
+import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
@@ -313,11 +313,32 @@ const DEPARTMENTS = [
   'WAREHOUSE', 'EXTERNAL_OPS', 'PACKING', 'QUALITY', 'FOLLOW_UP', 'FINANCE', 'ADMIN',
 ] as const;
 
+/**
+ * One row of the name-and-number table beside an instruction's prose.
+ *
+ * Every field is optional except by implication: a printing list often has a
+ * name and no number, or a number and no name, and refusing the row would mean
+ * refusing the sheet the customer actually sent.
+ */
+const instructionLineSchema = z.object({
+  name: z.string().trim().max(200).optional().nullable(),
+  number: z.string().trim().max(50).optional().nullable(),
+  sizeLabel: z.string().trim().max(50).optional().nullable(),
+  qty: z.number().nonnegative().optional().nullable(),
+  note: z.string().trim().max(2000).optional().nullable(),
+});
+
 const instructionSchema = z.object({
   title: z.string().trim().min(1, 'Give the instruction a title').max(200),
   body: z.string().trim().min(1, 'An empty instruction helps nobody').max(20_000),
   visibleTo: z.array(z.enum(DEPARTMENTS)).min(1, 'Say which department must read this'),
   position: z.number().int().min(0).optional(),
+  /**
+   * The structured rows, replaced wholesale when present and left alone when
+   * the field is absent. Absent and empty must stay different: a caller editing
+   * only the title should not silently wipe a two-hundred-name printing list.
+   */
+  lines: z.array(instructionLineSchema).optional(),
 });
 
 stepsRouter.get('/:id/instructions', requirePermission('order:read'), asyncHandler(async (req, res) => {
@@ -325,12 +346,19 @@ stepsRouter.get('/:id/instructions', requirePermission('order:read'), asyncHandl
   const rows = await prisma.customInstruction.findMany({
     where: { orderId },
     orderBy: [{ position: 'asc' }, { createdAt: 'asc' }],
-    include: { _count: { select: { attachments: true } } },
+    include: {
+      _count: { select: { attachments: true } },
+      lines: { orderBy: { position: 'asc' } },
+    },
   });
   res.json({
     data: rows.map((r) => ({
       id: r.id, title: r.title, body: r.body, visibleTo: r.visibleTo,
       position: r.position, attachmentCount: r._count.attachments,
+      lines: r.lines.map((l) => ({
+        id: l.id, name: l.name, number: l.number, sizeLabel: l.sizeLabel,
+        qty: l.qty == null ? null : Number(l.qty.toString()), note: l.note,
+      })),
       createdAt: r.createdAt.toISOString(), updatedAt: r.updatedAt.toISOString(),
     })),
   });
@@ -348,6 +376,9 @@ stepsRouter.post('/:id/instructions', requirePermission('order:edit'), asyncHand
       body: sanitiseHtml(body.body),
       visibleTo: body.visibleTo,
       position: body.position ?? (await prisma.customInstruction.count({ where: { orderId } })),
+      lines: body.lines?.length
+        ? { create: body.lines.map((l, i) => ({ ...l, position: i })) }
+        : undefined,
     },
   });
 
@@ -376,7 +407,18 @@ stepsRouter.patch('/:id/instructions/:instructionId', requirePermission('order:e
       ...(body.body !== undefined ? { body: sanitiseHtml(body.body) } : {}),
       ...(body.visibleTo !== undefined ? { visibleTo: body.visibleTo } : {}),
       ...(body.position !== undefined ? { position: body.position } : {}),
+      // Absent leaves the table alone; present replaces it. The distinction
+      // matters — a caller editing only the title must not wipe a printing list.
+      ...(body.lines !== undefined
+        ? {
+            lines: {
+              deleteMany: {},
+              create: body.lines.map((l, i) => ({ ...l, position: i })),
+            },
+          }
+        : {}),
     },
+    include: { lines: { orderBy: { position: 'asc' } } },
   });
   res.json({ data: updated });
 }));
@@ -653,6 +695,158 @@ stepsRouter.post('/:id/proforma/send', requirePermission('order:edit'), asyncHan
 // support conversation, provenance you would use to check the import, and
 // counts you would use to see whether something is missing.
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Actual costing
+//
+// Derived and manual lines live in one table, told apart by `source`. A save
+// recomputes every DERIVED line from the production sections and leaves every
+// MANUAL one exactly as it was typed. That split is the whole design: a
+// recalculation that erased somebody's correction would make the screen
+// untrustworthy, and one that quietly stopped updating would make it wrong.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** What the production sections currently support, as cost lines. */
+async function deriveFor(orderId: string) {
+  const [bom, external, costing] = await Promise.all([
+    prisma.bomItem.findMany({
+      where: { orderId },
+      select: { category: true, item: true, requiredQty: true, issuedQty: true, unit: true, unitPriceUsd: true },
+    }),
+    prisma.externalOperation.findMany({
+      where: { orderId },
+      select: { operationType: true, qty: true, unitPriceUsd: true },
+    }),
+    prisma.costingRecord.findUnique({ where: { orderId } }),
+  ]);
+
+  return deriveCostLines({
+    bom: bom.map((b) => {
+      // What was actually issued is the actual cost; before anything is issued
+      // the requirement is the best available estimate, and saying nothing at
+      // all until the first issue would leave the screen blank for most of an
+      // order's life.
+      const issued = Number(b.issuedQty.toString());
+      return {
+        category: b.category,
+        item: b.item,
+        quantity: issued > 0 ? issued : Number(b.requiredQty.toString()),
+        unit: b.unit,
+        unitPriceUsd: b.unitPriceUsd == null ? null : Number(b.unitPriceUsd.toString()),
+      };
+    }),
+    external: external.map((e) => ({
+      operationType: e.operationType,
+      qty: e.qty,
+      unitPriceUsd: e.unitPriceUsd == null ? null : Number(e.unitPriceUsd.toString()),
+    })),
+    production: {
+      machineDaysUsed: costing?.machineDaysUsed ?? null,
+      dailyCostEgp: costing?.dailyCostEgp == null ? null : Number(costing.dailyCostEgp.toString()),
+      dollarRate: costing?.dollarRate == null ? null : Number(costing.dollarRate.toString()),
+    },
+  });
+}
+
+stepsRouter.get('/:id/costing', requirePermission('costing:read'), asyncHandler(async (req, res) => {
+  const orderId = await resolveOrderId(req.params.id);
+  const record = await prisma.costingRecord.findUnique({
+    where: { orderId },
+    include: { lines: { orderBy: [{ source: 'asc' }, { position: 'asc' }] } },
+  });
+
+  res.json({
+    data: record && {
+      dollarRate: Number(record.dollarRate.toString()),
+      dailyCostEgp: record.dailyCostEgp == null ? null : Number(record.dailyCostEgp.toString()),
+      machineCount: record.machineCount,
+      machineDaysUsed: record.machineDaysUsed,
+      daysInLine: record.daysInLine,
+      notes: record.notes,
+      lines: record.lines.map((l) => ({
+        id: l.id, group: l.group, label: l.label,
+        quantity: l.quantity == null ? null : Number(l.quantity.toString()),
+        unit: l.unit,
+        unitPriceUsd: l.unitPriceUsd == null ? null : Number(l.unitPriceUsd.toString()),
+        source: l.source, sourceRef: l.sourceRef, note: l.note,
+      })),
+    },
+    // Offered separately so the screen can show what the production data says
+    // even before anybody has saved a costing.
+    derived: await deriveFor(orderId),
+  });
+}));
+
+const costLineSchema = z.object({
+  group: z.enum(['FABRIC', 'ACCESSORY', 'EXTERNAL', 'LABOUR', 'OTHER']),
+  label: z.string().trim().min(1, 'Give the cost a name'),
+  quantity: z.number().nonnegative().optional().nullable(),
+  unit: z.string().trim().min(1).default('LOT'),
+  unitPriceUsd: z.number().optional().nullable(),
+  note: z.string().trim().max(2000).optional().nullable(),
+});
+
+const costingSchema = z.object({
+  dollarRate: z.number().positive('The dollar rate must be above zero'),
+  dailyCostEgp: z.number().nonnegative().optional().nullable(),
+  machineCount: z.number().int().nonnegative().optional().nullable(),
+  machineDaysUsed: z.number().int().nonnegative().optional().nullable(),
+  daysInLine: z.number().int().nonnegative().optional().nullable(),
+  notes: z.string().max(20_000).optional().nullable(),
+  /** Only the hand-entered ones. Derived lines are recomputed, never sent. */
+  manualLines: z.array(costLineSchema).default([]),
+});
+
+stepsRouter.put('/:id/costing', requirePermission('costing:write'), asyncHandler(async (req, res) => {
+  const orderId = await resolveOrderId(req.params.id);
+  const body = costingSchema.parse(req.body);
+  const user = currentUser(req);
+
+  await prisma.costingRecord.upsert({
+    where: { orderId },
+    create: { orderId, ...stripLines(body) },
+    update: stripLines(body),
+  });
+
+  // Recompute *after* the upsert: the labour derivation reads the dollar rate
+  // and machine-days that this very request may have just changed.
+  const derived = await deriveFor(orderId);
+  const record = await prisma.costingRecord.findUniqueOrThrow({ where: { orderId }, select: { id: true } });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.costLine.deleteMany({ where: { costingId: record.id } });
+    await tx.costLine.createMany({
+      data: [
+        ...derived.map((d, i) => ({
+          costingId: record.id, group: d.group as never, label: d.label,
+          quantity: d.quantity, unit: d.unit, unitPriceUsd: d.unitPriceUsd,
+          source: 'DERIVED' as never, sourceRef: d.sourceRef, position: i,
+        })),
+        ...body.manualLines.map((m, i) => ({
+          costingId: record.id, group: m.group as never, label: m.label,
+          quantity: m.quantity ?? null, unit: m.unit,
+          unitPriceUsd: m.unitPriceUsd ?? null,
+          source: 'MANUAL' as never, sourceRef: null, note: m.note ?? null,
+          position: derived.length + i,
+        })),
+      ],
+    });
+  });
+
+  await logActivity({
+    orderId, actorId: user.id, actorName: user.name,
+    action: 'COSTING_SAVED',
+    summary: `saved the actual costing — ${derived.length} derived, ${body.manualLines.length} manual`,
+    entityType: 'CostingRecord', entityId: record.id,
+  });
+
+  res.json({ ok: true, derived: derived.length, manual: body.manualLines.length });
+}));
+
+function stripLines(b: z.infer<typeof costingSchema>) {
+  const { manualLines: _ignored, ...rest } = b;
+  return rest;
+}
 
 stepsRouter.get('/:id/provenance', requirePermission('order:read'), asyncHandler(async (req, res) => {
   const order = await prisma.order.findFirst({

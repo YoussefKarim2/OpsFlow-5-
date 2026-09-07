@@ -204,6 +204,60 @@ export interface AttachmentDto {
   downloadUrl: string;
 }
 
+/** One row of the name-and-number table beside an instruction's prose. */
+export interface InstructionLineDto {
+  id?: string;
+  name: string | null;
+  number: string | null;
+  sizeLabel: string | null;
+  qty: number | null;
+  note: string | null;
+}
+
+/** One size of one BOM item: "Logo Badge / Medium / 150". */
+export interface BomSizeDto {
+  id?: string;
+  sizeLabel: string;
+  qty: number;
+}
+
+export interface BomRowDto {
+  id?: string;
+  category: string;
+  item: string;
+  description: string | null;
+  colorText: string | null;
+  unit: string;
+  requiredQty: number;
+  unitPriceUsd: number | null;
+  supplier: string | null;
+  notes: string | null;
+  sizes: BomSizeDto[];
+}
+
+/** A cost line, and whether a person or the production data produced it. */
+export interface CostLineDto {
+  id?: string;
+  group: 'FABRIC' | 'ACCESSORY' | 'EXTERNAL' | 'LABOUR' | 'OTHER';
+  label: string;
+  quantity: number | null;
+  unit: string;
+  unitPriceUsd: number | null;
+  source?: 'DERIVED' | 'MANUAL';
+  sourceRef?: string | null;
+  note?: string | null;
+}
+
+export interface CostingDto {
+  dollarRate: number;
+  dailyCostEgp: number | null;
+  machineCount: number | null;
+  machineDaysUsed: number | null;
+  daysInLine: number | null;
+  notes: string | null;
+  lines: CostLineDto[];
+}
+
 export interface InstructionDto {
   id: string;
   title: string;
@@ -212,6 +266,7 @@ export interface InstructionDto {
   visibleTo: string[];
   position: number;
   attachmentCount?: number;
+  lines?: InstructionLineDto[];
   createdAt: string;
   updatedAt: string;
 }
@@ -647,9 +702,9 @@ export const api = {
 
     instructions: (orderId: string) =>
       get<{ data: InstructionDto[] }>(`/orders/${orderId}/instructions`),
-    addInstruction: (orderId: string, body: { title: string; body: string; visibleTo: string[] }) =>
+    addInstruction: (orderId: string, body: { title: string; body: string; visibleTo: string[]; lines?: InstructionLineDto[] }) =>
       post<{ data: InstructionDto }>(`/orders/${orderId}/instructions`, body),
-    updateInstruction: (orderId: string, id: string, body: Partial<{ title: string; body: string; visibleTo: string[] }>) =>
+    updateInstruction: (orderId: string, id: string, body: Partial<{ title: string; body: string; visibleTo: string[]; lines: InstructionLineDto[] }>) =>
       patch<{ data: InstructionDto }>(`/orders/${orderId}/instructions/${id}`, body),
     removeInstruction: (orderId: string, id: string) =>
       del(`/orders/${orderId}/instructions/${id}`),
@@ -663,6 +718,10 @@ export const api = {
     }) => post<{ data: StockRecordDto }>(`/orders/${orderId}/stock`, body),
     removeStock: (orderId: string, recordId: string) => del(`/orders/${orderId}/stock/${recordId}`),
 
+    costing: (orderId: string) =>
+      get<{ data: CostingDto | null; derived: CostLineDto[] }>(`/orders/${orderId}/costing`),
+    saveCosting: (orderId: string, body: unknown) =>
+      put<{ ok: true; derived: number; manual: number }>(`/orders/${orderId}/costing`, body),
     proforma: (orderId: string) => get<{ data: ProformaDto | null }>(`/orders/${orderId}/proforma`),
     saveProforma: (orderId: string, body: unknown) =>
       put<{ data: ProformaDto }>(`/orders/${orderId}/proforma`, body),
@@ -700,6 +759,9 @@ export const api = {
       items: unknown[];
     }>(`/materials/${orderId}/bom`),
     addBomItem: (orderId: string, body: unknown) => post<{ id: string }>(`/materials/${orderId}/bom`, body),
+    /** Save the whole table at once — the Proforma Invoice's pattern. */
+    saveBom: (orderId: string, items: BomRowDto[]) =>
+      put<{ ok: true; count: number; removed: number }>(`/materials/${orderId}/bom`, { items }),
     updateBomItem: (id: string, body: unknown) => patch<unknown>(`/materials/bom/${id}`, body),
     removeBomItem: (id: string) => del(`/materials/bom/${id}`),
     issue: (bomItemId: string, body: { qty: number; issuedToName?: string; notes?: string }) =>
@@ -732,6 +794,9 @@ export const api = {
     lists: (orderId: string) => get<{ data: unknown[] }>(`/packing/${orderId}`),
     createList: (orderId: string, body?: unknown) => post<{ id: string }>(`/packing/${orderId}`, body ?? {}),
     addCarton: (listId: string, body: unknown) => post<{ id: string }>(`/packing/list/${listId}/cartons`, body),
+    /** A whole size grid in one save, rather than one request per size. */
+    addCartons: (listId: string, cartons: unknown[]) =>
+      post<{ count: number; qty: number }>(`/packing/list/${listId}/cartons/bulk`, { cartons }),
     approve: (listId: string) => post<{ ok: true }>(`/packing/list/${listId}/approve`),
     shipments: (orderId: string) => get<{ data: ShipmentDto[] }>(`/packing/${orderId}/shipments`),
     createShipment: (orderId: string, body: unknown, reason?: string) =>

@@ -19,6 +19,9 @@ const WORKBOOK_MIME_TYPES = new Set([
   'application/zip',          // xlsx *is* a zip; a few clients say so
 ]);
 
+/** And for a PDF, which customers send at least as often as a workbook. */
+const PDF_MIME_TYPES = new Set(['application/pdf', 'application/octet-stream']);
+
 export const workbookUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024, files: 1 },
@@ -32,12 +35,17 @@ export const workbookUpload = multer({
       cb(new BadRequestError('That file name is not allowed.'));
       return;
     }
-    if (!/\.(xlsx|xlsm)$/i.test(file.originalname)) {
-      cb(new BadRequestError('Only .xlsx and .xlsm files can be imported.'));
+    const isPdf = /\.pdf$/i.test(file.originalname);
+    if (!isPdf && !/\.(xlsx|xlsm)$/i.test(file.originalname)) {
+      cb(new BadRequestError('Only .xlsx, .xlsm and .pdf files can be imported.'));
       return;
     }
-    if (!WORKBOOK_MIME_TYPES.has(file.mimetype)) {
-      cb(new BadRequestError(`"${file.mimetype}" is not a spreadsheet. Upload an .xlsx or .xlsm file.`));
+    const allowed = isPdf ? PDF_MIME_TYPES : WORKBOOK_MIME_TYPES;
+    if (!allowed.has(file.mimetype)) {
+      cb(new BadRequestError(
+        `"${file.mimetype}" is not a ${isPdf ? 'PDF' : 'spreadsheet'}. ` +
+        'Upload an .xlsx, .xlsm or .pdf file.',
+      ));
       return;
     }
     cb(null, true);
@@ -60,4 +68,24 @@ export function assertLooksLikeWorkbook(buffer: Buffer): void {
       'If it is an older .xls file, open it in Excel and save it as .xlsx first.',
     );
   }
+}
+
+/** A PDF begins `%PDF-`. The name and the MIME type are the client's claims; this is not. */
+export function looksLikePdf(buffer: Buffer): boolean {
+  return buffer.length >= 5 &&
+    buffer[0] === 0x25 && buffer[1] === 0x50 &&
+    buffer[2] === 0x44 && buffer[3] === 0x46 && buffer[4] === 0x2d;
+}
+
+/**
+ * Which extractor a file needs, decided from its contents rather than its name.
+ *
+ * A file whose bytes match neither is rejected here rather than being handed to
+ * a parser to fail on: "that is not a workbook or a PDF" is a better answer
+ * than whatever ExcelJS says about a JPEG.
+ */
+export function detectImportKind(buffer: Buffer): 'workbook' | 'pdf' {
+  if (looksLikePdf(buffer)) return 'pdf';
+  assertLooksLikeWorkbook(buffer);
+  return 'workbook';
 }

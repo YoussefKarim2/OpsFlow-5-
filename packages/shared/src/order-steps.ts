@@ -282,36 +282,8 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
     hasStarted: (c) => c.hasProformaInvoice,
   },
   {
-    key: StageKey.EXTERNAL_ORDER,
-    order: 5,
-    sheetName: 'External Order_Ex.Op',
-    label: 'External Work',
-    purpose: 'Printing, embroidery or anything else done outside the factory.',
-    department: Department.EXTERNAL_OPS,
-    whatYouEnter: [
-      'What kind of external work, and which supplier',
-      'How many pieces were sent, and when',
-      'How many came back, and when',
-      'Customer approval, where the work needs it',
-    ],
-    tab: 'external',
-    // The order sheet says whether the order has external work at all. When it
-    // says none, this step is not an unfinished obligation — it does not exist.
-    appliesWhen: (c) => c.externalWorkDeclared || has(c.externalOpCount),
-    notApplicableBecause: 'This order has no printing or embroidery.',
-    isDoneWhen: (c) =>
-      has(c.externalOpCount) && c.externalOpsReturned >= c.externalOpCount && c.externalOpsBlocked === 0,
-    missing: (c) => {
-      if (!has(c.externalOpCount)) return 'Record the external operation and send it';
-      if (c.externalOpsBlocked > 0) return 'Customer approval is outstanding';
-      const outstanding = c.externalOpCount - c.externalOpsReturned;
-      return outstanding > 0 ? `${outstanding} operation${outstanding === 1 ? '' : 's'} not back yet` : null;
-    },
-    hasStarted: (c) => has(c.externalOpCount),
-  },
-  {
     key: StageKey.PROGRESS_STATUS,
-    order: 6,
+    order: 5,
     sheetName: 'Progress Status',
     label: 'Progress Checklist',
     purpose:
@@ -334,6 +306,27 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
       return left > 0 ? `${left} job${left === 1 ? '' : 's'} still open` : null;
     },
     hasStarted: (c) => (c.taskCounts[StageKey.PROGRESS_STATUS]?.completed ?? 0) > 0,
+  },
+  {
+    key: StageKey.STOCK,
+    order: 6,
+    sheetName: 'Stock_Packing',
+    label: 'Finished Stock',
+    purpose:
+      'Finished pieces already in the warehouse. These are deducted before cutting, so the ' +
+      'factory does not make what it already has.',
+    department: Department.PACKING,
+    whatYouEnter: [
+      'How many finished pieces are in stock, by colour and size',
+    ],
+    tab: 'stock',
+    // Most orders start from nothing. Recording "none" is a decision, so this
+    // step is completed by hand rather than assumed.
+    manualCompletion: true,
+    isDoneWhen: (c) => c.stockRecorded,
+    missing: (c) =>
+      c.stockRecorded ? null : 'Record any finished stock, or mark this step as not required',
+    hasStarted: (c) => c.stockRecorded || has(c.stockQty),
   },
   {
     key: StageKey.CUT_ORDER,
@@ -398,8 +391,36 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
     hasStarted: (c) => has(c.bomLineCount),
   },
   {
-    key: StageKey.CUSTOM_INSTRUCTIONS,
+    key: StageKey.EXTERNAL_ORDER,
     order: 10,
+    sheetName: 'External Order_Ex.Op',
+    label: 'External Work',
+    purpose: 'Printing, embroidery or anything else done outside the factory.',
+    department: Department.EXTERNAL_OPS,
+    whatYouEnter: [
+      'What kind of external work, and which supplier',
+      'How many pieces were sent, and when',
+      'How many came back, and when',
+      'Customer approval, where the work needs it',
+    ],
+    tab: 'external',
+    // The order sheet says whether the order has external work at all. When it
+    // says none, this step is not an unfinished obligation — it does not exist.
+    appliesWhen: (c) => c.externalWorkDeclared || has(c.externalOpCount),
+    notApplicableBecause: 'This order has no printing or embroidery.',
+    isDoneWhen: (c) =>
+      has(c.externalOpCount) && c.externalOpsReturned >= c.externalOpCount && c.externalOpsBlocked === 0,
+    missing: (c) => {
+      if (!has(c.externalOpCount)) return 'Record the external operation and send it';
+      if (c.externalOpsBlocked > 0) return 'Customer approval is outstanding';
+      const outstanding = c.externalOpCount - c.externalOpsReturned;
+      return outstanding > 0 ? `${outstanding} operation${outstanding === 1 ? '' : 's'} not back yet` : null;
+    },
+    hasStarted: (c) => has(c.externalOpCount),
+  },
+  {
+    key: StageKey.CUSTOM_INSTRUCTIONS,
+    order: 11,
     sheetName: 'Custom Instructions_Coordinator',
     label: 'Special Instructions',
     purpose: 'Anything unusual about this order that a department needs to know.',
@@ -420,49 +441,8 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
     hasStarted: (c) => has(c.customInstructionCount),
   },
   {
-    key: StageKey.PACKING,
-    order: 11,
-    sheetName: 'Packing_Coordinator',
-    label: 'Packing',
-    purpose: 'The packing list: which pieces went into which carton.',
-    department: Department.PACKING,
-    whatYouEnter: [
-      'Each carton: number, colour, size and quantity',
-      'Weights, where the customer needs them',
-      'The coordinator’s approval of the finished list',
-    ],
-    tab: 'packing',
-    isDoneWhen: (c) => has(c.cartonCount) && c.packingApproved,
-    missing: (c) => {
-      if (!has(c.cartonCount)) return 'Add the cartons';
-      return c.packingApproved ? null : 'The packing list has not been approved';
-    },
-    hasStarted: (c) => has(c.cartonCount) || has(c.packedQty),
-  },
-  {
-    key: StageKey.STOCK,
-    order: 12,
-    sheetName: 'Stock_Packing',
-    label: 'Finished Stock',
-    purpose:
-      'Finished pieces already in the warehouse. These are deducted before cutting, so the ' +
-      'factory does not make what it already has.',
-    department: Department.PACKING,
-    whatYouEnter: [
-      'How many finished pieces are in stock, by colour and size',
-    ],
-    tab: 'stock',
-    // Most orders start from nothing. Recording "none" is a decision, so this
-    // step is completed by hand rather than assumed.
-    manualCompletion: true,
-    isDoneWhen: (c) => c.stockRecorded,
-    missing: (c) =>
-      c.stockRecorded ? null : 'Record any finished stock, or mark this step as not required',
-    hasStarted: (c) => c.stockRecorded || has(c.stockQty),
-  },
-  {
     key: StageKey.FOLLOW_UP,
-    order: 13,
+    order: 12,
     sheetName: 'Follow up',
     label: 'Follow-up',
     purpose: 'Where the order stands right now, and what is holding it up.',
@@ -484,7 +464,7 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
   },
   {
     key: StageKey.PRODUCTION_FOLLOW_UP,
-    order: 14,
+    order: 13,
     sheetName: 'Production Follow up',
     label: 'Production',
     purpose: 'What the line actually produced, day by day.',
@@ -501,6 +481,26 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
       return left > 0 ? `${left.toLocaleString()} pieces still to produce` : null;
     },
     hasStarted: (c) => has(c.productionRecordCount) || has(c.producedQty),
+  },
+  {
+    key: StageKey.PACKING,
+    order: 14,
+    sheetName: 'Packing_Coordinator',
+    label: 'Packing',
+    purpose: 'The packing list: which pieces went into which carton.',
+    department: Department.PACKING,
+    whatYouEnter: [
+      'Each carton: number, colour, size and quantity',
+      'Weights, where the customer needs them',
+      'The coordinator’s approval of the finished list',
+    ],
+    tab: 'packing',
+    isDoneWhen: (c) => has(c.cartonCount) && c.packingApproved,
+    missing: (c) => {
+      if (!has(c.cartonCount)) return 'Add the cartons';
+      return c.packingApproved ? null : 'The packing list has not been approved';
+    },
+    hasStarted: (c) => has(c.cartonCount) || has(c.packedQty),
   },
   {
     key: StageKey.AUDIT,

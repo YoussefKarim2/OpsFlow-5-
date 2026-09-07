@@ -18,7 +18,8 @@ import { PROFILES } from '../services/import/profiles.js';
 import { storage } from '../services/storage/index.js';
 import { getOrderDetail, refreshOrderCache } from '../services/order-service.js';
 import { reserveOrderMaterials } from '../services/inventory-service.js';
-import { workbookUpload as upload, assertLooksLikeWorkbook } from '../services/import/upload-guard.js';
+import { workbookUpload as upload, detectImportKind } from '../services/import/upload-guard.js';
+import { extractFromPdf } from '../services/import/pdf-extractor.js';
 
 export const importRouter = Router();
 importRouter.use(authenticate);
@@ -45,6 +46,13 @@ async function runExtraction(
     fieldOverrides?: Record<string, string | number | null>;
   } = {},
 ): Promise<ExtractionResult & { analysis?: TabularAnalysis }> {
+  // A PDF has no sheets and no profile, so neither Excel reader applies. It
+  // produces the same ExtractionResult, which is what lets everything after
+  // this point — preview, review, commit — stay exactly as it is.
+  if (detectImportKind(buffer) === 'pdf') {
+    return extractFromPdf(buffer);
+  }
+
   if (!options.forceTabular) {
     const profiled = await extractWorkbook(buffer);
     // A recognised profile wins: it reads the BOM, the lay plan and the costing
@@ -163,7 +171,8 @@ importRouter.get('/profiles', requirePermission('import:run'), asyncHandler(asyn
 importRouter.post('/upload', requirePermission('import:run'), upload.single('file'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   if (!req.file) throw new BadRequestError('No file was uploaded.');
-  assertLooksLikeWorkbook(req.file.buffer);
+  // Accepts a workbook or a PDF, and throws for anything wearing either name.
+  detectImportKind(req.file.buffer);
 
   const key = await storage.put(req.file.buffer, {
     fileName: req.file.originalname,

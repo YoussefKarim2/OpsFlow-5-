@@ -1,0 +1,3 @@
+-- AlterEnum
+ALTER TYPE "RefKind" ADD VALUE 'BOM_ITEM_TYPE';
+
