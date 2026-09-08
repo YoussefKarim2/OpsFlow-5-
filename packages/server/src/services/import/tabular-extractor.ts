@@ -34,6 +34,7 @@ import {
 } from '@opsflow/shared';
 import type { ImportIssue, ImportSheetInfo } from '@opsflow/shared';
 import type { ExtractionResult, ExtractedMatrix } from './extractor.js';
+import { detectFileKind } from './file-kind.js';
 import { cellText, toNumber, toDate } from './extractor.js';
 import { safeDate, toIsoDayOrNull } from '@opsflow/shared';
 
@@ -491,7 +492,18 @@ export async function extractTabular(
   } = {},
 ): Promise<TabularExtractionResult> {
   const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer as unknown as ArrayBuffer);
+  // A CSV is one unnamed sheet with no formatting, which the rest of this file
+  // handles without knowing the difference — the column scoring, the LONG/WIDE
+  // detection and the size-grid recovery all work on cell values. Reading it
+  // here rather than converting it upstream means CSV support costs one branch
+  // instead of a second pipeline.
+  if (detectFileKind(buffer) === 'csv') {
+    const { Readable } = await import('node:stream');
+    await wb.csv.read(Readable.from(buffer.toString('utf8')));
+    if (wb.worksheets.length > 0 && !wb.worksheets[0]!.name) wb.worksheets[0]!.name = 'CSV';
+  } else {
+    await wb.xlsx.load(buffer as unknown as ArrayBuffer);
+  }
 
   const issues: ImportIssue[] = [];
 

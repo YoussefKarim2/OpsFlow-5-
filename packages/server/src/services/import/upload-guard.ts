@@ -35,13 +35,17 @@ export const workbookUpload = multer({
       cb(new BadRequestError('That file name is not allowed.'));
       return;
     }
-    const isPdf = /\.pdf$/i.test(file.originalname);
-    if (!isPdf && !/\.(xlsx|xlsm)$/i.test(file.originalname)) {
-      cb(new BadRequestError('Only .xlsx, .xlsm and .pdf files can be imported.'));
+    // The extension is a first filter only; `detectFileKind` decides from the
+    // bytes once the file is in memory. `.xls` and `.ods` are allowed through
+    // here so they reach that check and get an explanation rather than a flat
+    // "wrong extension" that does not say what to do about it.
+    if (!/\.(xlsx|xlsm|xls|csv|ods|pdf)$/i.test(file.originalname)) {
+      cb(new BadRequestError('Upload a spreadsheet (.xlsx, .xlsm, .csv) or a PDF.'));
       return;
     }
+    const isPdf = /\.pdf$/i.test(file.originalname);
     const allowed = isPdf ? PDF_MIME_TYPES : WORKBOOK_MIME_TYPES;
-    if (!allowed.has(file.mimetype)) {
+    if (!allowed.has(file.mimetype) && !/^text\//.test(file.mimetype)) {
       cb(new BadRequestError(
         `"${file.mimetype}" is not a ${isPdf ? 'PDF' : 'spreadsheet'}. ` +
         'Upload an .xlsx, .xlsm or .pdf file.',

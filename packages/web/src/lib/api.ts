@@ -723,6 +723,25 @@ export const api = {
     saveCosting: (orderId: string, body: unknown) =>
       put<{ ok: true; derived: number; manual: number }>(`/orders/${orderId}/costing`, body),
     proforma: (orderId: string) => get<{ data: ProformaDto | null }>(`/orders/${orderId}/proforma`),
+    /** Read a proforma out of an uploaded workbook, CSV or PDF. Writes nothing. */
+    importProforma: (orderId: string, file: File) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      // No Content-Type header: the browser must set the multipart boundary.
+      return request<{
+        draft: {
+          number: string | null; date: string | null; consignee: string | null;
+          billingAddress: string | null; email: string | null; shipmentTo: string | null;
+          currency: string; terms: string | null;
+          lines: Array<{ description: string; quantity: number | null; unit: string; unitPrice: number | null }>;
+          confidence: 'HIGH' | 'MEDIUM' | 'LOW';
+          issues: Array<{ level: string; message: string }>;
+        };
+        fileName: string;
+        fileKind: string;
+      }>(`/orders/${orderId}/proforma/import`, { method: 'POST', body: fd });
+    },
+    proformaExportUrl: (orderId: string) => `/orders/${orderId}/proforma/export.xlsx`,
     saveProforma: (orderId: string, body: unknown) =>
       put<{ data: ProformaDto }>(`/orders/${orderId}/proforma`, body),
     sendProforma: (orderId: string) => post<{ data: ProformaDto }>(`/orders/${orderId}/proforma/send`),
@@ -775,6 +794,11 @@ export const api = {
   external: {
     operations: (orderId: string) => get<{ data: unknown[] }>(`/external/${orderId}/operations`),
     addOperation: (orderId: string, body: unknown) => post<{ id: string }>(`/external/${orderId}/operations`, body),
+    updateOperation: (id: string, body: unknown) => patch<{ ok: true }>(`/external/operations/${id}`, body),
+    removeOperation: (id: string) => del(`/external/operations/${id}`),
+    /** Save the whole table at once — the Proforma Invoice's pattern. */
+    saveOperations: (orderId: string, operations: unknown[]) =>
+      put<{ ok: true; count: number; removed: number }>(`/external/${orderId}/operations`, { operations }),
     setStatus: (opId: string, body: unknown) => post<{ ok: true }>(`/external/operations/${opId}/status`, body),
     approvals: (orderId: string) => get<{ data: unknown[] }>(`/external/${orderId}/approvals`),
     requestApproval: (orderId: string, body: unknown) => post<{ id: string }>(`/external/${orderId}/approvals`, body),
@@ -797,6 +821,9 @@ export const api = {
     /** A whole size grid in one save, rather than one request per size. */
     addCartons: (listId: string, cartons: unknown[]) =>
       post<{ count: number; qty: number }>(`/packing/list/${listId}/cartons/bulk`, { cartons }),
+    /** The size breakdown inside one carton. */
+    saveCartonLines: (cartonId: string, lines: Array<{ orderSizeId?: string | null; sizeLabel?: string | null; qty: number }>) =>
+      put<{ ok: true; lines: number; qty: number }>(`/packing/cartons/${cartonId}/lines`, { lines }),
     approve: (listId: string) => post<{ ok: true }>(`/packing/list/${listId}/approve`),
     shipments: (orderId: string) => get<{ data: ShipmentDto[] }>(`/packing/${orderId}/shipments`),
     createShipment: (orderId: string, body: unknown, reason?: string) =>

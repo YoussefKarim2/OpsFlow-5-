@@ -289,14 +289,15 @@ model OrderColor {
 
 /// The size axis of this order's matrix.
 model OrderSize {
-  id         String          @id @default(cuid())
-  orderId    String
-  sizeId     String
-  position   Int             @default(0)
-  cartons    Carton[]
-  order      Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  size       RefSize         @relation(fields: [sizeId], references: [id])
-  quantities StageQuantity[]
+  id          String          @id @default(cuid())
+  orderId     String
+  sizeId      String
+  position    Int             @default(0)
+  cartons     Carton[]
+  order       Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  size        RefSize         @relation(fields: [sizeId], references: [id])
+  quantities  StageQuantity[]
+  cartonLines CartonLine[]
 
   @@unique([orderId, sizeId])
   @@index([orderId])
@@ -1009,19 +1010,20 @@ model PackingList {
 }
 
 model Carton {
-  id            String      @id @default(cuid())
+  id            String       @id @default(cuid())
   packingListId String
   cartonNumber  String
   cartonSize    String?
   orderColorId  String?
   orderSizeId   String?
   qty           Int
-  grossWeightKg Decimal?    @db.Decimal(10, 3)
-  netWeightKg   Decimal?    @db.Decimal(10, 3)
-  position      Int         @default(0)
-  orderColor    OrderColor? @relation(fields: [orderColorId], references: [id])
-  orderSize     OrderSize?  @relation(fields: [orderSizeId], references: [id])
-  packingList   PackingList @relation(fields: [packingListId], references: [id], onDelete: Cascade)
+  grossWeightKg Decimal?     @db.Decimal(10, 3)
+  netWeightKg   Decimal?     @db.Decimal(10, 3)
+  position      Int          @default(0)
+  orderColor    OrderColor?  @relation(fields: [orderColorId], references: [id])
+  orderSize     OrderSize?   @relation(fields: [orderSizeId], references: [id])
+  packingList   PackingList  @relation(fields: [packingListId], references: [id], onDelete: Cascade)
+  lines         CartonLine[]
 
   @@index([packingListId])
   @@map("cartons")
@@ -1054,6 +1056,33 @@ model Shipment {
 
   @@index([orderId])
   @@map("shipments")
+}
+
+/// One size inside a carton.
+///
+/// A carton has always named a single size through `Carton.orderSizeId`, which
+/// is right for a shipment packed one size to a box and wrong for a mixed
+/// carton — ten small, twenty medium, fifteen large in the same box. Rows here
+/// are that breakdown.
+///
+/// The parent's `qty` stays the carton's total and is recomputed from these
+/// rows whenever any exist, so the PACKED ledger, the funnel and the dashboard
+/// keep reading one number. `Carton.orderSizeId` is left in place and still
+/// carries the single-size case, so every carton packed before this existed is
+/// still correct and still readable by the code that reads it.
+model CartonLine {
+  id          String     @id @default(cuid())
+  cartonId    String
+  orderSizeId String?
+  /// Free text for a size the order was not sold in — a spare, a sample.
+  sizeLabel   String?
+  qty         Int
+  position    Int        @default(0)
+  carton      Carton     @relation(fields: [cartonId], references: [id], onDelete: Cascade)
+  orderSize   OrderSize? @relation(fields: [orderSizeId], references: [id])
+
+  @@index([cartonId])
+  @@map("carton_lines")
 }
 
 model CostingRecord {

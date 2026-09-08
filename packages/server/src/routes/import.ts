@@ -18,7 +18,8 @@ import { PROFILES } from '../services/import/profiles.js';
 import { storage } from '../services/storage/index.js';
 import { getOrderDetail, refreshOrderCache } from '../services/order-service.js';
 import { reserveOrderMaterials } from '../services/inventory-service.js';
-import { workbookUpload as upload, detectImportKind } from '../services/import/upload-guard.js';
+import { workbookUpload as upload } from '../services/import/upload-guard.js';
+import { detectFileKind } from '../services/import/file-kind.js';
 import { extractFromPdf } from '../services/import/pdf-extractor.js';
 
 export const importRouter = Router();
@@ -49,11 +50,12 @@ async function runExtraction(
   // A PDF has no sheets and no profile, so neither Excel reader applies. It
   // produces the same ExtractionResult, which is what lets everything after
   // this point — preview, review, commit — stay exactly as it is.
-  if (detectImportKind(buffer) === 'pdf') {
-    return extractFromPdf(buffer);
-  }
+  const kind = detectFileKind(buffer);
+  if (kind === 'pdf') return extractFromPdf(buffer);
 
-  if (!options.forceTabular) {
+  // A CSV has no named sheets and no profile to match, so the anchor-based
+  // reader cannot apply — it goes straight to the generic one.
+  if (!options.forceTabular && kind !== 'csv') {
     const profiled = await extractWorkbook(buffer);
     // A recognised profile wins: it reads the BOM, the lay plan and the costing
     // too, which the generic reader cannot infer from a flat table.
@@ -171,8 +173,8 @@ importRouter.get('/profiles', requirePermission('import:run'), asyncHandler(asyn
 importRouter.post('/upload', requirePermission('import:run'), upload.single('file'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   if (!req.file) throw new BadRequestError('No file was uploaded.');
-  // Accepts a workbook or a PDF, and throws for anything wearing either name.
-  detectImportKind(req.file.buffer);
+  // Accepts a workbook, a CSV or a PDF, and explains anything else.
+  detectFileKind(req.file.buffer, req.file.originalname);
 
   const key = await storage.put(req.file.buffer, {
     fileName: req.file.originalname,

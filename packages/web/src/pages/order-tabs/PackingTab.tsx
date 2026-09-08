@@ -1,6 +1,7 @@
 /** Packing lists, cartons and shipments. */
 
 import { PackingSizeGrid } from '../../components/PackingSizeGrid';
+import { CartonSizes } from '../../components/CartonSizes';
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -17,6 +18,7 @@ interface PackingList {
   approvedByName: string | null; notes: string | null;
   cartons: Array<{
     id: string; cartonNumber: string; cartonSize: string | null; colorName: string | null;
+    lines?: Array<{ id: string; orderSizeId: string | null; sizeName: string | null; qty: number }>;
     sizeName: string | null; qty: number; grossWeightKg: number | null; netWeightKg: number | null;
   }>;
   totals: { cartonCount: number; totalQty: number; grossWeightKg: number; netWeightKg: number };
@@ -42,6 +44,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
   const { can } = useAuth();
   const [addingCarton, setAddingCarton] = useState<string | null>(null);
   const [addingSizes, setAddingSizes] = useState<string | null>(null);
+  const [editingCarton, setEditingCarton] = useState<{ id: string; number: string; lines: Array<{ orderSizeId: string | null; qty: number }> } | null>(null);
   const [shipping, setShipping] = useState(false);
 
   const lists = useQuery({ queryKey: ['packing', order.id], queryFn: () => api.packing.lists(order.id) });
@@ -140,6 +143,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
                       <th className="th text-right">Qty</th>
                       <th className="th text-right">GW (kg)</th>
                       <th className="th text-right">NW (kg)</th>
+                      <th className="th w-16" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-ink-100">
@@ -148,10 +152,31 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
                         <td className="td font-mono text-xs">{c.cartonNumber}</td>
                         <td className="td text-xs">{c.cartonSize || '—'}</td>
                         <td className="td text-xs">{c.colorName || '—'}</td>
-                        <td className="td text-xs">{c.sizeName || '—'}</td>
+                        <td className="td text-xs">
+                          {/* A mixed carton lists its sizes; a single-size one
+                              still reads exactly as it did. */}
+                          {c.lines && c.lines.length > 0
+                            ? c.lines.map((ln) => `${ln.sizeName ?? '?'} ×${ln.qty}`).join(', ')
+                            : c.sizeName || '—'}
+                        </td>
                         <td className="td text-right"><Num value={c.qty} /></td>
                         <td className="td text-right"><Num value={c.grossWeightKg} places={2} fallback="—" /></td>
                         <td className="td text-right"><Num value={c.netWeightKg} places={2} fallback="—" /></td>
+                        <td className="td text-right">
+                          {can('packing:write') && !l.approved && (
+                            <button
+                              className="btn-ghost btn-sm"
+                              title="Set the sizes inside this carton"
+                              onClick={() => setEditingCarton({
+                                id: c.id,
+                                number: c.cartonNumber,
+                                lines: (c.lines ?? []).map((ln) => ({ orderSizeId: ln.orderSizeId, qty: ln.qty })),
+                              })}
+                            >
+                              Sizes
+                            </button>
+                          )}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -212,6 +237,12 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
         )}
       </Card>
 
+      <CartonSizesModal
+        carton={editingCarton}
+        order={order}
+        onClose={() => setEditingCarton(null)}
+        onDone={() => { setEditingCarton(null); invalidate(); }}
+      />
       <SizeGridModal
         listId={addingSizes}
         order={order}
@@ -456,6 +487,37 @@ function SizeGridModal({
           colors={colors}
           sizes={sizes}
           onDone={onDone}
+        />
+      )}
+    </Modal>
+  );
+}
+
+/** The size breakdown of one carton, in the dialog the other packing forms use. */
+function CartonSizesModal({
+  carton, order, onClose, onDone,
+}: {
+  carton: { id: string; number: string; lines: Array<{ orderSizeId: string | null; qty: number }> } | null;
+  order: OrderDetailDto; onClose: () => void; onDone: () => void;
+}) {
+  const { data: matrix } = useQuery({
+    queryKey: ['matrix', order.id],
+    queryFn: () => api.orders.matrix(order.id),
+    enabled: !!carton,
+  });
+  if (!carton) return null;
+  const sizes = ((matrix?.sizes ?? []) as Array<{ id: string; name: string }>);
+  return (
+    <Modal open onClose={onClose} title={`Sizes in carton ${carton.number}`}>
+      {sizes.length === 0 ? (
+        <p className="text-sm text-ink-600">This order has no sizes yet.</p>
+      ) : (
+        <CartonSizes
+          cartonId={carton.id}
+          orderId={order.id}
+          sizes={sizes}
+          initial={carton.lines}
+          onSaved={onDone}
         />
       )}
     </Modal>

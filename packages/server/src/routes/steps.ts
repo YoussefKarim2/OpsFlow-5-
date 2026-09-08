@@ -15,8 +15,19 @@
 import { createHash } from 'node:crypto';
 import { Router } from 'express';
 import multer from 'multer';
+import ExcelJS from 'exceljs';
 import { z } from 'zod';
 import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines } from '@opsflow/shared';
+import { detectFileKind, FILE_KIND_LABEL } from '../services/import/file-kind.js';
+import { extractFromPdf } from '../services/import/pdf-extractor.js';
+import { extractTabular } from '../services/import/tabular-extractor.js';
+import { buildProformaDraft } from '../services/import/proforma-target.js';
+
+/** Same limits as the order importer; a proforma is not a bigger document. */
+const proformaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024, files: 1 },
+});
 import { prisma } from '../db.js';
 import { requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
@@ -650,6 +661,127 @@ stepsRouter.put('/:id/proforma', requirePermission('order:edit'), asyncHandler(a
   });
 
   res.json({ data: withTotals(invoice) });
+}));
+
+/**
+ * Read a proforma invoice out of an uploaded document.
+ *
+ * Extraction is shared with the order importer — the same readers, the same
+ * synonym engine, the same `ExtractionResult` — and only the mapping onto
+ * proforma fields is specific to this. Nothing is written: the draft comes back
+ * for the review screen, and the existing `PUT /proforma` saves it once a person
+ * has looked at it. That separation is the point. A proforma is a priced
+ * document sent to a customer, and no extraction is confident enough to skip
+ * somebody reading it.
+ */
+stepsRouter.post(
+  '/:id/proforma/import',
+  requirePermission('order:edit'),
+  proformaUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    await resolveOrderId(req.params.id);
+    if (!req.file) throw new BadRequestError('No file was uploaded.');
+
+    // Throws with an explanation for .xls, .ods and anything unreadable.
+    const kind = detectFileKind(req.file.buffer, req.file.originalname);
+    const extraction = kind === 'pdf'
+      ? await extractFromPdf(req.file.buffer)
+      : await extractTabular(req.file.buffer, {});
+
+    const draft = buildProformaDraft(extraction);
+    res.json({
+      draft,
+      fileName: req.file.originalname,
+      fileKind: FILE_KIND_LABEL[kind],
+      sheets: extraction.sheets,
+    });
+  }),
+);
+
+/**
+ * The invoice as a workbook.
+ *
+ * ExcelJS is already a dependency for reading imports, so this needed no new
+ * one. It is a laid-out document rather than a dump of rows: the header block
+ * reads the way the on-screen invoice does, the line table carries its own
+ * totals, and the columns are sized to be printed. An export somebody has to
+ * reformat before sending is not an export.
+ *
+ * Works whether the invoice was imported or typed by hand — it reads what is
+ * stored, and has no notion of where that came from.
+ */
+stepsRouter.get('/:id/proforma/export.xlsx', requirePermission('order:read'), asyncHandler(async (req, res) => {
+  const orderId = await resolveOrderId(req.params.id);
+  const inv = await prisma.proformaInvoice.findFirst({
+    where: { orderId },
+    orderBy: { createdAt: 'desc' },
+    include: { lines: { orderBy: { position: 'asc' } }, order: { select: { poNumber: true, orderName: true } } },
+  });
+  if (!inv) throw new NotFoundError('Proforma invoice');
+
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'OpsFlow';
+  const ws = wb.addWorksheet('Proforma Invoice');
+  ws.columns = [
+    { width: 42 }, { width: 12 }, { width: 10 }, { width: 14 }, { width: 16 },
+  ];
+
+  const title = ws.addRow(['PROFORMA INVOICE']);
+  title.font = { size: 16, bold: true };
+  ws.mergeCells(title.number, 1, title.number, 5);
+  ws.addRow([]);
+
+  const header: Array<[string, string | null]> = [
+    ['Invoice number', inv.number],
+    ['Date', inv.date ? inv.date.toISOString().slice(0, 10) : null],
+    ['Order', `PO ${inv.order.poNumber} — ${inv.order.orderName}`],
+    ['Consignee', inv.consignee],
+    ['Billing address', inv.billingAddress],
+    ['Email', inv.email],
+    ['Ship from', inv.shipmentFrom],
+    ['Ship to', inv.shipmentTo],
+    ['Vessel / voyage', inv.vesselVoyage],
+    ['Container / seal', inv.containerSeal],
+    ['Terms', inv.terms],
+    ['Currency', inv.currency],
+  ];
+  for (const [k, v] of header) {
+    if (v == null || v === '') continue;   // an empty field is noise on a document
+    const row = ws.addRow([k, v]);
+    row.getCell(1).font = { bold: true };
+    ws.mergeCells(row.number, 2, row.number, 5);
+  }
+
+  ws.addRow([]);
+  const head = ws.addRow(['Description', 'Quantity', 'Unit', 'Unit price', 'Amount']);
+  head.font = { bold: true };
+  head.eachCell((c) => {
+    c.border = { bottom: { style: 'thin' } };
+    c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } };
+  });
+
+  let total = 0;
+  for (const l of inv.lines) {
+    const qty = l.quantity == null ? null : Number(l.quantity.toString());
+    const price = l.unitPrice == null ? null : Number(l.unitPrice.toString());
+    const amount = qty != null && price != null ? qty * price : null;
+    if (amount != null) total += amount;
+    const row = ws.addRow([l.description, qty, l.unit, price, amount]);
+    row.getCell(4).numFmt = '#,##0.00';
+    row.getCell(5).numFmt = '#,##0.00';
+    row.getCell(2).numFmt = '#,##0';
+  }
+
+  const totalRow = ws.addRow(['', '', '', `Total (${inv.currency})`, total]);
+  totalRow.font = { bold: true };
+  totalRow.getCell(5).numFmt = '#,##0.00';
+  totalRow.getCell(4).border = { top: { style: 'thin' } };
+  totalRow.getCell(5).border = { top: { style: 'thin' } };
+
+  const safe = `PI-${(inv.number ?? inv.order.poNumber).replace(/[^A-Za-z0-9._-]+/g, '-')}.xlsx`;
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${safe}"`);
+  res.end(Buffer.from(await wb.xlsx.writeBuffer()));
 }));
 
 stepsRouter.post('/:id/proforma/send', requirePermission('order:edit'), asyncHandler(async (req, res) => {

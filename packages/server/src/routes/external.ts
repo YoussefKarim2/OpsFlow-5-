@@ -17,7 +17,7 @@ import { daysBetween } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
-import { NotFoundError } from '../errors.js';
+import { NotFoundError, ValidationError } from '../errors.js';
 import { assertExternalOpMayStart } from '../services/rules.js';
 import { refreshOrderCache } from '../services/order-service.js';
 import { logActivity, logAndNotify } from '../services/activity-service.js';
@@ -51,6 +51,9 @@ externalRouter.get('/:orderId/operations', requirePermission('external:read'), a
     data: ops.map((op) => ({
       id: op.id,
       externalFactoryName: op.externalFactory?.name ?? null,
+      // Ids as well as names: the table editor writes back what it read, and a
+      // name cannot be written back to a foreign key.
+      externalFactoryId: op.externalFactoryId,
       externalReference: op.externalReference,
       operationType: op.operationType,
       operationTypeAr: op.operationTypeAr,
@@ -121,6 +124,137 @@ externalRouter.post('/:orderId/operations', requirePermission('external:write'),
 
   await refreshOrderCache(order.id);
   res.status(201).json({ id: op.id, status: op.status });
+}));
+
+/**
+ * Edit one operation's own details.
+ *
+ * Deliberately not the status: moving an operation to SENT or RETURNED passes
+ * the approval gate below, and a general-purpose field editor that could also
+ * set `status` would be a way around it. Status stays where its rules are.
+ */
+externalRouter.patch('/operations/:id', requirePermission('external:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const input = opSchema.partial().parse(req.body);
+
+  const op = await prisma.externalOperation.findUnique({ where: { id: req.params.id } });
+  if (!op) throw new NotFoundError('External operation');
+
+  await prisma.externalOperation.update({
+    where: { id: op.id },
+    data: {
+      ...input,
+      ...(input.expectedReturnDate !== undefined
+        ? { expectedReturnDate: input.expectedReturnDate ? new Date(input.expectedReturnDate) : null }
+        : {}),
+    },
+  });
+
+  await logActivity({
+    orderId: op.orderId, actorId: actor.id, actorName: actor.name,
+    action: 'EXTERNAL_OP_UPDATED',
+    summary: `updated external operation "${op.operationType}"`,
+    entityType: 'ExternalOperation', entityId: op.id,
+  });
+
+  await refreshOrderCache(op.orderId);
+  res.json({ ok: true });
+}));
+
+externalRouter.delete('/operations/:id', requirePermission('external:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const op = await prisma.externalOperation.findUnique({ where: { id: req.params.id } });
+  if (!op) throw new NotFoundError('External operation');
+
+  // Work that has left the building is a fact, not a draft. Removing the record
+  // would lose the only trace that it was sent, so it is refused and the status
+  // route is the way to record what actually happened to it.
+  if (op.status !== 'NOT_SENT' && op.status !== 'WAITING_APPROVAL') {
+    throw new ValidationError(
+      `This operation has already been ${op.status.toLowerCase().replace(/_/g, ' ')}. ` +
+      'Record what happened to it instead of deleting it.',
+    );
+  }
+
+  await prisma.externalOperation.delete({ where: { id: op.id } });
+  await logActivity({
+    orderId: op.orderId, actorId: actor.id, actorName: actor.name,
+    action: 'EXTERNAL_OP_REMOVED',
+    summary: `removed external operation "${op.operationType}"`,
+    entityType: 'ExternalOperation', entityId: op.id,
+  });
+
+  await refreshOrderCache(op.orderId);
+  res.status(204).end();
+}));
+
+/**
+ * Save the whole external-work table at once — the Proforma Invoice's pattern.
+ *
+ * Diffs rather than replacing. A row that came back with its id keeps that id,
+ * and with it the approval linked to it, the attachments filed against it and
+ * the cost line derived from it — all of which are keyed on the operation and
+ * would be orphaned by a delete-and-recreate.
+ *
+ * Rows that have left the building are never touched: a row already SENT is
+ * updated in its editable fields only, and one omitted from the payload is kept
+ * rather than deleted, for the same reason the DELETE above refuses it.
+ */
+externalRouter.put('/:orderId/operations', requirePermission('external:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const rows = z.array(opSchema.extend({ id: z.string().optional() })).parse(req.body.operations);
+
+  const order = await prisma.order.findFirst({
+    where: { OR: [{ id: req.params.orderId }, { poNumber: req.params.orderId }] },
+    select: { id: true },
+  });
+  if (!order) throw new NotFoundError('Order');
+
+  const existing = await prisma.externalOperation.findMany({
+    where: { orderId: order.id },
+    select: { id: true, status: true },
+  });
+  const keep = new Set(rows.map((r) => r.id).filter((id): id is string => !!id));
+  const removable = existing
+    .filter((e) => !keep.has(e.id) && (e.status === 'NOT_SENT' || e.status === 'WAITING_APPROVAL'))
+    .map((e) => e.id);
+
+  await prisma.$transaction(async (tx) => {
+    if (removable.length > 0) {
+      await tx.externalOperation.deleteMany({ where: { id: { in: removable } } });
+    }
+    for (const row of rows) {
+      const { id, expectedReturnDate, requiresApproval, ...fields } = row;
+      const data = {
+        ...fields,
+        requiresApproval,
+        expectedReturnDate: expectedReturnDate ? new Date(expectedReturnDate) : null,
+      };
+      if (id) {
+        // Status is never written here; it belongs to the transition route.
+        await tx.externalOperation.update({ where: { id }, data });
+      } else {
+        await tx.externalOperation.create({
+          data: {
+            ...data,
+            orderId: order.id,
+            status: requiresApproval ? 'WAITING_APPROVAL' : 'NOT_SENT',
+          },
+        });
+      }
+    }
+  });
+
+  await logActivity({
+    orderId: order.id, actorId: actor.id, actorName: actor.name,
+    action: 'EXTERNAL_WORK_SAVED',
+    summary: `saved external work — ${rows.length} operation${rows.length === 1 ? '' : 's'}` +
+             (removable.length > 0 ? `, ${removable.length} removed` : ''),
+    entityType: 'Order', entityId: order.id,
+  });
+
+  await refreshOrderCache(order.id);
+  res.json({ ok: true, count: rows.length, removed: removable.length });
 }));
 
 const transitionSchema = z.object({

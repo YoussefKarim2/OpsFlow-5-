@@ -9,6 +9,7 @@ import { ORDER_INCLUDE, deriveOrder, refreshOrderCache } from '../services/order
 import { logActivity, logAndNotify } from '../services/activity-service.js';
 import { assertShippableQuantity } from '../services/rules.js';
 import { getRequestContext } from '../request-context.js';
+import { ledgerDeltas } from '../services/import/carton-ledger.js';
 
 export const packingRouter = Router();
 packingRouter.use(authenticate);
@@ -32,6 +33,7 @@ packingRouter.get('/:orderId', requirePermission('packing:read'), asyncHandler(a
         include: {
           orderColor: { include: { color: true } },
           orderSize: { include: { size: true } },
+          lines: { include: { orderSize: { include: { size: true } } }, orderBy: { position: 'asc' } },
         },
         orderBy: { position: 'asc' },
       },
@@ -50,6 +52,14 @@ packingRouter.get('/:orderId', requirePermission('packing:read'), asyncHandler(a
         qty: c.qty,
         grossWeightKg: dec(c.grossWeightKg),
         netWeightKg: dec(c.netWeightKg),
+        // The breakdown when the carton is mixed; empty for a single-size one,
+        // which is still described by `sizeName` and `qty` above.
+        lines: c.lines.map((ln) => ({
+          id: ln.id,
+          orderSizeId: ln.orderSizeId,
+          sizeName: ln.orderSize?.size.name ?? ln.sizeLabel,
+          qty: ln.qty,
+        })),
       }));
       return {
         id: l.id,
@@ -112,6 +122,118 @@ const cartonSchema = z.object({
  * still agree with the cartons. The difference is that all of it happens in one
  * transaction, so the grid is either wholly saved or wholly not.
  */
+/**
+ * One size row inside a carton. `orderSizeId` is the normal case; `sizeLabel`
+ * covers a size the order was not sold in, such as a sample.
+ */
+const cartonLineSchema = z.object({
+  orderSizeId: z.string().optional().nullable(),
+  sizeLabel: z.string().trim().max(50).optional().nullable(),
+  qty: z.number().int().positive('Every size row needs a quantity above zero.'),
+});
+
+/**
+ * Replace a carton's size breakdown.
+ *
+ * The carton's own `qty` becomes the sum of its rows, so the PACKED ledger, the
+ * funnel and the dashboard keep reading one number and cannot disagree with the
+ * breakdown underneath it.
+ *
+ * The ledger is adjusted by the *difference* each size makes, not by the new
+ * total. That is the whole difficulty of editing a carton rather than adding
+ * one: incrementing by the new quantity would count the pieces a second time,
+ * and rewriting the ledger row outright would erase quantities packed into
+ * other cartons of the same size. Removing a size decrements it by what that
+ * size used to hold. All of it is one transaction, so a partial edit cannot
+ * leave the ledger describing a carton that does not exist.
+ */
+packingRouter.put('/cartons/:cartonId/lines', requirePermission('packing:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const rows = z.array(cartonLineSchema).parse(req.body.lines);
+
+  const carton = await prisma.carton.findUnique({
+    where: { id: req.params.cartonId },
+    include: { lines: true, packingList: { select: { id: true, orderId: true, approved: true } } },
+  });
+  if (!carton) throw new NotFoundError('Carton');
+  if (carton.packingList.approved) {
+    throw new ValidationError('This packing list has been approved. Reopen it before changing a carton.');
+  }
+  for (const r of rows) {
+    if (!r.orderSizeId && !r.sizeLabel?.trim()) {
+      throw new ValidationError('Every size row needs a size.');
+    }
+  }
+
+  const orderId = carton.packingList.orderId;
+  const colorId = carton.orderColorId;
+
+  // What each size held before, and what it holds now. Only rows tied to a real
+  // order size touch the ledger — a free-text size is not a cell in the matrix.
+  const before = new Map<string, number>();
+  for (const l of carton.lines) {
+    if (l.orderSizeId) before.set(l.orderSizeId, (before.get(l.orderSizeId) ?? 0) + l.qty);
+  }
+  // A carton with no lines yet still holds its own single-size quantity, and
+  // that is what the ledger currently reflects.
+  if (carton.lines.length === 0 && carton.orderSizeId) {
+    before.set(carton.orderSizeId, (before.get(carton.orderSizeId) ?? 0) + carton.qty);
+  }
+
+  const after = new Map<string, number>();
+  for (const r of rows) {
+    if (r.orderSizeId) after.set(r.orderSizeId, (after.get(r.orderSizeId) ?? 0) + r.qty);
+  }
+
+  const total = rows.reduce((a, r) => a + r.qty, 0);
+
+  await prisma.$transaction(async (tx) => {
+    await tx.cartonLine.deleteMany({ where: { cartonId: carton.id } });
+    if (rows.length > 0) {
+      await tx.cartonLine.createMany({
+        data: rows.map((r, i) => ({
+          cartonId: carton.id,
+          orderSizeId: r.orderSizeId ?? null,
+          sizeLabel: r.sizeLabel?.trim() || null,
+          qty: r.qty,
+          position: i,
+        })),
+      });
+    }
+    await tx.carton.update({ where: { id: carton.id }, data: { qty: total } });
+
+    if (colorId) {
+      // The arithmetic lives in `carton-ledger.ts` and is tested by value there;
+      // getting it wrong here means either counting pieces twice or erasing
+      // quantities packed into other cartons of the same size.
+      for (const [sizeId, delta] of ledgerDeltas(before, after)) {
+        await tx.stageQuantity.upsert({
+          where: {
+            orderId_orderColorId_orderSizeId_ledger: {
+              orderId, orderColorId: colorId, orderSizeId: sizeId, ledger: 'PACKED',
+            },
+          },
+          create: {
+            orderId, orderColorId: colorId, orderSizeId: sizeId,
+            ledger: 'PACKED', qty: Math.max(0, delta),
+          },
+          update: { qty: { increment: delta } },
+        });
+      }
+    }
+  });
+
+  await logActivity({
+    orderId, actorId: actor.id, actorName: actor.name,
+    action: 'CARTON_SIZES_SAVED',
+    summary: `set carton ${carton.cartonNumber} to ${rows.length} size${rows.length === 1 ? '' : 's'} — ${total.toLocaleString()} pcs`,
+    entityType: 'Carton', entityId: carton.id,
+  });
+
+  await refreshOrderCache(orderId);
+  res.json({ ok: true, lines: rows.length, qty: total });
+}));
+
 packingRouter.post('/list/:listId/cartons/bulk', requirePermission('packing:write'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   const rows = z.array(cartonSchema).min(1, 'Add at least one size.').parse(req.body.cartons);

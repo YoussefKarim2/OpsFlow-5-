@@ -9,7 +9,8 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Lock, Send, CheckCircle2, XCircle, Clock } from 'lucide-react';
+import { ExternalWorkEditor, type ExternalOpRow } from '../../components/ExternalWorkEditor';
+import { Lock, Send, CheckCircle2, XCircle, Clock, Plus } from 'lucide-react';
 import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -19,6 +20,7 @@ import {
 
 interface Op {
   id: string; externalFactoryName: string | null; externalReference: string | null;
+  externalFactoryId: string | null; operationSort: string | null;
   operationType: string; operationTypeAr: string | null; qty: number;
   unitRate: number | null; unitPriceUsd: number | null; totalPriceUsd: number | null;
   sentDate: string | null; expectedReturnDate: string | null; actualReturnDate: string | null;
@@ -56,7 +58,9 @@ export function ExternalTab({ order }: { order: OrderDetailDto; focus?: "externa
   const [refusal, setRefusal] = useState<string | null>(null);
   const [recording, setRecording] = useState<Approval | null>(null);
 
+  const [editing, setEditing] = useState(false);
   const ops = useQuery({ queryKey: ['external-ops', order.id], queryFn: () => api.external.operations(order.id) });
+  const lookups = useQuery({ queryKey: ['lookups'], queryFn: api.reference.lookups });
   const approvals = useQuery({ queryKey: ['approvals', order.id], queryFn: () => api.external.approvals(order.id) });
 
   const invalidate = () => {
@@ -77,8 +81,53 @@ export function ExternalTab({ order }: { order: OrderDetailDto; focus?: "externa
   const approvalList = (approvals.data?.data ?? []) as unknown as Approval[];
   const blocked = operations.filter((o) => o.requiresApproval && !o.approvalCleared);
 
+  if (editing) {
+    const rows: ExternalOpRow[] = operations.map((o) => ({
+      id: o.id,
+      operationType: o.operationType,
+      operationSort: o.operationSort ?? null,
+      externalFactoryId: o.externalFactoryId ?? null,
+      externalReference: o.externalReference ?? null,
+      qty: o.qty,
+      unitPriceUsd: o.unitPriceUsd ?? null,
+      expectedReturnDate: o.expectedReturnDate ?? null,
+      requiresApproval: o.requiresApproval,
+      notes: o.notes ?? null,
+      status: o.status,
+    }));
+
+    return (
+      <div className="space-y-4 p-5">
+        <Card>
+          <CardHeader
+            title="External work"
+            subtitle="Book the operations sent outside the factory, with their quantities and rates."
+            action={<button className="btn-secondary btn-sm" onClick={() => setEditing(false)}>Done</button>}
+          />
+          <div className="p-4">
+            <ExternalWorkEditor
+              orderId={order.id}
+              initial={rows}
+              factories={(lookups.data?.factories ?? []).filter((f) => f.isExternal)}
+              workTypes={(lookups.data?.values?.EXTERNAL_WORK_TYPE ?? []).map((v) => v.value)}
+              onSaved={() => { setEditing(false); invalidate(); }}
+            />
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-4 p-5">
+      {can('external:write') && (
+        <div className="flex justify-end">
+          <button className="btn-secondary btn-sm" onClick={() => setEditing(true)}>
+            <Plus className="h-3.5 w-3.5" /> Add or edit operations
+          </button>
+        </div>
+      )}
+
       {blocked.length > 0 && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3">
           <div className="flex items-start gap-2.5">

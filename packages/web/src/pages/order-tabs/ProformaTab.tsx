@@ -18,12 +18,14 @@
  * says so before you type.
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Send, Lock } from 'lucide-react';
+import { Plus, Trash2, Send, Lock, Upload, Download, Info } from 'lucide-react';
 import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
 import { api, type ProformaDto } from '../../lib/api';
-import { Card, Field, Spinner, ConfirmDialog, Num, clsx, useToast } from '../../components/ui';
+import {
+  Card, Field, Spinner, ConfirmDialog, Num, clsx, useToast, ErrorNote,
+} from '../../components/ui';
 
 interface LineDraft {
   description: string;
@@ -31,6 +33,9 @@ interface LineDraft {
   unit: string;
   unitPrice: string;
 }
+
+/** Every field blank, for a draft imported before one has been started. */
+
 
 interface Draft {
   number: string;
@@ -48,6 +53,12 @@ interface Draft {
   terms: string;
   lines: LineDraft[];
 }
+
+const EMPTY_DRAFT: Draft = {
+  number: '', date: '', consignee: '', billingAddress: '', email: '',
+  vesselVoyage: '', containerSeal: '', shippingDate: '', shipmentFrom: '',
+  shipmentTo: '', consolidatingVendor: '', currency: 'USD', terms: '', lines: [],
+};
 
 const day = (iso: string | null | undefined) => (iso ? iso.slice(0, 10) : '');
 
@@ -121,6 +132,45 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
   const toast = useToast();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [confirmSend, setConfirmSend] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [importNote, setImportNote] = useState<string[] | null>(null);
+
+  /**
+   * Read a document into the draft without saving it.
+   *
+   * The extracted values land in the form the user is already looking at, so
+   * reviewing them is the same act as editing them — no separate confirmation
+   * screen, and nothing reaches the database until Save. Anything the extractor
+   * was unsure about is listed above the form rather than applied quietly.
+   */
+  const importFile = useMutation({
+    mutationFn: (file: File) => api.steps.importProforma(orderId, file),
+    onSuccess: (res) => {
+      const d = res.draft;
+      setDraft((prev) => ({
+        ...(prev ?? EMPTY_DRAFT),
+        number: d.number ?? prev?.number ?? '',
+        date: (d.date ?? prev?.date ?? '').slice(0, 10),
+        consignee: d.consignee ?? prev?.consignee ?? '',
+        billingAddress: d.billingAddress ?? prev?.billingAddress ?? '',
+        email: d.email ?? prev?.email ?? '',
+        shipmentTo: d.shipmentTo ?? prev?.shipmentTo ?? '',
+        currency: d.currency || prev?.currency || 'USD',
+        lines: d.lines.length > 0
+          ? d.lines.map((l) => ({
+              description: l.description,
+              quantity: l.quantity == null ? '' : String(l.quantity),
+              unit: l.unit,
+              unitPrice: l.unitPrice == null ? '' : String(l.unitPrice),
+            }))
+          : (prev?.lines ?? []),
+      }));
+      setImportNote([
+        `Read ${res.fileKind} "${res.fileName}" — confidence ${d.confidence}. Nothing is saved until you press Save.`,
+        ...d.issues.map((i) => i.message),
+      ]);
+    },
+  });
 
   const { data, isLoading } = useQuery({
     queryKey: ['proforma', orderId],
@@ -207,6 +257,29 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
         </div>
       )}
 
+      {importNote && (
+        <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3">
+          <div className="flex items-start gap-2.5">
+            <Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-blue-900">Imported — review before saving</p>
+              <ul className="mt-1 space-y-0.5 text-xs leading-relaxed text-blue-800">
+                {importNote.map((m, i) => <li key={i}>{m}</li>)}
+              </ul>
+              <button
+                type="button"
+                className="mt-1.5 text-xs font-medium text-blue-700 underline"
+                onClick={() => setImportNote(null)}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {importFile.error ? <ErrorNote error={importFile.error} /> : null}
+
       <Card>
         <div className="card-header">
           <h3 className="card-title">Proforma invoice</h3>
@@ -218,6 +291,36 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
             >
               {save.isPending ? 'Saving…' : 'Save'}
             </button>
+
+            <input
+              ref={fileInput}
+              type="file"
+              className="hidden"
+              accept=".xlsx,.xlsm,.xls,.csv,.ods,.pdf"
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) importFile.mutate(f);
+                e.target.value = '';
+              }}
+            />
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              disabled={importFile.isPending}
+              onClick={() => fileInput.current?.click()}
+            >
+              <Upload className="h-3.5 w-3.5" />
+              {importFile.isPending ? 'Reading…' : 'Import from file'}
+            </button>
+            <a
+              className="btn-secondary btn-sm"
+              href={`/api${api.steps.proformaExportUrl(orderId)}`}
+              title={invoice ? undefined : 'Save the invoice first'}
+              aria-disabled={!invoice}
+              onClick={(e) => { if (!invoice) e.preventDefault(); }}
+            >
+              <Download className="h-3.5 w-3.5" /> Export
+            </a>
             <button
               className="btn-primary btn-sm"
               disabled={sent || !invoice || invoice.lines.length === 0}
