@@ -13,8 +13,6 @@ import {
 } from '@opsflow/shared';
 import { AlertTriangle, ArrowRight, Package, Scissors, Boxes, ShieldCheck } from 'lucide-react';
 import { Card, CardHeader, ProgressBar, StageDot, Num, FreeText, clsx } from '../../components/ui';
-import { OrderAssignments } from '../../components/OrderAssignments';
-import { useAuth } from '../../lib/auth';
 
 export function OverviewTab({
   order, onJump,
@@ -22,7 +20,6 @@ export function OverviewTab({
   order: OrderDetailDto;
   onJump: (tab: string) => void;
 }) {
-  const { can } = useAuth();
   const funnel = order.funnel;
   const qty = (l: string) => funnel.find((f) => f.ledger === l)?.qty ?? 0;
 
@@ -343,9 +340,6 @@ export function OverviewTab({
           </div>
         </Card>
       )}
-      {/* Access, last: it is administration of the order rather than its work. */}
-      <OrderAssignments orderId={order.id} canAssign={can('order:assign')} />
-
     </div>
   );
 }

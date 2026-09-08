@@ -187,6 +187,10 @@ export const ORDER_TAB_KEYS = [
   'production', 'quality', 'packing', 'stock', 'followup',
   'shipping', 'costing', 'documents', 'activity',
   'database', 'progress', 'audit', 'invoice',
+  // Who may open this order. Not a step of the work — no ORDER_STEPS entry
+  // points at it — but a tab of its own, because deciding who has access is
+  // not something to go hunting for at the foot of another screen.
+  'access',
 ] as const;
 export type OrderTabKey = (typeof ORDER_TAB_KEYS)[number];
 
