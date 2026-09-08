@@ -41,6 +41,14 @@ export interface RequestContext {
    * that creates two hundred rows should not fire two hundred notifications.
    */
   suppressChangeEvents: boolean;
+  /**
+   * Who is asking, for the order-access filter.
+   *
+   * Null means the system rather than a person — the alert sweep, the seed, a
+   * job — and those are not filtered. Kept here rather than read from Express
+   * because the filter runs inside Prisma middleware, which has no request.
+   */
+  accessActor: { id: string; isSuperAdmin: boolean; permissions: readonly string[] } | null;
 }
 
 const storage = new AsyncLocalStorage<RequestContext>();
@@ -74,6 +82,13 @@ function newContext(req?: Request): RequestContext {
     requestId: (req?.headers['x-request-id'] as string) || crypto.randomUUID(),
     changes: [],
     suppressChangeEvents: false,
+    accessActor: req?.user
+      ? {
+          id: req.user.id,
+          isSuperAdmin: req.user.isSuperAdmin,
+          permissions: req.user.permissions,
+        }
+      : null,
   };
 }
 

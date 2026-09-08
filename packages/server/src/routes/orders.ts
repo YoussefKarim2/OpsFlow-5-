@@ -232,6 +232,97 @@ ordersRouter.post('/', requirePermission('order:create'), asyncHandler(async (re
 
 const updateSchema = createSchema.partial().omit({ poNumber: true, colors: true, sizes: true, quantities: true });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Who may work on this order
+//
+// Behind `order:assign`, which only the super administrators and the Lead
+// Coordinator hold. Deliberately not `order:edit`: changing an order's contents
+// and changing who can see it are different powers, and a coordinator who owns
+// an order should be able to do the first without the second.
+// ─────────────────────────────────────────────────────────────────────────────
+
+ordersRouter.get('/:id/assignments', requirePermission('order:read'), asyncHandler(async (req, res) => {
+  const order = await prisma.order.findFirst({
+    where: { OR: [{ id: req.params.id }, { poNumber: req.params.id }] },
+    select: { id: true },
+  });
+  if (!order) throw new NotFoundError('Order');
+
+  const rows = await prisma.orderAssignment.findMany({
+    where: { orderId: order.id },
+    include: {
+      user: { select: { id: true, name: true, email: true, department: true, active: true } },
+      assignedBy: { select: { name: true } },
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  res.json({
+    data: rows.map((r) => ({
+      id: r.id,
+      user: r.user,
+      assignedByName: r.assignedBy?.name ?? null,
+      createdAt: r.createdAt.toISOString(),
+    })),
+  });
+}));
+
+ordersRouter.put('/:id/assignments', requirePermission('order:assign'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const userIds = z.array(z.string()).parse(req.body.userIds);
+
+  const order = await prisma.order.findFirst({
+    where: { OR: [{ id: req.params.id }, { poNumber: req.params.id }] },
+    select: { id: true, poNumber: true },
+  });
+  if (!order) throw new NotFoundError('Order');
+
+  const wanted = [...new Set(userIds)];
+  const users = await prisma.user.findMany({
+    where: { id: { in: wanted }, active: true },
+    select: { id: true, name: true },
+  });
+  if (users.length !== wanted.length) {
+    throw new ValidationError('One of those accounts no longer exists or has been disabled.');
+  }
+
+  const existing = await prisma.orderAssignment.findMany({
+    where: { orderId: order.id }, select: { userId: true },
+  });
+  const before = new Set(existing.map((e) => e.userId));
+  const added = wanted.filter((id) => !before.has(id));
+  const removed = [...before].filter((id) => !wanted.includes(id));
+
+  await prisma.$transaction(async (tx) => {
+    if (removed.length > 0) {
+      await tx.orderAssignment.deleteMany({ where: { orderId: order.id, userId: { in: removed } } });
+    }
+    if (added.length > 0) {
+      await tx.orderAssignment.createMany({
+        data: added.map((userId) => ({ orderId: order.id, userId, assignedById: actor.id })),
+        skipDuplicates: true,
+      });
+    }
+  });
+
+  // Worth recording in words: this is the difference between somebody being
+  // able to open an order and not, and "who took my access away" is a question
+  // that gets asked.
+  if (added.length > 0 || removed.length > 0) {
+    const name = (id: string) => users.find((u) => u.id === id)?.name ?? id;
+    await logActivity({
+      orderId: order.id, actorId: actor.id, actorName: actor.name,
+      action: 'ORDER_ASSIGNMENTS_CHANGED',
+      summary: `changed who may work on PO ${order.poNumber}`
+        + (added.length > 0 ? ` — added ${added.map(name).join(', ')}` : '')
+        + (removed.length > 0 ? ` — removed ${removed.length}` : ''),
+      entityType: 'Order', entityId: order.id,
+    });
+  }
+
+  res.json({ ok: true, assigned: wanted.length, added: added.length, removed: removed.length });
+}));
+
 ordersRouter.patch('/:id', requirePermission('order:edit'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   const input = updateSchema.parse(req.body);

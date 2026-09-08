@@ -656,6 +656,18 @@ export const api = {
   },
 
   orders: {
+    assignments: (orderId: string) => get<{
+      data: Array<{
+        id: string;
+        user: { id: string; name: string; email: string; department: string; active: boolean };
+        assignedByName: string | null;
+        createdAt: string;
+      }>;
+    }>(`/orders/${orderId}/assignments`),
+    saveAssignments: (orderId: string, userIds: string[]) =>
+      put<{ ok: true; assigned: number; added: number; removed: number }>(
+        `/orders/${orderId}/assignments`, { userIds },
+      ),
     list: (filters: Record<string, unknown> = {}) => get<Paginated<OrderSummaryDto>>(`/orders${qs(filters)}`),
     search: (q: string) => get<{ data: OrderSummaryDto[] }>(`/orders/search${qs({ q })}`),
     get: (id: string) => get<OrderDetailDto>(`/orders/${id}`),
