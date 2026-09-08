@@ -202,7 +202,9 @@ describe('reading the data out of a PDF', () => {
     assert.equal(result.matrices[0]!.computedTotal, 90);
   });
 
-  test('a table whose rows cannot be read says so rather than reporting success', async () => {
+  test('headings with nothing under them are not reported as a successful read', async () => {
+    // One line is not a table. Whatever it is called, the result must carry an
+    // explanation rather than an empty success.
     const result = await extractFromPdf(Buffer.alloc(0), {
       reader: async () => [{
         pageNumber: 1,
@@ -210,6 +212,89 @@ describe('reading the data out of a PDF', () => {
       }],
     });
     assert.equal(result.matrices.length, 0);
-    assert.ok(result.issues.some((i) => /no rows could be read/i.test(i.message)));
+    assert.ok(result.issues.some((i) => i.level === 'ERROR'), 'must explain itself');
+  });
+});
+
+/**
+ * A real customer purchase order, positioned as it appears on the page.
+ *
+ * Meyba's UFEC order, which the first version of this extractor could not read
+ * at all: it reported that no column looked like a colour, a size or a quantity
+ * and returned nothing. Three separate causes, each worth a test of its own —
+ * the sizes are the column headings rather than a column, the colour sits in
+ * front of the grid with no heading, and the order-information line above the
+ * table matched more concepts than the table's own header did.
+ */
+describe('a wide size grid, as customers actually send them', () => {
+  const at2 = (t: string, x: number, y: number) => at(t, x, y, t.length * 5);
+
+  const meyba = [
+    at2('PURCHASE ORDER', 30, 780),
+    at2('Order number:', 30, 750), at2('178', 170, 750),
+    at2('Date:', 290, 750), at2('04-06-2026', 460, 750),
+    at2('Sales order:', 640, 750), at2('817', 790, 750),
+    at2('Reference:', 930, 750), at2('UFEC bespoke jersey 2026', 1070, 750),
+    at2('UFEC 2026 S/S Jersey (UFEC01010)', 30, 700),
+    at2('Season:', 30, 680), at2('26/27', 400, 680), at2('Brand:', 840, 680), at2('MEYBA', 1030, 680),
+    at2('XS', 320, 650), at2('S', 435, 650), at2('M', 520, 650), at2('L', 645, 650),
+    at2('XL', 750, 650), at2('XXL', 855, 650), at2('XXXL', 965, 650),
+    at2('Quantity', 1075, 650), at2('Price', 1140, 650), at2('Total', 1200, 650),
+    at2('Yellow/Red', 155, 620), at2('056', 245, 620),
+    at2('10', 320, 620), at2('30', 435, 620), at2('80', 520, 620), at2('100', 645, 620),
+    at2('57', 750, 620), at2('20', 855, 620), at2('3', 965, 620),
+    at2('300', 1075, 620), at2('0,00', 1140, 620), at2('0,00', 1200, 620),
+    at2('Total', 155, 585),
+    at2('10', 320, 585), at2('30', 435, 585), at2('80', 520, 585), at2('100', 645, 585),
+    at2('57', 750, 585), at2('20', 855, 585), at2('3', 965, 585), at2('300', 1075, 585),
+  ];
+
+  const read = () => extractFromPdf(Buffer.alloc(0), {
+    reader: async () => [{ pageNumber: 1, items: meyba }],
+  });
+
+  test('the grid is read, with every size and the right total', async () => {
+    const r = await read();
+    assert.equal(r.matrices.length, 1);
+    const m = r.matrices[0]!;
+    assert.deepEqual(m.sizes, ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL']);
+    assert.deepEqual(m.rows[0]!.cells, { XS: 10, S: 30, M: 80, L: 100, XL: 57, XXL: 20, XXXL: 3 });
+    // The document states 300 itself, so this is checkable against the paper.
+    assert.equal(m.computedTotal, 300);
+  });
+
+  test('the colour is found although its column has no heading', async () => {
+    const r = await read();
+    assert.equal(r.matrices[0]!.rows[0]!.color, 'Yellow/Red');
+  });
+
+  test("the sheet's own Total row is not imported as a colour", async () => {
+    // It has a value in every size column and would otherwise double the order.
+    const r = await read();
+    assert.equal(r.matrices[0]!.rows.length, 1);
+  });
+
+  test('the order information above the table is read as fields', async () => {
+    const r = await read();
+    assert.equal(r.fields.PO_NUMBER, '178');
+    assert.equal(r.fields.ORDER_DATE, '04-06-2026');
+    assert.equal(r.fields.SEASON, '26/27');
+  });
+
+  test('a wide grid reports no missing colour, size or quantity column', async () => {
+    // It legitimately has none — that is what "wide" means — and saying so sends
+    // the user to fix something that is not broken.
+    const r = await read();
+    assert.deepEqual(r.issues, []);
+  });
+
+  test('a European decimal is read as a number, not discarded', async () => {
+    // "0,00" is a price of zero, and reading it as NaN would lose the column.
+    const { toNum } = await import('./pdf-extractor.js');
+    assert.equal(toNum('0,00'), 0);
+    assert.equal(toNum('1.234,56'), 1234.56);
+    assert.equal(toNum('1,234.56'), 1234.56);
+    assert.equal(toNum('300'), 300);
+    assert.equal(toNum('TBC'), null);
   });
 });
