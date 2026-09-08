@@ -48,7 +48,7 @@ const NAV: Array<{
   { to: '/clients',     label: 'Clients',        icon: Users,           group: 'Business' },
   { to: '/factories',   label: 'Factories',      icon: Building2,       group: 'Business' },
   { to: '/reports',     label: 'Reports',        icon: BarChart3,       group: 'Business', requires: 'report:read' },
-  { to: '/import',      label: 'Excel Import',   icon: Upload,          group: 'Business', requires: 'import:run' },
+  { to: '/import',      label: 'Import Document', icon: Upload,          group: 'Business', requires: 'import:run' },
 
   { to: '/admin/users', label: 'Users',          icon: UserCog,         group: 'Administration', requires: 'user:manage' },
   { to: '/admin/audit', label: 'Audit Log',      icon: ScrollText,      group: 'Administration', requires: 'audit:read' },

@@ -177,15 +177,30 @@ export async function extractFromPdf(
   const pages = await (options.reader ?? readPdf)(buffer);
 
   const totalItems = pages.reduce((a, p) => a + p.items.length, 0);
+
+  // ── The OCR seam ────────────────────────────────────────────────────────
+  //
+  // A page with no text layer is a raster — a scan or a photograph. Recovering
+  // its words needs OCR, which is not installed: see the note in the README for
+  // the measured cost and why it is a deployment decision rather than a code
+  // one. When it is added, it belongs exactly here, producing `TextItem`s with
+  // positions so that everything below — the line grouping, the column
+  // splitting, the synonym scoring, the review screen — is reached unchanged.
+  //
+  // Deliberately not stubbed with a fake extractor. A seam that silently
+  // returns nothing is indistinguishable from OCR that ran and found nothing,
+  // and the difference is the whole point of the message below.
   if (totalItems === 0) {
     // Almost always a scan. Said plainly, because "no orders found" would send
     // somebody looking for a problem in the wrong place.
     issues.push({
       level: 'ERROR', field: null, sheet: null, cell: null,
       message:
-        'This PDF has no text in it — it is most likely a scan or a photograph. ' +
-        'Nothing can be read from it automatically. Enter the order by hand, or ' +
-        'ask the customer for the original file.',
+        'This PDF has no text layer — it is a scan or a photograph rather than a ' +
+        'generated document, so there are no words in it to read. Reading it needs ' +
+        'OCR, which is not installed yet. For now: ask the customer for the original ' +
+        'file (a PDF exported from Excel or Word carries its text), or enter the ' +
+        'order by hand. Nothing was imported.',
     });
     return emptyResult(issues, pages);
   }

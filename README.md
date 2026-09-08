@@ -291,6 +291,63 @@ Two settings adjust this without a deploy:
 
 ---
 
+## Importing documents
+
+One pipeline, several ways in and several targets:
+
+```
+upload → detectFileKind → extractor → ExtractionResult → target mapping → review → commit
+                              │                              │
+                    xlsx / xlsm / csv                  customer PO
+                    text-based pdf                     proforma invoice
+```
+
+`ExtractionResult` is the seam. Everything downstream of it — concept
+recognition, confidence scoring, the review screen, the transactional commit —
+is reached identically whether the document was a workbook, a CSV or a PDF, and
+adding a reader or a target does not touch the other.
+
+The profile-based reader for the AGE workbook is unchanged and still tried
+first: it reads the BOM, the lay plan and the costing, which the generic reader
+cannot infer from a flat table. The universal importer supplements it.
+
+**Formats read today:** `.xlsx`, `.xlsm`, `.csv`, and PDFs that carry a text
+layer. `.xls` (the pre-2007 binary format) and `.ods` are detected and refused
+with the instruction that fixes them, because a parse error that reads like a
+bug is worse than an explanation.
+
+### OCR for scanned PDFs — measured, not yet installed
+
+A scanned or photographed PDF has no text layer. Reading one needs OCR, which is
+a deployment decision rather than a code one, so the numbers were measured
+rather than guessed:
+
+| | Installed size |
+|---|---|
+| `tesseract.js` | 1.6 MB |
+| `tesseract.js-core` (WASM) | 29 MB |
+| `eng.traineddata` | ~15 MB, **downloaded from a CDN on first use** unless vendored |
+| `@napi-rs/canvas`, if pages must be rasterised | ~26 MB per platform |
+
+The recommended shape avoids the canvas entirely: most scanned PDFs are one
+full-page image per page, so the embedded image can be pulled straight out of
+the PDF with the `pdfjs-dist` already installed and handed to Tesseract. That is
+roughly **+46 MB** installed, against ~395 MB today.
+
+Size is not the blocker. Memory is: a 300 DPI A4 page is a ~35 MB raster before
+Tesseract's own working set, and a single OCR job realistically peaks at
+**300–600 MB**. This project deploys on a Railway **trial** plan, where that is
+likely to exhaust the container mid-request and take the API down with it —
+which is a worse outcome than declining to read the file.
+
+So OCR is **not installed**, and the seam for it is marked in
+`pdf-extractor.ts`. It becomes straightforward once the service has headroom;
+the honest prerequisite is a paid plan with a known memory limit, and running
+OCR outside the request path so a large document cannot take the API with it.
+
+Until then a scanned PDF is named as one, with what to do about it, and nothing
+is imported.
+
 ## Layout
 
 ### Where things are

@@ -95,6 +95,9 @@ describe('extraction as a whole', () => {
       assert.equal(result.issues.length, 1);
       assert.equal(result.issues[0]!.level, 'ERROR');
       assert.match(result.issues[0]!.message, /scan or a photograph/);
+      // Names OCR as the missing capability rather than implying the file is bad.
+      assert.match(result.issues[0]!.message, /OCR/);
+      assert.match(result.issues[0]!.message, /Nothing was imported/);
       assert.equal(result.confidence, 0);
     });
   });

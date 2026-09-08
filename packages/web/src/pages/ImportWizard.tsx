@@ -270,7 +270,7 @@ function UploadStep({
           ) : (
             <>
               <Upload className="mb-3 h-8 w-8 text-ink-400" />
-              <p className="text-sm font-medium text-ink-800">Drop an Excel file here</p>
+              <p className="text-sm font-medium text-ink-800">Drop a spreadsheet or PDF here</p>
               <p className="mt-1 text-xs text-ink-500">or</p>
               <button className="btn-secondary btn-sm mt-2" onClick={() => inputRef.current?.click()}>
                 Browse files
@@ -278,13 +278,15 @@ function UploadStep({
               <input
                 ref={inputRef}
                 type="file"
-                accept=".xlsx,.xlsm"
+                accept=".xlsx,.xlsm,.xls,.csv,.ods,.pdf"
                 className="hidden"
                 onChange={(e) => handle(e.target.files?.[0])}
               />
               <p className="mt-4 max-w-md text-2xs text-ink-400">
-                .xlsx or .xlsm, up to 25 MB. Any layout — the importer reads the AGE workbook by its
-                sheet names, and anything else by working out what its columns mean.
+                .xlsx, .xlsm, .csv or a text-based .pdf, up to 25 MB. Any layout — the importer
+                reads the AGE workbook by its sheet names, and anything else by working out what its
+                columns mean. An older .xls or an .ods needs saving as .xlsx first; a scanned PDF
+                cannot be read yet and will say so rather than importing nothing.
               </p>
             </>
           )}
