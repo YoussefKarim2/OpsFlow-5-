@@ -19,7 +19,7 @@ import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Lock } from 'lucide-react';
 import { api } from '../lib/api';
-import { Num, ErrorNote, clsx } from './ui';
+import { Num, ErrorNote, Field, clsx } from './ui';
 
 export interface ExternalOpRow {
   id?: string;
@@ -40,8 +40,10 @@ export interface ExternalOpRow {
 const EDITABLE = new Set(['NOT_SENT', 'WAITING_APPROVAL']);
 const isLocked = (r: ExternalOpRow) => !!r.status && !EDITABLE.has(r.status);
 
-const blank = (): ExternalOpRow => ({
+const blank = (d: { factoryId: string; returnDate: string }): ExternalOpRow => ({
   operationType: '', qty: 0, unitPriceUsd: null, requiresApproval: false,
+  externalFactoryId: d.factoryId || null,
+  expectedReturnDate: d.returnDate || null,
 });
 
 export function ExternalWorkEditor({
@@ -56,6 +58,18 @@ export function ExternalWorkEditor({
 }) {
   const qc = useQueryClient();
   const [rows, setRows] = useState<ExternalOpRow[]>(initial);
+
+  /**
+   * Values a new row starts with.
+   *
+   * The proforma's header block sets things that belong to the document rather
+   * than to any one line — the consignee, the currency, where it ships from.
+   * External work has no document header, but it has the same repetition: five
+   * printing runs go to one factory and come back on one date, and typing that
+   * five times is the tedium this removes. Setting them changes what the *next*
+   * row starts with and never rewrites a row already entered.
+   */
+  const [defaults, setDefaults] = useState({ factoryId: '', returnDate: '' });
 
   const save = useMutation({
     mutationFn: () => api.external.saveOperations(orderId, rows.map((r) => ({
@@ -89,7 +103,7 @@ export function ExternalWorkEditor({
       <div className="flex items-center justify-between">
         <span className="label mb-0">Operations</span>
         <div className="flex items-center gap-2">
-          <button type="button" className="btn-ghost btn-sm" onClick={() => setRows([...rows, blank()])}>
+          <button type="button" className="btn-ghost btn-sm" onClick={() => setRows([...rows, blank(defaults)])}>
             <Plus className="h-3.5 w-3.5" /> Add an operation
           </button>
           <button
@@ -106,6 +120,35 @@ export function ExternalWorkEditor({
 
       {save.error ? <ErrorNote error={save.error} /> : null}
 
+      {/* The header block, in the shape the proforma uses: labelled fields with
+          hints, above the line table. */}
+      <div className="grid grid-cols-1 gap-3 rounded-md border border-ink-200 bg-ink-50/60 p-3 sm:grid-cols-3">
+        <Field label="Factory" hint="Applied to each new operation you add below.">
+          <select
+            className="input"
+            value={defaults.factoryId}
+            onChange={(e) => setDefaults({ ...defaults, factoryId: e.target.value })}
+          >
+            <option value="">Choose when adding</option>
+            {factories.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+          </select>
+        </Field>
+        <Field label="Expected back" hint="The date work sent today should return.">
+          <input
+            type="date"
+            className="input"
+            value={defaults.returnDate}
+            onChange={(e) => setDefaults({ ...defaults, returnDate: e.target.value })}
+          />
+        </Field>
+        <Field label="Booked so far" hint="Across every operation on this order.">
+          <p className="input flex items-center border-transparent bg-transparent font-semibold">
+            <Num value={rows.reduce((a, r) => a + r.qty, 0) || null} places={0} />
+            <span className="ml-1 text-xs font-normal text-ink-500">pcs</span>
+          </p>
+        </Field>
+      </div>
+
       <div className="overflow-x-auto">
         <table className="w-full border border-ink-200">
           <thead className="border-b border-ink-200 bg-ink-50">
@@ -118,13 +161,14 @@ export function ExternalWorkEditor({
               <th className="th w-28 text-right">Total</th>
               <th className="th w-36">Expected back</th>
               <th className="th w-24">Approval</th>
+              <th className="th w-40">Notes</th>
               <th className="th w-10" />
             </tr>
           </thead>
           <tbody className="divide-y divide-ink-100">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={9} className="td py-6 text-center text-ink-500">
+                <td colSpan={10} className="td py-6 text-center text-ink-500">
                   No outside work booked. Add an operation, or import a document that carries them.
                 </td>
               </tr>
@@ -181,6 +225,13 @@ export function ExternalWorkEditor({
                       title="Customer approval needed before this can be sent"
                       onChange={(e) => set(i, { requiresApproval: e.target.checked })} />
                   </td>
+                  <td className="p-1">
+                    <input
+                      className="input border-transparent bg-transparent" disabled={locked}
+                      value={r.notes ?? ''} placeholder="Anything the factory must know"
+                      onChange={(e) => set(i, { notes: e.target.value || null })}
+                    />
+                  </td>
                   <td className="p-1 text-right">
                     {locked ? (
                       <span title={`Already ${r.status?.toLowerCase().replace(/_/g, ' ')} — record what happened instead`}>
@@ -204,7 +255,7 @@ export function ExternalWorkEditor({
                 <td className="td tnum text-right font-semibold">
                   <Num value={total || null} kind="money" places={2} />
                 </td>
-                <td colSpan={3} />
+                <td colSpan={4} />
               </tr>
             </tfoot>
           ) : null}

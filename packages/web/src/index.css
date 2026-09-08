@@ -77,3 +77,71 @@
 ::-webkit-scrollbar-track { @apply bg-ink-100; }
 ::-webkit-scrollbar-thumb { @apply rounded-full bg-ink-300; }
 ::-webkit-scrollbar-thumb:hover { @apply bg-ink-400; }
+
+/* ───────────────────────────────────────────────────────────────────────────
+ * Printing
+ *
+ * A printed document is not a screenshot of the application. Everything that
+ * exists to *operate* the app — the sidebar, the tab strips, the buttons, the
+ * inputs a person types into — is furniture, and none of it belongs on a page
+ * sent to a customer.
+ *
+ * Done by hiding the app shell rather than by opening a new window: the data is
+ * already loaded and already correct on the page the user is looking at, and a
+ * second route would mean fetching it again and keeping two renderings of the
+ * same invoice in step forever.
+ *
+ * `.print-document` is the opt-in. Only a screen that has laid out something
+ * worth printing shows one, and only that element survives.
+ * ─────────────────────────────────────────────────────────────────────────── */
+@media print {
+  /* Never printed, wherever it appears. */
+  aside,
+  nav,
+  .no-print {
+    display: none !important;
+  }
+
+  /* The screen version of whatever is being printed, replaced by .print-document. */
+  .screen-only { display: none !important; }
+
+  /* Hidden on screen, shown on paper. */
+  .print-only { display: block !important; }
+
+  html, body, #root {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  /* Scroll containers become full-height on paper or they clip their contents. */
+  .overflow-y-auto,
+  .overflow-x-auto,
+  .overflow-auto,
+  .overflow-hidden {
+    overflow: visible !important;
+    max-height: none !important;
+  }
+
+  .print-document {
+    margin: 0;
+    padding: 0;
+    color: #000;
+    font-size: 11pt;
+  }
+
+  /* A table split mid-row across a page break is unreadable. */
+  .print-document tr,
+  .print-document thead { break-inside: avoid; }
+  .print-document thead { display: table-header-group; }
+
+  /* Tailwind's colour utilities mostly survive; borders sometimes do not. */
+  .print-document table,
+  .print-document th,
+  .print-document td { border-color: #9ca3af !important; }
+
+  @page { margin: 14mm; }
+}
+
+/* On screen the print-only document stays out of the way entirely. */
+.print-only { display: none; }

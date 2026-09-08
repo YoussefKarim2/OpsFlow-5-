@@ -19,8 +19,9 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
+import { ProformaPrintView } from '../../components/ProformaPrintView';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Send, Lock, Upload, Download, Info } from 'lucide-react';
+import { Plus, Trash2, Send, Lock, Upload, Download, Info, Printer } from 'lucide-react';
 import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
 import { api, type ProformaDto } from '../../lib/api';
 import {
@@ -244,6 +245,38 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
 
   return (
     <div className="space-y-4 p-5">
+      {/* The document. Hidden on screen; the print stylesheet hides the
+          application and shows this instead. Fed from `draft`, so what prints
+          is exactly what is on screen — including edits not yet saved, which is
+          what somebody pressing Print while looking at a figure expects. */}
+      <ProformaPrintView
+        invoice={{
+          number: draft.number || null,
+          date: draft.date || null,
+          consignee: draft.consignee || null,
+          billingAddress: draft.billingAddress || null,
+          email: draft.email || null,
+          shipmentFrom: draft.shipmentFrom || null,
+          shipmentTo: draft.shipmentTo || null,
+          vesselVoyage: draft.vesselVoyage || null,
+          containerSeal: draft.containerSeal || null,
+          shippingDate: draft.shippingDate || null,
+          consolidatingVendor: draft.consolidatingVendor || null,
+          currency: draft.currency || 'USD',
+          terms: draft.terms || null,
+          lines: draft.lines.map((l) => ({
+            description: l.description,
+            quantity: l.quantity === '' ? null : Number(l.quantity),
+            unit: l.unit,
+            unitPrice: l.unitPrice === '' ? null : Number(l.unitPrice),
+          })),
+          sentAt: invoice?.sentAt ?? null,
+        }}
+        poNumber={order.poNumber}
+        orderName={order.orderName}
+      />
+
+      <div className="screen-only space-y-4">
       {sent && (
         <div className="flex items-start gap-2 rounded-md border border-ink-300 bg-ink-100 px-4 py-3">
           <Lock className="mt-0.5 h-4 w-4 shrink-0 text-ink-500" />
@@ -319,8 +352,16 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
               aria-disabled={!invoice}
               onClick={(e) => { if (!invoice) e.preventDefault(); }}
             >
-              <Download className="h-3.5 w-3.5" /> Export
+              <Download className="h-3.5 w-3.5" /> Export Excel
             </a>
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              title="Opens the browser print dialog — choose 'Save as PDF' there"
+              onClick={() => window.print()}
+            >
+              <Printer className="h-3.5 w-3.5" /> Print / PDF
+            </button>
             <button
               className="btn-primary btn-sm"
               disabled={sent || !invoice || invoice.lines.length === 0}
@@ -512,6 +553,7 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
           </>
         }
       />
+      </div>
     </div>
   );
 }
