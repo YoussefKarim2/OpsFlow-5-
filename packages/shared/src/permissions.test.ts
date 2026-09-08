@@ -307,3 +307,37 @@ describe('lead coordinator', () => {
     assert.ok(!ROLE_PERMISSIONS.EXTERNAL_OPS.includes('import:laying'));
   });
 });
+
+/**
+ * A coordinator owns the order end to end.
+ *
+ * The role's comment states its exclusions by name — issuing material and
+ * signing off quality, which belong to the departments accountable for them.
+ * Anything else an order needs, the person who owns it must be able to do, and
+ * production recording had silently fallen outside that: step 13 of the flow
+ * answered 403 for the role most of the factory holds.
+ */
+describe('what a coordinator may do', () => {
+  const has = (p: Permission) => ROLE_PERMISSIONS.COORDINATOR.includes(p);
+
+  test('can record production', () => {
+    assert.ok(has('production:write'));
+  });
+
+  test('still cannot issue material or sign off quality', () => {
+    // The two named exclusions. Widening the role must not quietly take them.
+    assert.ok(!has('material:issue'));
+    assert.ok(!has('quality:audit'));
+  });
+
+  test('still cannot write cutting data', () => {
+    // Separated deliberately when the laying import was split out.
+    assert.ok(!has('cutting:write'));
+  });
+
+  test('still administers nothing', () => {
+    for (const p of SYSTEM_ADMIN_PERMISSIONS) {
+      assert.ok(!has(p), `COORDINATOR must not hold ${p}`);
+    }
+  });
+});

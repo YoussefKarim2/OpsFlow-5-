@@ -108,6 +108,12 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
     'order:create', 'order:edit',
     'task:assign', 'task:complete',
     'material:edit',
+    // Recording what came off the line. The exclusions above are deliberate and
+    // named — issuing material and signing off quality stay with the
+    // departments accountable for them — and production was never one of them.
+    // Its absence was an oversight, and it left the coordinator who owns an
+    // order unable to record its production at all.
+    'production:write',
     'external:write',
     'approval:request', 'approval:record',
     'packing:write', 'packing:approve',
