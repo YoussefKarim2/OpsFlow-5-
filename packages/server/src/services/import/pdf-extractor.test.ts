@@ -298,3 +298,89 @@ describe('a wide size grid, as customers actually send them', () => {
     assert.equal(toNum('TBC'), null);
   });
 });
+
+/**
+ * Everything the purchase order states, not only what it labels.
+ *
+ * The complaint that produced these tests was that the PO number, date and
+ * customer "were not read" — and two different things were true. The number and
+ * date *were* extracted and then never shown, because the review screen renders
+ * mappings and scalar fields produced none. The customer genuinely was not read:
+ * a PO prints the buyer in a letterhead block, not as "Customer:".
+ */
+describe('reading a purchase order in full', () => {
+  const at2 = (t: string, x: number, y: number) => at(t, x, y, t.length * 5);
+
+  const items = [
+    at2('Age (Soccertex) Al Shimaa Garment And Embroidery', 360, 700),
+    at2('Street 5-Nasr City', 360, 688), at2('. Cairo', 360, 664), at2('Egypt', 360, 652),
+    at2('Delivery address', 845, 700), at2('United Kingdom', 845, 676),
+    at2('Meyba International SL B.V', 1120, 712), at2('Piekstraat 71', 1180, 700),
+    at2('3071 EL Rotterdam', 1160, 688), at2('Netherlands', 1200, 676),
+    at2('PURCHASE ORDER', 30, 560),
+    at2('Order number:', 30, 530), at2('178', 170, 530),
+    at2('Date:', 290, 530), at2('04-06-2026', 460, 530),
+    at2('Reference:', 930, 530), at2('UFEC bespoke jersey 2026', 1070, 530),
+    at2('Tariff No.:', 30, 505), at2('6109902000', 400, 505),
+    at2('UFEC 2026 S/S Jersey (UFEC01010)', 30, 440),
+    at2('Season:', 30, 420), at2('26/27', 400, 420),
+    at2('XS', 320, 380), at2('S', 435, 380), at2('M', 520, 380), at2('L', 645, 380),
+    at2('XL', 750, 380), at2('XXL', 855, 380), at2('XXXL', 965, 380),
+    at2('Quantity', 1075, 380), at2('Price', 1140, 380), at2('Total', 1200, 380),
+    at2('Yellow/Red', 155, 350), at2('056', 245, 350),
+    at2('10', 320, 350), at2('30', 435, 350), at2('80', 520, 350), at2('100', 645, 350),
+    at2('57', 750, 350), at2('20', 855, 350), at2('3', 965, 350),
+    at2('300', 1075, 350), at2('0,00', 1140, 350), at2('0,00', 1200, 350),
+  ];
+  const read = () => extractFromPdf(Buffer.alloc(0), {
+    reader: async () => [{ pageNumber: 1, items }],
+  });
+
+  test('the labelled details are read', async () => {
+    const r = await read();
+    assert.equal(r.fields.PO_NUMBER, '178');
+    assert.equal(r.fields.ORDER_DATE, '04-06-2026');
+    assert.equal(r.fields.SEASON, '26/27');
+    assert.equal(r.fields.CUSTOMER_REF, 'UFEC bespoke jersey 2026');
+  });
+
+  test('the customer is found in the letterhead, where nothing labels it', async () => {
+    const r = await read();
+    assert.equal(r.fields.CLIENT, 'Meyba International SL B.V');
+  });
+
+  test('the supplier is not mistaken for the customer', async () => {
+    // This document is addressed *to* the factory, so its own name appears
+    // first and is the one company on the page that must not be picked.
+    const r = await read();
+    assert.doesNotMatch(String(r.fields.CLIENT), /soccertex|shimaa/i);
+  });
+
+  test('the style heading gives the order name and the style number', async () => {
+    const r = await read();
+    assert.equal(r.fields.ORDER_NAME, 'UFEC 2026 S/S Jersey');
+    assert.equal(r.fields.STYLE, 'UFEC01010');
+  });
+
+  test('"Tariff No." is not read as a player number', async () => {
+    // It matches "no" loosely, and a single prose pair has no column of values
+    // to disprove the guess. The label must be a synonym, not resemble one.
+    const r = await read();
+    assert.equal(r.fields.PLAYER_NUMBER, undefined);
+  });
+
+  test('a street in the letterhead is not read as a destination', async () => {
+    const r = await read();
+    assert.notEqual(r.fields.DESTINATION, 'Piekstraat 71');
+  });
+
+  test('every field read is shown on the review screen with its value', async () => {
+    // The original complaint. A field extracted and not displayed is
+    // indistinguishable from one that was never read.
+    const r = await read();
+    const shown = new Map(r.mappings.filter((m) => m.sampleValue).map((m) => [m.field, m.sampleValue]));
+    for (const key of ['PO_NUMBER', 'ORDER_DATE', 'CLIENT', 'STYLE', 'SEASON']) {
+      assert.equal(shown.get(key), String(r.fields[key]), `${key} must appear for review`);
+    }
+  });
+});

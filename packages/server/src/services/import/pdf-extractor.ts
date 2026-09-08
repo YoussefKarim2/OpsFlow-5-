@@ -24,7 +24,7 @@
  */
 
 import {
-  ImportConcept, analyseColumns, assessMapping, normaliseHeader,
+  ImportConcept, analyseColumns, assessMapping, normaliseHeader, CONCEPT_META, CONCEPT_SYNONYMS,
   type ColumnAnalysis,
 } from '@opsflow/shared';
 import type { ImportIssue, ImportSheetInfo } from '@opsflow/shared';
@@ -506,10 +506,27 @@ export async function extractFromPdf(
   function readPair(label: string | undefined, value: string | undefined): void {
     const v = (value ?? '').trim();
     if (!v || !label?.trim()) return;
-    // A label reads as a label: it ends in a colon, or is short enough to be one.
-    if (!/:\s*$/.test(label) && label.trim().split(/\s+/).length > 4) return;
+
+    // Only a line that actually labels something. Without the colon a
+    // letterhead reads as pairs — "Piekstraat 71" became a destination — and a
+    // street address on the review screen is worse than a blank, because
+    // somebody has to notice it is wrong.
+    if (!/:\s*$/.test(label)) return;
+
     const [match] = analyseColumns([normaliseHeader(label)], [[v]], {},
       options.allowedConcepts ? new Set(options.allowedConcepts) : undefined);
+
+    // The label must *be* a synonym, not merely resemble one.
+    //
+    // A column of values corroborates a fuzzy header guess; a single prose pair
+    // has no such evidence, so a near-miss is all there is — which is how
+    // "Tariff No." became a player number, matching on "no". Requiring the exact
+    // phrase keeps "Order number:" (a listed PO-number synonym) and rejects the
+    // resemblance. Anything unrecognised is left for the review screen to ask
+    // about rather than filled in with something plausible and wrong.
+    if (!match?.concept) return;
+    const known = CONCEPT_SYNONYMS[match.concept] ?? [];
+    if (!known.includes(normaliseHeader(label).replace(/:\s*$/, '').trim())) return;
     // IGNORE is a real answer from the scorer — "recognised, and not wanted" —
     // and must not be stored as though it were a field.
     if (match?.concept && match.concept !== ImportConcept.IGNORE && fields[match.concept] == null) {
@@ -523,6 +540,42 @@ export async function extractFromPdf(
       || concept === ImportConcept.QUANTITY || concept === ImportConcept.IGNORE) continue;
     const values = new Set(dataRows.map((r) => (r[col] ?? '').trim()).filter(Boolean));
     if (values.size === 1 && fields[concept] == null) fields[concept] = [...values][0]!;
+  }
+
+  // ── Details nobody labelled ─────────────────────────────────────────────
+  //
+  // A purchase order does not write "Customer:" above the buyer's name; it
+  // prints the name in a letterhead block. Nor does it label the style — it
+  // sets it as a heading above the table. Both are stated plainly on the page
+  // and neither is a "Label: value" pair, so reading only pairs misses exactly
+  // the fields a person would say are obviously there.
+  const flatLines = positioned.map((l) => l.map((c) => c.text).join(' ').trim()).filter(Boolean);
+
+  // A company is a line carrying a legal suffix. The supplier's own name is
+  // skipped: this document is addressed *to* the factory, so the first company
+  // on the page is usually us and the customer is the other one.
+  const COMPANY = /\b(b\.?v\.?|s\.?l\.?|ltd\.?|limited|gmbh|a\/s|inc\.?|llc|s\.?a\.?|plc|co\.?)\s*$/i;
+  const SELF = /soccertex|al\s*shimaa/i;
+  if (fields[ImportConcept.CLIENT] == null) {
+    const company = flatLines.find((l) => COMPANY.test(l) && !SELF.test(l) && l.length < 80);
+    if (company) fields[ImportConcept.CLIENT] = company;
+  }
+
+  // The style: the last non-pair, non-company line above the table. On this
+  // kind of document that is the product heading — "UFEC 2026 S/S Jersey
+  // (UFEC01010)" — and the code in brackets is the style number.
+  const bandStartLine = chosen?.band.start ?? flatLines.length;
+  for (let i = Math.min(bandStartLine, flatLines.length) - 1; i >= 0; i--) {
+    const line = flatLines[i]!;
+    if (!line || line.includes(':') || COMPANY.test(line) || SELF.test(line)) continue;
+    if (line.length < 4 || line.length > 90) continue;
+    if (/^[\d\s.,-]+$/.test(line)) continue;                 // a row of numbers
+    const bracketed = /\(([^)]{3,30})\)\s*$/.exec(line);
+    if (fields[ImportConcept.ORDER_NAME] == null) {
+      fields[ImportConcept.ORDER_NAME] = bracketed ? line.slice(0, bracketed.index).trim() : line;
+    }
+    if (bracketed && fields[ImportConcept.STYLE] == null) fields[ImportConcept.STYLE] = bracketed[1]!.trim();
+    break;
   }
 
   const isWide = matrices.length > 0 && sizeCols.length >= 2;
@@ -553,7 +606,33 @@ export async function extractFromPdf(
     });
   }
 
-  const mappings: ExtractionResult['mappings'] = header.analyses.map((a, i) => (
+  /**
+   * Everything read, as review rows.
+   *
+   * The review screen renders `mappings` and shows each one's `sampleValue`; a
+   * field that exists only in `fields` is extracted and then invisible, which
+   * is indistinguishable from not having been read. Every scalar therefore gets
+   * a row carrying the value that was found, so the screen can be checked
+   * against the document line by line.
+   */
+  const fieldMappings: ExtractionResult['mappings'] = Object.entries(fields)
+    .filter(([, v]) => v != null && String(v).trim() !== '')
+    .map(([concept, value]) => ({
+      field: concept,
+      label: CONCEPT_META[concept as ImportConcept]?.label ?? concept,
+      sheet: 'PDF',
+      anchor: null,
+      offset: null,
+      cell: 'read from the page',
+      sampleValue: String(value),
+      required: CONCEPT_META[concept as ImportConcept]?.essential ?? false,
+      resolved: true,
+      // Read from prose rather than from a labelled cell, so it is offered for
+      // confirmation rather than applied silently.
+      confidence: 'MEDIUM' as const,
+    }));
+
+  const columnMappings: ExtractionResult['mappings'] = header.analyses.map((a, i) => (
     isWide && gridIdx.has(i)
       ? {
           field: `size:${sizeCols.find((c) => c.index === i)?.name ?? ''}`,
@@ -568,14 +647,17 @@ export async function extractFromPdf(
     anchor: null,
     offset: null,
     cell: `column ${i + 1}`,
-    sampleValue: null,
     required: false,
     resolved: a.concept != null,
     // A PDF's geometry is recovered rather than read, so even a confident
     // column match is one inference further from the source than a spreadsheet
     // cell. MEDIUM at best, so the review screen always asks.
+    // The first value under the column, so the screen shows what was read.
+    sampleValue: dataAfterHeader.map((r) => r[i]).find((v) => v && v.trim() !== '') ?? null,
     confidence: a.concept != null ? 'MEDIUM' : 'NONE',
       }));
+
+  const mappings = [...fieldMappings, ...columnMappings];
 
   if (matrices.length === 0 && Object.keys(fields).length === 0) {
     issues.push({
