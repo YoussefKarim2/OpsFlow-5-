@@ -122,3 +122,94 @@ describe('extraction as a whole', () => {
     }
   });
 });
+
+/**
+ * Reading the rows, not just recognising the columns.
+ *
+ * The first version of this extractor found the header, scored the columns and
+ * returned none of the data — an extraction that reported what it *could* read
+ * and then didn't. These tests exist so that cannot come back.
+ */
+describe('reading the data out of a PDF', () => {
+  const row = (y: number, cells: Array<[number, string]>) =>
+    cells.map(([x, text]) => at(text, x, y, text.length * 5));
+
+  test('a colour/size/quantity table becomes a matrix', async () => {
+    const result = await extractFromPdf(Buffer.alloc(0), {
+      reader: async () => [{
+        pageNumber: 1,
+        items: [
+          ...row(700, [[50, 'Colour'], [200, 'Size'], [340, 'Quantity']]),
+          ...row(680, [[50, 'Red'], [200, 'S'], [340, '420']]),
+          ...row(660, [[50, 'Red'], [200, 'M'], [340, '610']]),
+          ...row(640, [[50, 'Navy'], [200, 'S'], [340, '150']]),
+        ],
+      }],
+    });
+    assert.equal(result.matrices.length, 1);
+    const m = result.matrices[0]!;
+    assert.equal(m.ledger, 'ORDER');
+    assert.deepEqual(m.sizes, ['S', 'M']);
+    assert.equal(m.rows.length, 2);                       // Red and Navy
+    assert.equal(m.rows.find((r) => r.color === 'Red')!.cells.M, 610);
+    assert.equal(m.computedTotal, 1180);                  // 420 + 610 + 150
+  });
+
+  test('the column order does not matter', async () => {
+    // Quantity first, then colour, then size — and different words for each.
+    const result = await extractFromPdf(Buffer.alloc(0), {
+      reader: async () => [{
+        pageNumber: 1,
+        items: [
+          ...row(700, [[50, 'Pieces'], [180, 'Shade'], [320, 'Sz']]),
+          ...row(680, [[50, '300'], [180, 'Sky Blue'], [320, 'XL']]),
+          ...row(660, [[50, '275'], [180, 'Scarlet'], [320, 'M']]),
+        ],
+      }],
+    });
+    assert.equal(result.matrices[0]?.rows.length, 2);
+    assert.equal(result.matrices[0]!.computedTotal, 575);
+  });
+
+  test('label-and-value lines above the table are read as fields', async () => {
+    const result = await extractFromPdf(Buffer.alloc(0), {
+      reader: async () => [{
+        pageNumber: 1,
+        items: [
+          ...row(760, [[50, 'PO Number:'], [220, 'HM-2026-8841']]),
+          ...row(740, [[50, 'Customer:'], [220, 'Hummel A/S']]),
+          ...row(700, [[50, 'Colour'], [200, 'Size'], [340, 'Quantity']]),
+          ...row(680, [[50, 'Red'], [200, 'S'], [340, '10']]),
+        ],
+      }],
+    });
+    assert.equal(result.fields.PO_NUMBER, 'HM-2026-8841');
+    assert.equal(result.fields.CLIENT, 'Hummel A/S');
+  });
+
+  test('rows with no quantity are skipped rather than imported as zero', async () => {
+    const result = await extractFromPdf(Buffer.alloc(0), {
+      reader: async () => [{
+        pageNumber: 1,
+        items: [
+          ...row(700, [[50, 'Colour'], [200, 'Size'], [340, 'Quantity']]),
+          ...row(680, [[50, 'Red'], [200, 'S'], [340, '0']]),
+          ...row(660, [[50, 'Red'], [200, 'M'], [340, 'TBC']]),
+          ...row(640, [[50, 'Red'], [200, 'L'], [340, '90']]),
+        ],
+      }],
+    });
+    assert.equal(result.matrices[0]!.computedTotal, 90);
+  });
+
+  test('a table whose rows cannot be read says so rather than reporting success', async () => {
+    const result = await extractFromPdf(Buffer.alloc(0), {
+      reader: async () => [{
+        pageNumber: 1,
+        items: row(700, [[50, 'Colour'], [200, 'Size'], [340, 'Quantity']]),
+      }],
+    });
+    assert.equal(result.matrices.length, 0);
+    assert.ok(result.issues.some((i) => /no rows could be read/i.test(i.message)));
+  });
+});

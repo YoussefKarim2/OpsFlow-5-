@@ -225,6 +225,72 @@ export async function extractFromPdf(
     return emptyResult(issues, pages);
   }
 
+  // ── The rows under the header ───────────────────────────────────────────
+  //
+  // Recognising the columns is only half of it; without this the extraction
+  // reported what it *could* read and returned none of it.
+  const conceptFor = new Map<number, ImportConcept>();
+  header.analyses.forEach((a, i) => { if (a.concept) conceptFor.set(i, a.concept); });
+
+  const colOf = (c: ImportConcept) => [...conceptFor].find(([, v]) => v === c)?.[0];
+  const iColor = colOf(ImportConcept.COLOR);
+  const iSize = colOf(ImportConcept.SIZE);
+  const iQty = colOf(ImportConcept.QUANTITY);
+
+  const dataRows = rows.slice(header.index + 1);
+
+  const matrices: ExtractionResult['matrices'] = [];
+  if (iColor != null && iSize != null && iQty != null) {
+    // A long table — one row per colour/size/quantity — folded into the same
+    // matrix shape the workbook readers produce.
+    const byColor = new Map<string, Record<string, number>>();
+    const sizes: string[] = [];
+    for (const row of dataRows) {
+      const color = (row[iColor] ?? '').trim();
+      const size = (row[iSize] ?? '').trim();
+      const qty = Number((row[iQty] ?? '').replace(/[^0-9.-]/g, ''));
+      if (!color || !size || !Number.isFinite(qty) || qty <= 0) continue;
+      if (!sizes.includes(size)) sizes.push(size);
+      const cells = byColor.get(color) ?? {};
+      cells[size] = (cells[size] ?? 0) + qty;
+      byColor.set(color, cells);
+    }
+    if (byColor.size > 0) {
+      const matrixRows = [...byColor].map(([color, cells]) => ({
+        color, cells, total: Object.values(cells).reduce((a, b) => a + b, 0),
+      }));
+      matrices.push({
+        ledger: 'ORDER', sizes, rows: matrixRows, sheetTotal: null,
+        computedTotal: matrixRows.reduce((a, r) => a + r.total, 0),
+      });
+    }
+  }
+
+  // ── Loose "Label: value" pairs ──────────────────────────────────────────
+  //
+  // A purchase order states its number, buyer and delivery date above the
+  // table rather than as columns, so the header rows are read the same way a
+  // labelled cell is: match the left side against the synonym table, take the
+  // right side as the value. Rows belonging to the table are skipped.
+  const fields: ExtractionResult['fields'] = {};
+  for (const [i, row] of rows.entries()) {
+    if (i >= header.index) continue;
+    if (row.length < 2) continue;
+    const [label, ...rest] = row;
+    const value = rest.join(' ').trim();
+    if (!value) continue;
+    const [match] = analyseColumns([normaliseHeader(label ?? '')], [[value]], {},
+      options.allowedConcepts ? new Set(options.allowedConcepts) : undefined);
+    if (match?.concept && fields[match.concept] == null) fields[match.concept] = value;
+  }
+  // A single-valued column — one unit price repeated down the table — is a
+  // document-level fact rather than a per-row one.
+  for (const [col, concept] of conceptFor) {
+    if (concept === ImportConcept.COLOR || concept === ImportConcept.SIZE || concept === ImportConcept.QUANTITY) continue;
+    const values = new Set(dataRows.map((r) => (r[col] ?? '').trim()).filter(Boolean));
+    if (values.size === 1 && fields[concept] == null) fields[concept] = [...values][0]!;
+  }
+
   const readiness = assessMapping(header.analyses);
   for (const concept of readiness.missing) {
     issues.push({
@@ -255,11 +321,22 @@ export async function extractFromPdf(
     confidence: a.concept != null ? 'MEDIUM' : 'NONE',
   }));
 
+  if (matrices.length === 0 && Object.keys(fields).length === 0) {
+    issues.push({
+      level: 'WARNING', field: null, sheet: 'PDF', cell: null,
+      message:
+        'A table was found but no rows could be read from it. Check the review screen — ' +
+        'the columns may need assigning by hand.',
+    });
+  }
+
   return {
     ...emptyResult(issues, pages),
     profileKey: 'pdf',
     confidence: readiness.ready ? 0.7 : 0.3,
     mappings,
+    fields,
+    matrices,
     issues,
   };
 }
