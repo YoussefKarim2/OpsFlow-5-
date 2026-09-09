@@ -8,6 +8,10 @@ like it — with one relational system.
 **[ARCHITECTURE.md](./ARCHITECTURE.md) is the document to read first.** It explains what the Excel file
 actually is, the three findings that drove the design, and every decision made because of them.
 
+**[docs/DISASTER-RECOVERY.md](./docs/DISASTER-RECOVERY.md) is the one to read second** — what is backed up,
+what is not, and how to restore. It needs about thirty minutes of setup before the nightly backup can run
+at all, and it names one thing (uploaded attachments) that is not protected until a variable is changed.
+
 ---
 
 ## Getting it running

@@ -8,9 +8,14 @@
  * issued, and an external printing operation blocked on customer approval.
  *
  * Idempotent: safe to run repeatedly.
+ *
+ * Refuses to run against anything that is not obviously a development database
+ * — see `assertSafeToSeed`. The seed deletes stock movements, so pointing it at
+ * production by accident is not a recoverable mistake.
  */
 
 import { PrismaClient, type Prisma } from '@prisma/client';
+import { assertSafeToSeed } from '../src/util/seed-guard.js';
 import argon2 from 'argon2';
 import {
   WORKFLOW_TEMPLATE, ROLE_PERMISSIONS, ROLE_LABEL, computeCutMatrix, planDueDate,
@@ -29,6 +34,9 @@ const prisma = new PrismaClient();
 const DEFAULT_PASSWORD = 'opsflow-demo-2026';
 
 async function main(): Promise<void> {
+  // Before the first write, not after the tenth.
+  assertSafeToSeed();
+
   console.log('Seeding OpsFlow…\n');
 
   // ── Roles ─────────────────────────────────────────────────────────────────
