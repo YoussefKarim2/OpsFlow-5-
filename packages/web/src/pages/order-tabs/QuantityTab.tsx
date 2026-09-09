@@ -6,11 +6,12 @@
  * 146 columns to show the same information; the ledger selector replaces them.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Wand2, Save } from 'lucide-react';
 import {
   QtyLedger, LEDGER_LABEL, buildMatrix, computeVariances, fmtNumber,
+  ledgerTotal, computeCutOrderTotal,
   type OrderDetailDto, type QtyCell, type AxisRef,
 } from '@opsflow/shared';
 import { api, ApiError } from '../../lib/api';
@@ -22,12 +23,35 @@ const EDITABLE: string[] = [
   QtyLedger.OUT_LINE, QtyLedger.PACKED, QtyLedger.SHIPPED, QtyLedger.SECOND_DEGREE,
 ];
 
-export function QuantityTab({ order }: { order: OrderDetailDto }) {
+export function QuantityTab({
+  order, ledger: ledgerParam, onLedgerChange,
+}: {
+  order: OrderDetailDto;
+  /** Which grid to open on, from the URL — Main Order and Cut Order share this tab. */
+  ledger?: string | null;
+  onLedgerChange?: (ledger: string) => void;
+}) {
   const qc = useQueryClient();
   const { can } = useAuth();
-  const [ledger, setLedger] = useState<string>(QtyLedger.ORDER);
+  const [ledger, setLedgerState] = useState<string>(ledgerParam ?? QtyLedger.ORDER);
+
+  // Jumping between the Main Order and Cut Order steps while already on this
+  // tab changes only the URL, so the grid has to follow it.
+  useEffect(() => {
+    if (ledgerParam && ledgerParam !== ledger) {
+      setLedgerState(ledgerParam);
+      setEdits({});
+    }
+  }, [ledgerParam]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const setLedger = (next: string) => {
+    setLedgerState(next);
+    onLedgerChange?.(next);
+  };
   const [edits, setEdits] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
+  /** Null until the allowance is touched, so the order's own value stays authoritative. */
+  const [pctDraft, setPctDraft] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ['matrix', order.id],
@@ -44,6 +68,16 @@ export function QuantityTab({ order }: { order: OrderDetailDto }) {
       void qc.invalidateQueries({ queryKey: ['order', order.id] });
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not save.'),
+  });
+
+  const saveCutPct = useMutation({
+    mutationFn: (pct: number) => api.orders.update(order.id, { cutPercentage: pct }),
+    onSuccess: () => {
+      setPctDraft(null);
+      setError(null);
+      void qc.invalidateQueries({ queryKey: ['order', order.id] });
+    },
+    onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not save the cut allowance.'),
   });
 
   const generateCut = useMutation({
@@ -87,6 +121,18 @@ export function QuantityTab({ order }: { order: OrderDetailDto }) {
   const editable = EDITABLE.includes(ledger) && can('order:edit');
   const dirty = Object.keys(edits).length > 0;
 
+  // Main Order → allowance → Cut Order, recomputed on every keystroke so the
+  // figure on screen always matches the percentage in the box. The Main Order
+  // total is read from the ORDER ledger and never written back.
+  const mainOrderQty = ledgerTotal(withEdits, QtyLedger.ORDER);
+  const pctText = pctDraft ?? String(Number((order.cutPercentage * 100).toFixed(4)));
+  const pctParsed = Number(pctText);
+  const pctValid = Number.isFinite(pctParsed) && pctParsed >= 0 && pctParsed <= 50;
+  const cutPct = pctValid ? pctParsed / 100 : order.cutPercentage;
+  const cutOrderQty = computeCutOrderTotal(mainOrderQty, cutPct);
+  const savedCutQty = ledgerTotal(baseCells, QtyLedger.CUT);
+  const pctDirty = pctDraft !== null && Math.abs(cutPct - order.cutPercentage) > 1e-9;
+
   const cellValue = (colorId: string, sizeId: string): number =>
     edits[`${colorId}:${sizeId}`] ?? matrix.cells[colorId]?.[sizeId] ?? 0;
 
@@ -123,7 +169,7 @@ export function QuantityTab({ order }: { order: OrderDetailDto }) {
                 onClick={() => generateCut.mutate()}
                 disabled={generateCut.isPending}
                 className="btn-secondary btn-sm"
-                title={`ROUNDUP((ordered − stock) × ${(1 + order.cutPercentage).toFixed(2)})`}
+                title={`ROUNDUP(main order × ${(1 + order.cutPercentage).toFixed(4)}), shared across the grid`}
               >
                 <Wand2 className="h-3.5 w-3.5" />
                 {generateCut.isPending ? 'Generating…' : `Regenerate at ${(order.cutPercentage * 100).toFixed(0)}%`}
@@ -153,13 +199,92 @@ export function QuantityTab({ order }: { order: OrderDetailDto }) {
         </div>
 
         {ledger === QtyLedger.CUT && (
-          <p className="border-b border-ink-200 bg-blue-50 px-4 py-2 text-xs text-blue-800">
-            The cut quantity is calculated, not typed:
-            <code className="mx-1 rounded bg-white px-1 py-0.5 font-mono text-2xs">
-              ROUNDUP((ordered − stock) × {(1 + order.cutPercentage).toFixed(2)})
-            </code>
-            per cell. Change the order, the stock or the cut percentage and regenerate.
-          </p>
+          <div className="border-b border-ink-200">
+            <div className="grid grid-cols-1 gap-px bg-ink-200 sm:grid-cols-3">
+              <div className="bg-white px-4 py-3">
+                <div className="text-2xs font-semibold uppercase tracking-wider text-ink-500">
+                  Main Order Quantity
+                </div>
+                <div className="tnum mt-1 text-xl font-semibold text-ink-900">
+                  {fmtNumber(mainOrderQty)}
+                  <span className="ml-1 text-xs font-normal text-ink-500">pcs</span>
+                </div>
+                <div className="mt-0.5 text-2xs text-ink-400">The customer's original quantity</div>
+              </div>
+
+              <div className="bg-white px-4 py-3">
+                <div className="text-2xs font-semibold uppercase tracking-wider text-ink-500">
+                  Cut Allowance
+                </div>
+                {can('order:edit') ? (
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <input
+                      type="number" min={0} max={50} step={0.1} value={pctText}
+                      onChange={(e) => setPctDraft(e.target.value)}
+                      aria-label="Cut allowance percentage"
+                      className={clsx(
+                        'tnum w-20 rounded-md border px-2 py-1 text-lg font-semibold',
+                        pctValid ? 'border-ink-300' : 'border-red-400 bg-red-50',
+                      )}
+                    />
+                    <span className="text-sm text-ink-500">%</span>
+                    {pctDirty && pctValid && (
+                      <button
+                        onClick={() => saveCutPct.mutate(cutPct)}
+                        disabled={saveCutPct.isPending}
+                        className="btn-primary btn-sm ml-1"
+                      >
+                        {saveCutPct.isPending ? 'Saving…' : 'Save'}
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="tnum mt-1 text-xl font-semibold text-ink-900">
+                    {(order.cutPercentage * 100).toFixed(1)}%
+                  </div>
+                )}
+                <div className="mt-0.5 text-2xs text-ink-400">
+                  {pctValid ? 'The extra the factory cuts on top' : 'Enter a percentage between 0 and 50'}
+                </div>
+              </div>
+
+              <div className="bg-white px-4 py-3">
+                <div className="text-2xs font-semibold uppercase tracking-wider text-ink-500">
+                  Cut Order Quantity
+                </div>
+                <div className="tnum mt-1 text-xl font-semibold text-accent-700">
+                  {fmtNumber(cutOrderQty)}
+                  <span className="ml-1 text-xs font-normal text-ink-500">pcs</span>
+                </div>
+                <div className="mt-0.5 text-2xs text-ink-400">
+                  Calculated — {fmtNumber(mainOrderQty)} × {(1 + cutPct).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}
+                </div>
+              </div>
+            </div>
+
+            <p className="bg-blue-50 px-4 py-2 text-xs text-blue-800">
+              The cut quantity is calculated, not typed:
+              <code className="mx-1 rounded bg-white px-1 py-0.5 font-mono text-2xs">
+                ROUNDUP(main order × (1 + {cutPct.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}))
+              </code>
+              rounded up once to whole pieces. The grid below is shared out to sum to exactly
+              that total. The Main Order itself is never changed.
+            </p>
+
+            {savedCutQty === 0 ? (
+              <p className="bg-amber-50 px-4 py-2 text-xs text-amber-800">
+                No cut order has been generated yet — the grid below is empty.
+                Use <strong>Regenerate</strong> to create it.
+              </p>
+            ) : savedCutQty !== cutOrderQty ? (
+              <p className="bg-amber-50 px-4 py-2 text-xs text-amber-800">
+                The saved breakdown totals <strong className="tnum">{fmtNumber(savedCutQty)}</strong> pcs,
+                which no longer matches the <strong className="tnum">{fmtNumber(cutOrderQty)}</strong> pcs
+                calculated above. {pctDirty && 'Save the allowance, then regenerate'}
+                {!pctDirty && 'Regenerate'} to bring them back in line.
+              </p>
+            ) : null}
+          </div>
         )}
 
         <div className="overflow-x-auto">
