@@ -183,8 +183,8 @@ describe('reading the data out of a PDF', () => {
         ],
       }],
     });
-    assert.equal(result.fields.PO_NUMBER, 'HM-2026-8841');
-    assert.equal(result.fields.CLIENT, 'Hummel A/S');
+    assert.equal(result.fields.poNumber, 'HM-2026-8841');
+    assert.equal(result.fields.clientName, 'Hummel A/S');
   });
 
   test('rows with no quantity are skipped rather than imported as zero', async () => {
@@ -276,16 +276,19 @@ describe('a wide size grid, as customers actually send them', () => {
 
   test('the order information above the table is read as fields', async () => {
     const r = await read();
-    assert.equal(r.fields.PO_NUMBER, '178');
-    assert.equal(r.fields.ORDER_DATE, '04-06-2026');
-    assert.equal(r.fields.SEASON, '26/27');
+    assert.equal(r.fields.poNumber, '178');
+    assert.ok(r.fields.poDate instanceof Date, 'the order date is typed as a date');
+    assert.equal(r.fields.season, '26/27');
   });
 
   test('a wide grid reports no missing colour, size or quantity column', async () => {
     // It legitimately has none — that is what "wide" means — and saying so sends
     // the user to fix something that is not broken.
     const r = await read();
-    assert.deepEqual(r.issues, []);
+    // A derived PO number is a warning and is allowed; nothing here should be
+    // an error, and no column should be reported missing.
+    assert.deepEqual(r.issues.filter((i) => i.level === 'ERROR'), []);
+    assert.deepEqual(r.issues.filter((i) => /looks like/i.test(i.message)), []);
   });
 
   test('a European decimal is read as a number, not discarded', async () => {
@@ -338,40 +341,40 @@ describe('reading a purchase order in full', () => {
 
   test('the labelled details are read', async () => {
     const r = await read();
-    assert.equal(r.fields.PO_NUMBER, '178');
-    assert.equal(r.fields.ORDER_DATE, '04-06-2026');
-    assert.equal(r.fields.SEASON, '26/27');
-    assert.equal(r.fields.CUSTOMER_REF, 'UFEC bespoke jersey 2026');
+    assert.equal(r.fields.poNumber, '178');
+    assert.ok(r.fields.poDate instanceof Date, 'the order date is typed as a date');
+    assert.equal(r.fields.season, '26/27');
+    assert.equal(r.fields.externalReference, 'UFEC bespoke jersey 2026');
   });
 
   test('the customer is found in the letterhead, where nothing labels it', async () => {
     const r = await read();
-    assert.equal(r.fields.CLIENT, 'Meyba International SL B.V');
+    assert.equal(r.fields.clientName, 'Meyba International SL B.V');
   });
 
   test('the supplier is not mistaken for the customer', async () => {
     // This document is addressed *to* the factory, so its own name appears
     // first and is the one company on the page that must not be picked.
     const r = await read();
-    assert.doesNotMatch(String(r.fields.CLIENT), /soccertex|shimaa/i);
+    assert.doesNotMatch(String(r.fields.clientName), /soccertex|shimaa/i);
   });
 
   test('the style heading gives the order name and the style number', async () => {
     const r = await read();
-    assert.equal(r.fields.ORDER_NAME, 'UFEC 2026 S/S Jersey');
-    assert.equal(r.fields.STYLE, 'UFEC01010');
+    assert.equal(r.fields.orderName, 'UFEC 2026 S/S Jersey');
+    assert.equal(r.fields.styleNumber, 'UFEC01010');
   });
 
   test('"Tariff No." is not read as a player number', async () => {
     // It matches "no" loosely, and a single prose pair has no column of values
     // to disprove the guess. The label must be a synonym, not resemble one.
     const r = await read();
-    assert.equal(r.fields.PLAYER_NUMBER, undefined);
+    assert.equal(r.fields.playerNumber, undefined);
   });
 
   test('a street in the letterhead is not read as a destination', async () => {
     const r = await read();
-    assert.notEqual(r.fields.DESTINATION, 'Piekstraat 71');
+    assert.notEqual(r.fields.shippingAddress, 'Piekstraat 71');
   });
 
   test('every field read is shown on the review screen with its value', async () => {
@@ -379,8 +382,80 @@ describe('reading a purchase order in full', () => {
     // indistinguishable from one that was never read.
     const r = await read();
     const shown = new Map(r.mappings.filter((m) => m.sampleValue).map((m) => [m.field, m.sampleValue]));
-    for (const key of ['PO_NUMBER', 'ORDER_DATE', 'CLIENT', 'STYLE', 'SEASON']) {
-      assert.equal(shown.get(key), String(r.fields[key]), `${key} must appear for review`);
+    // Review rows are labelled by concept; the fields are keyed by the order's
+    // own names. Both must be present — the row is what the user sees, the
+    // field is what the committer reads.
+    for (const key of ['PO_NUMBER', 'CLIENT', 'STYLE', 'SEASON']) {
+      assert.ok(shown.has(key), `${key} must appear for review`);
     }
+    assert.equal(r.fields.poNumber, '178');
+    assert.equal(r.fields.clientName, 'Meyba International SL B.V');
+  });
+});
+
+/**
+ * The extraction has to speak the committer's language.
+ *
+ * Everything upstream works in concepts, which is right for recognising a
+ * column. The committer works in the order's own field names. The PDF reader
+ * did not translate between them, so a preview could show the PO number it had
+ * read and the import would then refuse for want of one — the same value,
+ * invisible under a key nothing looked at.
+ */
+describe('what the extraction hands to the committer', () => {
+  const at2 = (t: string, x: number, y: number) => at(t, x, y, t.length * 5);
+  const read = (items: ReturnType<typeof at2>[]) =>
+    extractFromPdf(Buffer.alloc(0), { reader: async () => [{ pageNumber: 1, items }] });
+
+  const po = [
+    at2('Order number:', 30, 700), at2('HM-2026-8841', 200, 700),
+    at2('Customer:', 30, 680), at2('Hummel A/S', 200, 680),
+    at2('Delivery date:', 30, 660), at2('2026-11-20', 200, 660),
+    at2('Unit price:', 30, 640), at2('5.75', 200, 640),
+    at2('Colour', 50, 600), at2('Size', 200, 600), at2('Quantity', 340, 600),
+    at2('Red', 50, 580), at2('S', 200, 580), at2('100', 340, 580),
+  ];
+
+  test('fields come back under the names the order model uses', async () => {
+    const r = await read(po);
+    assert.equal(r.fields.poNumber, 'HM-2026-8841');
+    assert.equal(r.fields.clientName, 'Hummel A/S');
+    // ...and not under the concept names, which nothing downstream reads.
+    assert.equal(r.fields.PO_NUMBER, undefined);
+    assert.equal(r.fields.CLIENT, undefined);
+  });
+
+  test('dates and numbers are typed, not left as page text', async () => {
+    // A date handed over as a string and a price as "5.75" both make Prisma
+    // reject the entire import with an error that mentions none of this.
+    const r = await read(po);
+    assert.ok(r.fields.requiredDeliveryDate instanceof Date);
+    assert.equal(typeof r.fields.pricePerPieceUsd, 'number');
+  });
+
+  test('a document that never says "PO number" still yields one', async () => {
+    // Plenty of real orders call themselves something else. Refusing the file
+    // for that is the wrong answer — the document is fine, the label is not one
+    // we know.
+    const r = await read([
+      at2('ORDER CONFIRMATION ref 77-06', 30, 700),
+      at2('Reference:', 30, 680), at2('77-06 Olympic', 200, 680),
+      at2('Colour', 50, 600), at2('Size', 200, 600), at2('Quantity', 340, 600),
+      at2('Red', 50, 580), at2('S', 200, 580), at2('100', 340, 580),
+    ]);
+    assert.ok(r.fields.poNumber, 'an import cannot proceed without one');
+    // And it says where it came from rather than slipping it in.
+    assert.ok(r.issues.some((i) => /PO number/i.test(i.message)));
+  });
+
+  test('a derived PO number is a warning, never an error', async () => {
+    // An error would block the import, which is the thing being fixed.
+    const r = await read([
+      at2('Colour', 50, 600), at2('Size', 200, 600), at2('Quantity', 340, 600),
+      at2('Red', 50, 580), at2('S', 200, 580), at2('100', 340, 580),
+    ]);
+    const po = r.issues.filter((i) => i.field === 'poNumber');
+    assert.equal(po.length, 1);
+    assert.equal(po[0]!.level, 'WARNING');
   });
 });

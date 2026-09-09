@@ -500,9 +500,18 @@ function MapStep({
 }
 
 /** Fields a coordinator can type in if the file does not carry them. */
+/**
+ * What the review screen offers to check.
+ *
+ * Only the PO number is marked, and even that is filled in for you — the
+ * extractor derives one from the document when it is not labelled, so the
+ * asterisk means "this is the order's identity, look at it" rather than "you
+ * must type something". Everything else the committer defaults, so nothing on
+ * this screen has to be filled in for an import to go through.
+ */
 const REVIEW_FIELDS: Array<{ field: string; label: string; required?: boolean }> = [
   { field: 'poNumber', label: 'PO number', required: true },
-  { field: 'clientName', label: 'Customer', required: true },
+  { field: 'clientName', label: 'Customer' },
   { field: 'orderName', label: 'Order name' },
   { field: 'styleNumber', label: 'Style' },
   { field: 'season', label: 'Season' },

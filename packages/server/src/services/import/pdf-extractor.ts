@@ -29,6 +29,7 @@ import {
 } from '@opsflow/shared';
 import type { ImportIssue, ImportSheetInfo } from '@opsflow/shared';
 import type { ExtractionResult } from './extractor.js';
+import { toDate } from './extractor.js';
 import { detectSizeColumns } from './tabular-extractor.js';
 
 /** One positioned run of text, as pdf.js reports it. */
@@ -578,6 +579,69 @@ export async function extractFromPdf(
     break;
   }
 
+  // ── Concept names become field names ────────────────────────────────────
+  //
+  // Everything above works in concepts, which is the right currency for
+  // recognising a column. The committer works in the order's own field names —
+  // `poNumber`, `clientName` — and reading a concept key finds nothing there.
+  // The Excel reader has always translated at this point; the PDF reader did
+  // not, which is why an extraction could show "PO_NUMBER: HM-2026-8841" on the
+  // preview and then refuse the import for want of a PO number.
+  //
+  // Concepts with no field of their own (COLOR, SIZE, QUANTITY — they belong to
+  // the matrix) are dropped rather than passed through under a key nothing
+  // reads.
+  const named: ExtractionResult['fields'] = {};
+  for (const [concept, value] of Object.entries(fields)) {
+    const meta = CONCEPT_META[concept as ImportConcept];
+    if (!meta?.field || named[meta.field] != null) continue;
+
+    // Typed as the field expects, not left as the text the page held. A date
+    // handed to the database as "2026-11-20" and a price as "5.75" are both
+    // strings, and both make Prisma reject the whole import with an error that
+    // names none of this.
+    const raw = String(value ?? '').trim();
+    if (raw === '') continue;
+
+    if (meta.type === 'number') {
+      const n = toNum(raw);
+      if (n != null) named[meta.field] = n;
+    } else if (meta.type === 'date') {
+      const d = toDate(raw);
+      if (d != null) named[meta.field] = d;
+    } else {
+      named[meta.field] = raw;
+    }
+  }
+
+  // ── A PO number, always ─────────────────────────────────────────────────
+  //
+  // It is the order's identity and the import cannot proceed without one, but
+  // plenty of real documents never print the words "PO number" — this one calls
+  // itself "ORDER CONFIRMATION ref 77-06". Refusing the file for that is the
+  // wrong answer: the document is fine, the label is just not one we know.
+  //
+  // So a stand-in is derived from whatever identifies the document, and said out
+  // loud rather than slipped in. Deriving it beats refusing, and saying so beats
+  // deriving it quietly — the review screen shows the value and it can be typed
+  // over before anything is saved.
+  if (named.poNumber == null || String(named.poNumber).trim() === '') {
+    const candidate = [named.customerRef, named.orderName, named.styleNumber]
+      .map((v) => (v == null ? '' : String(v).trim()))
+      .find((v) => v.length >= 3 && v.length <= 60);
+
+    const derived = candidate
+      ?? `IMPORT-${new Date().toISOString().slice(0, 10)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+
+    named.poNumber = derived;
+    issues.push({
+      level: 'WARNING', field: 'poNumber', sheet: null, cell: null,
+      message: candidate
+        ? `No PO number was labelled in this document, so "${derived}" was taken from it instead. Change it on the review screen if that is not the order's number.`
+        : `This document states no PO number, so "${derived}" was generated as a placeholder. Replace it with the real number before importing.`,
+    });
+  }
+
   const isWide = matrices.length > 0 && sizeCols.length >= 2;
   const gridIdx = new Set(sizeCols.map((c) => c.index));
 
@@ -673,7 +737,7 @@ export async function extractFromPdf(
     profileKey: 'pdf',
     confidence: readiness.ready ? 0.7 : 0.3,
     mappings,
-    fields,
+    fields: named,
     matrices,
     issues,
   };
