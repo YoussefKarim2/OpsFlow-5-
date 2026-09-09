@@ -92,6 +92,12 @@ const createSchema = z.object({
   fit: z.string().optional(),
   blockPattern: z.string().optional(),
   fabric: z.string().optional(),
+  // External Order_Ex.Op shows three fabric slots and both supplier dates;
+  // all five were already columns and none of them were writable.
+  fabric2: z.string().optional().nullable(),
+  fabric3: z.string().optional().nullable(),
+  fabricDeliveryToSupplier: z.string().optional().nullable(),
+  supplierDeliveryDate: z.string().optional().nullable(),
   shippingMethod: z.string().optional(),
   pricePerPieceUsd: z.number().nonnegative().optional(),
   cutPercentage: z.number().default(0.05),
@@ -290,6 +296,12 @@ ordersRouter.patch('/:id', requirePermission('order:edit'), asyncHandler(async (
       internalPoDate: input.internalPoDate === undefined
         ? undefined
         : input.internalPoDate ? new Date(input.internalPoDate) : null,
+      fabricDeliveryToSupplier: input.fabricDeliveryToSupplier === undefined
+        ? undefined
+        : input.fabricDeliveryToSupplier ? new Date(input.fabricDeliveryToSupplier) : null,
+      supplierDeliveryDate: input.supplierDeliveryDate === undefined
+        ? undefined
+        : input.supplierDeliveryDate ? new Date(input.supplierDeliveryDate) : null,
     },
   });
 

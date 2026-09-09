@@ -59,6 +59,48 @@ export function ExternalTab({ order }: { order: OrderDetailDto; focus?: "externa
   const [recording, setRecording] = useState<Approval | null>(null);
 
   const [editing, setEditing] = useState(false);
+  const [headEditing, setHeadEditing] = useState(false);
+  const [headErr, setHeadErr] = useState<string | null>(null);
+
+  /**
+   * The sheet's header block, as a form.
+   *
+   * Every value here belongs to the order, so this writes to the order — the
+   * same PATCH the Order Details screen uses. Two screens editing one field is
+   * fine; two screens with two ways of saving it is not.
+   */
+  const [head, setHead] = useState({
+    poNumber: order.poNumber,
+    poDate: order.poDate?.slice(0, 10) ?? '',
+    orderName: order.orderName,
+    itemType: order.itemType ?? '',
+    gender: order.gender ?? '',
+    coordinatorId: order.coordinator?.id ?? '',
+    clientId: order.client.id,
+    externalReference: order.externalReference ?? '',
+    externalWorkType: order.externalWorkType ?? '',
+    externalWorkSort: order.externalWorkSort ?? '',
+    externalFactoryId: order.externalFactory?.id ?? '',
+    fabricDeliveryToSupplier: order.fabricDeliveryToSupplier?.slice(0, 10) ?? '',
+    requiredDeliveryDate: order.requiredDeliveryDate?.slice(0, 10) ?? '',
+    supplierDeliveryDate: order.supplierDeliveryDate?.slice(0, 10) ?? '',
+    fabric: order.fabric ?? '',
+    fabric2: order.fabric2 ?? '',
+    fabric3: order.fabric3 ?? '',
+    externalNotes: order.notes.external ?? '',
+  });
+
+  const saveHead = useMutation({
+    mutationFn: () => {
+      const { externalNotes, ...rest } = head;
+      return api.orders.update(order.id, { ...rest, notes: { external: externalNotes } });
+    },
+    onSuccess: () => {
+      setHeadEditing(false); setHeadErr(null);
+      void qc.invalidateQueries({ queryKey: ['order', order.id] });
+    },
+    onError: (e) => setHeadErr(e instanceof ApiError ? e.message : 'Could not save.'),
+  });
   const ops = useQuery({ queryKey: ['external-ops', order.id], queryFn: () => api.external.operations(order.id) });
   const lookups = useQuery({ queryKey: ['lookups'], queryFn: api.reference.lookups });
   const approvals = useQuery({ queryKey: ['approvals', order.id], queryFn: () => api.external.approvals(order.id) });
@@ -150,26 +192,58 @@ export function ExternalTab({ order }: { order: OrderDetailDto; focus?: "externa
         <CardHeader
           title="External order"
           subtitle="What is being sent out, and to whom."
+          action={can('order:edit') ? (
+            headEditing ? (
+              <div className="flex gap-2">
+                <button className="btn-secondary btn-sm" onClick={() => { setHeadEditing(false); setHeadErr(null); }}>
+                  Cancel
+                </button>
+                <button className="btn-primary btn-sm" disabled={saveHead.isPending} onClick={() => saveHead.mutate()}>
+                  {saveHead.isPending ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            ) : (
+              <button className="btn-secondary btn-sm" onClick={() => setHeadEditing(true)}>Edit</button>
+            )
+          ) : undefined}
         />
+
+        {headErr && <div className="px-4 pt-3"><p className="text-sm text-red-700">{headErr}</p></div>}
+
         <div className="grid gap-4 p-4 lg:grid-cols-2">
           <dl className="space-y-1.5">
-            <SheetRow label="PO no." value={order.poNumber} mono />
-            <SheetRow label="PO date" value={fmtDate(order.poDate)} />
-            <SheetRow label="Order name" value={order.orderName} />
-            <SheetRow label="Item type" value={order.itemType} />
-            <SheetRow label="Gender" value={order.gender} />
-            <SheetRow label="Coordinator" value={order.coordinator?.name} />
-            <SheetRow label="Client" value={order.client.name} />
-            <SheetRow label="External reference" value={order.externalReference} />
-            <SheetRow label="External work type" value={order.externalWorkType} />
-            <SheetRow label="External work sort" value={order.externalWorkSort} />
+            <SheetField label="PO no." editing={headEditing} value={head.poNumber} display={order.poNumber} mono
+              onChange={(v) => setHead({ ...head, poNumber: v })} />
+            <SheetField label="PO date" editing={headEditing} type="date" value={head.poDate} display={fmtDate(order.poDate)}
+              onChange={(v) => setHead({ ...head, poDate: v })} />
+            <SheetField label="Order name" editing={headEditing} value={head.orderName} display={order.orderName}
+              onChange={(v) => setHead({ ...head, orderName: v })} />
+            <SheetField label="Item type" editing={headEditing} value={head.itemType} display={order.itemType}
+              options={(lookups.data?.values?.ITEM_TYPE ?? []).map((v) => v.value)}
+              onChange={(v) => setHead({ ...head, itemType: v })} />
+            <SheetField label="Gender" editing={headEditing} value={head.gender} display={order.gender}
+              options={(lookups.data?.values?.GENDER ?? []).map((v) => v.value)}
+              onChange={(v) => setHead({ ...head, gender: v })} />
+            <SheetField label="Coordinator" editing={headEditing} value={head.coordinatorId} display={order.coordinator?.name}
+              choices={(lookups.data?.users ?? []).map((u) => ({ id: u.id, name: u.name }))}
+              onChange={(v) => setHead({ ...head, coordinatorId: v })} />
+            <SheetField label="Client" editing={headEditing} value={head.clientId} display={order.client.name}
+              choices={(lookups.data?.clients ?? []).map((c) => ({ id: c.id, name: c.name }))}
+              onChange={(v) => setHead({ ...head, clientId: v })} />
+            <SheetField label="External reference" editing={headEditing} value={head.externalReference} display={order.externalReference}
+              onChange={(v) => setHead({ ...head, externalReference: v })} />
+            <SheetField label="External work type" editing={headEditing} value={head.externalWorkType} display={order.externalWorkType}
+              options={(lookups.data?.values?.EXTERNAL_WORK_TYPE ?? []).map((v) => v.value)}
+              onChange={(v) => setHead({ ...head, externalWorkType: v })} />
+            <SheetField label="External work sort" editing={headEditing} value={head.externalWorkSort} display={order.externalWorkSort}
+              options={(lookups.data?.values?.EXTERNAL_WORK_SORT ?? []).map((v) => v.value)}
+              onChange={(v) => setHead({ ...head, externalWorkSort: v })} />
             <SheetRow
               label="External price in US$"
               value={
-                // The sheet keeps one price per work type; here each operation
-                // carries its own rate, so the total of what has been booked is
-                // the honest summary rather than a single number the data does
-                // not have.
+                // Not editable, and not a field: each operation carries its own
+                // rate, so this is the sum of what has been booked. Editing it
+                // would be editing a total, which changes nothing underneath.
                 operations.some((o) => o.unitPriceUsd != null)
                   ? `$${operations.reduce((a, o) => a + (o.totalPriceUsd ?? 0), 0).toFixed(2)} across ${operations.length} operation${operations.length === 1 ? '' : 's'}`
                   : null
@@ -178,19 +252,41 @@ export function ExternalTab({ order }: { order: OrderDetailDto; focus?: "externa
           </dl>
 
           <dl className="space-y-1.5">
-            <SheetRow label="Factory name" value={order.externalFactory?.name} />
-            <SheetRow label="Fabric delivery date to supplier" value={fmtDate(order.fabricDeliveryToSupplier)} />
-            <SheetRow label="Required delivery date" value={fmtDate(order.requiredDeliveryDate)} highlight />
-            <SheetRow label="Delivery time from supplier" value={fmtDate(order.supplierDeliveryDate)} />
-            <SheetRow
-              label="Fabric"
-              value={[order.fabric, order.fabric2, order.fabric3].filter(Boolean).join(' · ') || null}
-            />
+            <SheetField label="Factory name" editing={headEditing} value={head.externalFactoryId} display={order.externalFactory?.name}
+              choices={(lookups.data?.factories ?? []).filter((f) => f.isExternal).map((f) => ({ id: f.id, name: f.name }))}
+              onChange={(v) => setHead({ ...head, externalFactoryId: v })} />
+            <SheetField label="Fabric delivery date to supplier" editing={headEditing} type="date"
+              value={head.fabricDeliveryToSupplier} display={fmtDate(order.fabricDeliveryToSupplier)}
+              onChange={(v) => setHead({ ...head, fabricDeliveryToSupplier: v })} />
+            <SheetField label="Required delivery date" editing={headEditing} type="date" highlight
+              value={head.requiredDeliveryDate} display={fmtDate(order.requiredDeliveryDate)}
+              onChange={(v) => setHead({ ...head, requiredDeliveryDate: v })} />
+            <SheetField label="Delivery time from supplier" editing={headEditing} type="date"
+              value={head.supplierDeliveryDate} display={fmtDate(order.supplierDeliveryDate)}
+              onChange={(v) => setHead({ ...head, supplierDeliveryDate: v })} />
+
+            {/* Three slots, as the sheet has, rather than one joined string —
+                they are three separate columns and always were. */}
+            <SheetField label="Fabric" editing={headEditing} value={head.fabric} display={order.fabric}
+              options={(lookups.data?.values?.FABRIC ?? []).map((v) => v.value)}
+              onChange={(v) => setHead({ ...head, fabric: v })} />
+            <SheetField label="Fabric 2" editing={headEditing} value={head.fabric2} display={order.fabric2}
+              options={(lookups.data?.values?.FABRIC ?? []).map((v) => v.value)}
+              onChange={(v) => setHead({ ...head, fabric2: v })} />
+            <SheetField label="Fabric 3" editing={headEditing} value={head.fabric3} display={order.fabric3}
+              options={(lookups.data?.values?.FABRIC ?? []).map((v) => v.value)}
+              onChange={(v) => setHead({ ...head, fabric3: v })} />
+
             <div className="pt-1">
               <p className="label mb-1">External notes</p>
-              <div className="rounded-md border border-ink-200 bg-ink-50/60 p-2.5">
-                <FreeText text={order.notes.external} />
-              </div>
+              {headEditing ? (
+                <textarea className="input min-h-[5rem]" value={head.externalNotes}
+                  onChange={(e) => setHead({ ...head, externalNotes: e.target.value })} />
+              ) : (
+                <div className="rounded-md border border-ink-200 bg-ink-50/60 p-2.5">
+                  <FreeText text={order.notes.external} />
+                </div>
+              )}
             </div>
           </dl>
         </div>
@@ -482,6 +578,67 @@ function SheetRow({
       <dt className="w-52 shrink-0 text-xs font-medium text-ink-500">{label}</dt>
       <dd className={clsx('min-w-0 flex-1 text-sm text-ink-900', mono && 'font-mono')}>
         {value || <span className="text-ink-400">—</span>}
+      </dd>
+    </div>
+  );
+}
+
+/**
+ * One row of the sheet's header block, readable or editable in place.
+ *
+ * Three inputs behind one label, chosen by which props arrive: `choices` for
+ * something stored by id and shown by name, `options` for a reference-value
+ * list, and a plain box otherwise. One component rather than three because the
+ * caller's job is to say what the field *is*, not to pick a widget — and
+ * because a row that changes shape between reading and editing is how a layout
+ * stops matching the sheet it was copied from.
+ */
+function SheetField({
+  label, editing, value, display, onChange, options, choices, type, mono, highlight,
+}: {
+  label: string;
+  editing: boolean;
+  value: string;
+  display: string | null | undefined;
+  onChange: (v: string) => void;
+  options?: string[];
+  choices?: Array<{ id: string; name: string }>;
+  type?: string;
+  mono?: boolean;
+  highlight?: boolean;
+}) {
+  return (
+    <div className={clsx(
+      'flex items-baseline gap-3 border-b border-ink-100 py-1 last:border-0',
+      highlight && 'rounded bg-amber-50 px-1.5',
+    )}>
+      <dt className="w-52 shrink-0 text-xs font-medium text-ink-500">{label}</dt>
+      <dd className="min-w-0 flex-1">
+        {!editing ? (
+          <span className={clsx('text-sm text-ink-900', mono && 'font-mono')}>
+            {display || <span className="text-ink-400">—</span>}
+          </span>
+        ) : choices ? (
+          <select className="input" value={value} onChange={(e) => onChange(e.target.value)}>
+            <option value="">—</option>
+            {choices.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        ) : options && options.length > 0 ? (
+          <>
+            <select
+              className="input mb-1"
+              value={options.includes(value) ? value : ''}
+              onChange={(e) => { if (e.target.value) onChange(e.target.value); }}
+            >
+              <option value="">Choose…</option>
+              {options.map((o) => <option key={o} value={o}>{o}</option>)}
+            </select>
+            {/* The list is what is used today, not the only thing allowed. */}
+            <input className="input" value={value} placeholder="or type" onChange={(e) => onChange(e.target.value)} />
+          </>
+        ) : (
+          <input className="input" type={type ?? 'text'} value={value} onChange={(e) => onChange(e.target.value)} />
+        )}
       </dd>
     </div>
   );
