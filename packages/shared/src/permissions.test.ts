@@ -15,8 +15,7 @@ import assert from 'node:assert/strict';
 
 import {
   PERMISSIONS, ROLE_PERMISSIONS, ROLE_KEYS, ROLE_LABEL,
-  SUPER_ADMIN_ONLY_PERMISSIONS, SYSTEM_ADMIN_PERMISSIONS, ORDER_ASSIGNMENT_PERMISSIONS,
-  can, canAny, computeLockout,
+  SUPER_ADMIN_ONLY_PERMISSIONS, SYSTEM_ADMIN_PERMISSIONS, can, canAny, computeLockout,
   normaliseEmail, parseSuperAdminEmails,
   type Permission, type RoleKey,
 } from './permissions.js';
@@ -66,14 +65,8 @@ describe('account management is restricted', () => {
     assert.ok(can(ROLE_PERMISSIONS.ADMIN, 'shipment:override'));
     assert.ok(can(ROLE_PERMISSIONS.ADMIN, 'order:delete'));
 
-    // Two sets are withheld, both deliberately. The super-admin-only ones mint
-    // and disable accounts; the order-assignment ones decide who may see an
-    // order at all, and that power was named person by person rather than given
-    // to a role. Anything else missing from ADMIN is a mistake.
     const missing = PERMISSIONS.filter(
-      (p) => !SUPER_ADMIN_ONLY_PERMISSIONS.includes(p)
-        && !ORDER_ASSIGNMENT_PERMISSIONS.includes(p)
-        && !can(ROLE_PERMISSIONS.ADMIN, p),
+      (p) => !SUPER_ADMIN_ONLY_PERMISSIONS.includes(p) && !can(ROLE_PERMISSIONS.ADMIN, p),
     );
     assert.deepEqual(missing, [], 'ADMIN unexpectedly lost operational permissions');
   });
@@ -349,44 +342,4 @@ describe('what a coordinator may do', () => {
   });
 });
 
-/**
- * Who may decide who works on an order.
- *
- * Access to an order is now an explicit grant, and the power to hand those out
- * was named person by person rather than by role: the super administrators and
- * the Lead Coordinator, and nobody else. ADMIN is the interesting exclusion —
- * it otherwise holds everything that is not super-admin-only, so it has to be
- * kept out deliberately, and a test is the only thing that keeps it out.
- */
-describe('order assignment', () => {
-  const MAY_ASSIGN: RoleKey[] = ['SUPER_ADMIN', 'LEAD_COORDINATOR'];
 
-  for (const role of MAY_ASSIGN) {
-    test(`${role} may assign people and see every order`, () => {
-      assert.ok(ROLE_PERMISSIONS[role].includes('order:assign'));
-      // Without the bypass the first assignment could never be made: nobody
-      // could open an order that nobody is on yet.
-      assert.ok(ROLE_PERMISSIONS[role].includes('order:read-all'));
-    });
-  }
-
-  for (const role of ROLE_KEYS.filter((r) => !MAY_ASSIGN.includes(r))) {
-    test(`${role} may not`, () => {
-      assert.ok(!ROLE_PERMISSIONS[role].includes('order:assign'), `${role} must not assign`);
-      assert.ok(!ROLE_PERMISSIONS[role].includes('order:read-all'), `${role} must not see every order`);
-    });
-  }
-
-  test('ADMIN is excluded although it holds nearly everything else', () => {
-    // It is defined by subtraction, so this is the assertion that keeps it out.
-    assert.ok(!ROLE_PERMISSIONS.ADMIN.includes('order:assign'));
-    assert.ok(ROLE_PERMISSIONS.ADMIN.includes('order:edit'), 'but it can still edit an order');
-  });
-
-  test('editing an order and controlling access to it are different powers', () => {
-    // A coordinator owns an order and may change it, without being able to let
-    // anybody else in.
-    assert.ok(ROLE_PERMISSIONS.COORDINATOR.includes('order:edit'));
-    assert.ok(!ROLE_PERMISSIONS.COORDINATOR.includes('order:assign'));
-  });
-});

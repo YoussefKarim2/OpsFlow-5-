@@ -18,8 +18,6 @@ import { useQuery } from '@tanstack/react-query';
 import { ChevronLeft, LayoutGrid, ListOrdered } from 'lucide-react';
 import { fmtDate, type OrderStepState, type OrderTabKey } from '@opsflow/shared';
 import { api } from '../lib/api';
-import { useAuth } from '../lib/auth';
-import { OrderAssignments } from '../components/OrderAssignments';
 import {
   ProgressBar, HealthBadge, StatusBadge, PriorityBadge,
   Spinner, ErrorNote, TabStrip,
@@ -61,7 +59,6 @@ type TabKey = OrderTabKey;
 export function OrderWorkspacePage() {
   const { id = '' } = useParams();
   const [params, setParams] = useSearchParams();
-  const { can } = useAuth();
   const tab = (params.get('tab') as TabKey) || 'overview';
   const [showAllTabs, setShowAllTabs] = useState(false);
 
@@ -102,9 +99,6 @@ export function OrderWorkspacePage() {
 
   const tabs: Array<{ key: TabKey; label: string; badge?: number; tone?: 'red' | 'amber' }> = [
     { key: 'overview',   label: 'Overview', badge: criticalCount + warningCount, tone: criticalCount > 0 ? 'red' : 'amber' },
-    // Its own tab rather than a panel at the foot of Overview: deciding who may
-    // open an order is not something to go looking for.
-    { key: 'access',     label: 'Who can access' },
     { key: 'reference',  label: 'Customer Reference' },
     { key: 'details',    label: 'Order Details' },
     { key: 'quantity',   label: 'Quantity' },
@@ -247,11 +241,6 @@ export function OrderWorkspacePage() {
           )}
 
           {tab === 'overview'     && <OverviewTab order={order} onJump={setTab} />}
-          {tab === 'access'       && (
-            <div className="p-5">
-              <OrderAssignments orderId={order.id} canAssign={can('order:assign')} />
-            </div>
-          )}
           {tab === 'reference'    && <CustomerReferenceTab orderId={order.id} />}
           {tab === 'details'      && <DetailsTab order={order} />}
           {tab === 'quantity'     && <QuantityTab order={order} />}

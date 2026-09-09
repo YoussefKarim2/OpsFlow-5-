@@ -30,22 +30,6 @@ export const PERMISSIONS = [
   // or regenerate a cut order, and gating the import on the cutting permission
   // meant granting all four to get one.
   'import:laying',
-  /**
-   * Deciding who may work on an order.
-   *
-   * Separate from `order:edit`, which is permission to change an order's
-   * contents. This is permission to change who can see it at all, and the two
-   * are not the same power — a coordinator who owns an order should be able to
-   * edit it without being able to let anybody else in.
-   */
-  'order:assign',
-  /**
-   * Seeing every order, assigned or not.
-   *
-   * The bypass. Somebody has to be able to open an order in order to assign the
-   * first person to it, and somebody has to be able to find one nobody is on.
-   */
-  'order:read-all',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -67,18 +51,6 @@ export const SUPER_ADMIN_ONLY_PERMISSIONS: readonly Permission[] = [
  * distinction exists so that a role can be given every operational power in the
  * building without also being handed the ability to grant itself more.
  */
-/**
- * Deciding who may work on which order.
- *
- * Held by the super administrators and by the Lead Coordinator, and by nobody
- * else — including the ADMIN role, which otherwise holds everything that is not
- * super-admin-only. Access control is a narrower thing than administration, and
- * the people who exercise it were named individually rather than by role.
- */
-export const ORDER_ASSIGNMENT_PERMISSIONS: readonly Permission[] = [
-  'order:assign', 'order:read-all',
-];
-
 export const SYSTEM_ADMIN_PERMISSIONS: readonly Permission[] = [
   'user:manage', 'user:create', 'user:disable', 'user:reset-password',
   'role:manage', 'role:assign',
@@ -107,8 +79,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
   // none of the account-mutating actions. An administrator runs the factory;
   // three named people run the user list.
   ADMIN: PERMISSIONS.filter(
-    (p) => !SUPER_ADMIN_ONLY_PERMISSIONS.includes(p)
-      && !ORDER_ASSIGNMENT_PERMISSIONS.includes(p),
+    (p) => !SUPER_ADMIN_ONLY_PERMISSIONS.includes(p),
   ) as Permission[],
 
   /**

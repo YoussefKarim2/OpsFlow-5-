@@ -21,6 +21,10 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
   const { data: lookups } = useQuery({ queryKey: ['lookups'], queryFn: api.reference.lookups });
 
   const [form, setForm] = useState({
+    poNumber: order.poNumber,
+    clientId: order.client.id,
+    coordinatorId: order.coordinator?.id ?? '',
+    outsideWorkManagerId: order.outsideWorkManager?.id ?? '',
     orderName: order.orderName,
     season: order.season,
     itemType: order.itemType ?? '',
@@ -99,7 +103,9 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
         <Card>
           <CardHeader title="Order details" subtitle="The order as the customer placed it." />
           <div className="grid gap-3 p-4 sm:grid-cols-2">
-            <Row label="Customer" value={order.client.name} />
+            <Picker label="Customer" editing={editing} value={form.clientId}
+              options={(lookups?.clients ?? []).map((c) => ({ id: c.id, name: c.name }))}
+              onChange={(v) => setForm({ ...form, clientId: v })} display={order.client.name} />
             <Edit label="Customer PO" editing={editing} value={form.externalReference}
               onChange={(v) => setForm({ ...form, externalReference: v })}
               display={order.externalReference} hint="The customer's own number for this order." />
@@ -110,7 +116,9 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
             <Select label="Season" editing={editing} value={form.season} options={values.SEASON?.map((v) => v.value) ?? []}
               onChange={(v) => setForm({ ...form, season: v })} display={order.season} />
 
-            <Row label="Internal PO no." value={order.poNumber} mono />
+            <Edit label="Internal PO no." editing={editing} value={form.poNumber}
+              onChange={(v) => setForm({ ...form, poNumber: v })} display={order.poNumber}
+              hint="The order's own number. Changing it is refused if another order already has it." />
             <Edit label="Internal PO date" editing={editing} type="date" value={form.internalPoDate}
               onChange={(v) => setForm({ ...form, internalPoDate: v })} display={fmtDate(order.internalPoDate)} />
             <Edit label="Order name" editing={editing} value={form.orderName}
@@ -149,7 +157,13 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
               onChange={(v) => setForm({ ...form, gender: v })} display={order.gender} />
             <Edit label="Style no." editing={editing} value={form.styleNumber}
               onChange={(v) => setForm({ ...form, styleNumber: v })} display={order.styleNumber} />
-            <Row label="Coordinator" value={order.coordinator?.name} />
+            <Picker label="Coordinator" editing={editing} value={form.coordinatorId}
+              options={(lookups?.users ?? []).map((u) => ({ id: u.id, name: u.name }))}
+              onChange={(v) => setForm({ ...form, coordinatorId: v })} display={order.coordinator?.name}
+              hint="Who owns this order. Anyone may still open it." />
+            <Picker label="Outside work manager" editing={editing} value={form.outsideWorkManagerId}
+              options={(lookups?.users ?? []).map((u) => ({ id: u.id, name: u.name }))}
+              onChange={(v) => setForm({ ...form, outsideWorkManagerId: v })} display={order.outsideWorkManager?.name} />
             <Edit label="Price in US$" editing={editing} type="number" step="0.01" value={String(form.pricePerPieceUsd)}
               onChange={(v) => setForm({ ...form, pricePerPieceUsd: Number(v) })}
               display={order.pricePerPieceUsd != null ? `$${order.pricePerPieceUsd.toFixed(2)}` : null} />
@@ -291,14 +305,6 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
   );
 }
 
-function Row({ label, value, mono }: { label: string; value: string | null | undefined; mono?: boolean }) {
-  return (
-    <div>
-      <p className="label">{label}</p>
-      <p className={clsx('text-sm text-ink-800', mono && 'font-mono font-semibold')}>{value || '—'}</p>
-    </div>
-  );
-}
 
 function Edit({
   label, editing, value, onChange, display, type = 'text', step, hint,
@@ -386,6 +392,38 @@ function AddressPicker({
         onChange={(e) => onChange(e.target.value)}
       />
       {hint && <p className="mt-1 text-2xs text-ink-500">{hint}</p>}
+    </div>
+  );
+}
+
+/**
+ * A person or a client, chosen by name and stored by id.
+ *
+ * Separate from `Select`, which works in plain strings for reference values.
+ * Here the displayed text and the saved value are different things, and
+ * conflating them is how a coordinator's name ends up in a foreign key column.
+ */
+function Picker({
+  label, editing, value, options, onChange, display, hint,
+}: {
+  label: string; editing: boolean; value: string;
+  options: Array<{ id: string; name: string }>;
+  onChange: (v: string) => void; display: string | null | undefined; hint?: string;
+}) {
+  return (
+    <div>
+      <p className="label">{label}</p>
+      {editing ? (
+        <>
+          <select value={value} onChange={(e) => onChange(e.target.value)} className="input">
+            <option value="">—</option>
+            {options.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+          </select>
+          {hint && <p className="mt-1 text-2xs text-ink-500">{hint}</p>}
+        </>
+      ) : (
+        <p className="text-sm text-ink-800">{display || '—'}</p>
+      )}
     </div>
   );
 }

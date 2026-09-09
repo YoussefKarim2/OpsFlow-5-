@@ -84,8 +84,6 @@ model User {
   disabledBy              User?                    @relation("UserDisabledBy", fields: [disabledById], references: [id])
   disabledUsers           User[]                   @relation("UserDisabledBy")
   role                    Role                     @relation(fields: [roleId], references: [id])
-  orderAssignments        OrderAssignment[]        @relation("OrderAssignee")
-  assignmentsGranted      OrderAssignment[]        @relation("OrderAssignmentGrantedBy")
 
   @@index([department])
   @@index([active])
@@ -266,7 +264,6 @@ model Order {
   shipments                Shipment[]
   quantities               StageQuantity[]
   tasks                    Task[]
-  assignments              OrderAssignment[]
 
   @@index([clientId])
   @@index([coordinatorId])
@@ -1079,32 +1076,6 @@ model Shipment {
 /// keep reading one number. `Carton.orderSizeId` is left in place and still
 /// carries the single-size case, so every carton packed before this existed is
 /// still correct and still readable by the code that reads it.
-/// Who is allowed to work on an order.
-///
-/// `Order.coordinatorId` names one person and is kept — it is what the
-/// notification routing means by "the coordinator", and a single owner is a
-/// real thing. This is the different question of *access*: several coordinators
-/// share an order, and everybody else is to be kept out of it entirely.
-///
-/// A row is permission to open the order at all. Absence of a row, for a user
-/// who cannot see every order, means the order does not exist as far as they
-/// are concerned.
-model OrderAssignment {
-  id           String   @id @default(cuid())
-  orderId      String
-  userId       String
-  /// Who granted it, kept because revoking access is worth being able to trace.
-  assignedById String?
-  createdAt    DateTime @default(now())
-  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  user         User     @relation("OrderAssignee", fields: [userId], references: [id], onDelete: Cascade)
-  assignedBy   User?    @relation("OrderAssignmentGrantedBy", fields: [assignedById], references: [id])
-
-  @@unique([orderId, userId])
-  @@index([userId])
-  @@map("order_assignments")
-}
-
 model CartonLine {
   id          String     @id @default(cuid())
   cartonId    String
