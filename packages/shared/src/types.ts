@@ -90,6 +90,11 @@ export interface OrderDetailDto {
   externalReference: string | null;
   externalWorkSort: string | null;
   externalWorkType: string | null;
+  /// External Order_Ex.Op shows three fabric slots and two supplier dates.
+  fabric2: string | null;
+  fabric3: string | null;
+  fabricDeliveryToSupplier: string | null;
+  supplierDeliveryDate: string | null;
   poDate: string | null;
   /// The factory's own PO date, distinct from the customer's.
   internalPoDate: string | null;

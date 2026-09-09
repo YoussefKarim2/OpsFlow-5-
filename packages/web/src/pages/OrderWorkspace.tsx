@@ -109,7 +109,7 @@ export function OrderWorkspacePage() {
     { key: 'materials',  label: 'Materials', badge: order.materials?.shortCount ?? 0, tone: 'red' },
     { key: 'bom',        label: 'BOM', badge: order.bom?.shortItems ?? 0, tone: 'amber' },
     { key: 'instructions', label: 'Custom Instructions' },
-    { key: 'external',   label: 'External Ops', badge: order.counts.openExternalOps },
+    { key: 'external',   label: 'External Order', badge: order.counts.openExternalOps },
     { key: 'approvals',  label: 'Approvals', badge: order.counts.pendingApprovals, tone: 'red' },
     { key: 'production', label: 'Production' },
     { key: 'quality',    label: 'Quality' },

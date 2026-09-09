@@ -20,7 +20,7 @@ import {
 
 interface Op {
   id: string; externalFactoryName: string | null; externalReference: string | null;
-  externalFactoryId: string | null; operationSort: string | null;
+  externalFactoryId: string | null; operationSort: string | null; colorIds: string[];
   operationType: string; operationTypeAr: string | null; qty: number;
   unitRate: number | null; unitPriceUsd: number | null; totalPriceUsd: number | null;
   sentDate: string | null; expectedReturnDate: string | null; actualReturnDate: string | null;
@@ -81,6 +81,19 @@ export function ExternalTab({ order }: { order: OrderDetailDto; focus?: "externa
   const approvalList = (approvals.data?.data ?? []) as unknown as Approval[];
   const blocked = operations.filter((o) => o.requiresApproval && !o.approvalCleared);
 
+  /**
+   * Colour ids on an operation, as the names the order calls them.
+   *
+   * Resolved from `colorProgress`, which is the order's colour list with its
+   * quantities already worked out — there is no separate colours array, and
+   * adding one to carry names the order already publishes would be a second
+   * source of the same truth.
+   */
+  const colourNames = (ids: string[] = []) =>
+    ids
+      .map((id) => order.colorProgress.find((c) => c.colorId === id)?.colorName)
+      .filter((n): n is string => !!n);
+
   if (editing) {
     const rows: ExternalOpRow[] = operations.map((o) => ({
       id: o.id,
@@ -127,6 +140,61 @@ export function ExternalTab({ order }: { order: OrderDetailDto; focus?: "externa
           </button>
         </div>
       )}
+
+      {/* ── External Order_Ex.Op ──────────────────────────────────────────
+          The sheet's own header block: the order's facts down the left, the
+          supplier's down the right, in that sequence. Everything here belongs
+          to the order rather than to any one operation, which is why it sits
+          above the operations table rather than inside it. */}
+      <Card>
+        <CardHeader
+          title="External order"
+          subtitle="What is being sent out, and to whom."
+        />
+        <div className="grid gap-4 p-4 lg:grid-cols-2">
+          <dl className="space-y-1.5">
+            <SheetRow label="PO no." value={order.poNumber} mono />
+            <SheetRow label="PO date" value={fmtDate(order.poDate)} />
+            <SheetRow label="Order name" value={order.orderName} />
+            <SheetRow label="Item type" value={order.itemType} />
+            <SheetRow label="Gender" value={order.gender} />
+            <SheetRow label="Coordinator" value={order.coordinator?.name} />
+            <SheetRow label="Client" value={order.client.name} />
+            <SheetRow label="External reference" value={order.externalReference} />
+            <SheetRow label="External work type" value={order.externalWorkType} />
+            <SheetRow label="External work sort" value={order.externalWorkSort} />
+            <SheetRow
+              label="External price in US$"
+              value={
+                // The sheet keeps one price per work type; here each operation
+                // carries its own rate, so the total of what has been booked is
+                // the honest summary rather than a single number the data does
+                // not have.
+                operations.some((o) => o.unitPriceUsd != null)
+                  ? `$${operations.reduce((a, o) => a + (o.totalPriceUsd ?? 0), 0).toFixed(2)} across ${operations.length} operation${operations.length === 1 ? '' : 's'}`
+                  : null
+              }
+            />
+          </dl>
+
+          <dl className="space-y-1.5">
+            <SheetRow label="Factory name" value={order.externalFactory?.name} />
+            <SheetRow label="Fabric delivery date to supplier" value={fmtDate(order.fabricDeliveryToSupplier)} />
+            <SheetRow label="Required delivery date" value={fmtDate(order.requiredDeliveryDate)} highlight />
+            <SheetRow label="Delivery time from supplier" value={fmtDate(order.supplierDeliveryDate)} />
+            <SheetRow
+              label="Fabric"
+              value={[order.fabric, order.fabric2, order.fabric3].filter(Boolean).join(' · ') || null}
+            />
+            <div className="pt-1">
+              <p className="label mb-1">External notes</p>
+              <div className="rounded-md border border-ink-200 bg-ink-50/60 p-2.5">
+                <FreeText text={order.notes.external} />
+              </div>
+            </div>
+          </dl>
+        </div>
+      </Card>
 
       {blocked.length > 0 && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3">
@@ -221,6 +289,7 @@ export function ExternalTab({ order }: { order: OrderDetailDto; focus?: "externa
                 <tr>
                   <th className="th">Operation</th>
                   <th className="th">Factory</th>
+                  <th className="th">Colours</th>
                   <th className="th text-right">Qty</th>
                   <th className="th text-right">Rate</th>
                   <th className="th">Sent</th>
@@ -242,6 +311,13 @@ export function ExternalTab({ order }: { order: OrderDetailDto; focus?: "externa
                         )}
                       </td>
                       <td className="td text-xs">{op.externalFactoryName || '—'}</td>
+                      <td className="td text-xs">
+                        {/* The sheet's Items/Color block. Which colours go out is
+                            recorded per operation; how many of each is not, so the
+                            colours are listed and no per-colour quantity is
+                            implied by splitting the total between them. */}
+                        {colourNames(op.colorIds).join(', ') || '—'}
+                      </td>
                       <td className="td text-right"><Num value={op.qty} /></td>
                       <td className="td text-right text-xs"><Num value={op.unitRate} places={3} fallback="—" /></td>
                       <td className="td text-xs">{fmtDate(op.sentDate)}</td>
@@ -379,5 +455,34 @@ function RecordApprovalModal({
         )}
       </div>
     </Modal>
+  );
+}
+
+/**
+ * One labelled row of the sheet's header block.
+ *
+ * A definition list rather than a grid of cards: this half of the sheet is
+ * read, not worked in — the values belong to the order and are edited on Order
+ * Details, where changing them is one action rather than scattered across two
+ * screens that could disagree.
+ *
+ * `highlight` marks the required delivery date, which the workbook fills yellow
+ * because it is the date the whole outside operation is planned backwards from.
+ */
+function SheetRow({
+  label, value, mono, highlight,
+}: {
+  label: string; value: string | null | undefined; mono?: boolean; highlight?: boolean;
+}) {
+  return (
+    <div className={clsx(
+      'flex items-baseline gap-3 border-b border-ink-100 py-1 last:border-0',
+      highlight && 'rounded bg-amber-50 px-1.5',
+    )}>
+      <dt className="w-52 shrink-0 text-xs font-medium text-ink-500">{label}</dt>
+      <dd className={clsx('min-w-0 flex-1 text-sm text-ink-900', mono && 'font-mono')}>
+        {value || <span className="text-ink-400">—</span>}
+      </dd>
+    </div>
   );
 }

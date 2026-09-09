@@ -394,7 +394,7 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
     key: StageKey.EXTERNAL_ORDER,
     order: 10,
     sheetName: 'External Order_Ex.Op',
-    label: 'External Work',
+    label: 'External Order',
     purpose: 'Printing, embroidery or anything else done outside the factory.',
     department: Department.EXTERNAL_OPS,
     whatYouEnter: [
