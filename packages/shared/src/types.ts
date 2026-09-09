@@ -91,6 +91,14 @@ export interface OrderDetailDto {
   externalWorkSort: string | null;
   externalWorkType: string | null;
   poDate: string | null;
+  /// The factory's own PO date, distinct from the customer's.
+  internalPoDate: string | null;
+  /// Null is "nobody has said yet", which is not the same as "no".
+  productionSample: boolean | null;
+  /// The order's own addresses. Null means it inherits the client's, which
+  /// `client.shippingAddress` already resolves for display.
+  shippingAddress: string | null;
+  billingAddress: string | null;
   promisedShippingDate: string | null;
   requiredDeliveryDate: string | null;
   cancelled: boolean;

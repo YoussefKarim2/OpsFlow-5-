@@ -200,6 +200,12 @@ model Order {
   /// Accessory allowance, Order Details!D23.
   accessoryPercentage      Decimal               @default(0.05) @db.Decimal(5, 4)
   poDate                   DateTime?
+  /// The factory's own PO date, `Order Details_Coordinator!D10`. Distinct from
+  /// `poDate`, which is the date the customer put on theirs.
+  internalPoDate           DateTime?
+  /// Whether a production sample is required before the line starts. Nullable
+  /// because "nobody has said yet" is different from "no".
+  productionSample         Boolean?
   promisedShippingDate     DateTime?
   requiredDeliveryDate     DateTime?
   fabricDeliveryToSupplier DateTime?
@@ -1545,6 +1551,11 @@ enum RefKind {
   /// than an enum so the factory can add its own without a deploy — and the BOM
   /// item name stays free text, so an item nobody has listed is still typeable.
   BOM_ITEM_TYPE
+  /// Customer delivery addresses, offered as a list on the order. Reference data
+  /// rather than free text because the same handful are typed over and over and
+  /// a mistyped one is a shipment to the wrong country — but the field stays
+  /// free text underneath, so an address nobody has listed is still enterable.
+  SHIPPING_ADDRESS
 }
 
 enum Priority {

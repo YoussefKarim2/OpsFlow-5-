@@ -538,6 +538,14 @@ export async function getOrderDetail(orderId: string, today = new Date()): Promi
     externalWorkSort: order.externalWorkSort,
     externalWorkType: order.externalWorkType,
     poDate: iso(order.poDate),
+    internalPoDate: iso(order.internalPoDate),
+    productionSample: order.productionSample,
+    // The order's own addresses, which may be null. `client.shippingAddress`
+    // below is the same value with the client's default behind it — right for
+    // display, wrong for an editor, which must not save the client's address
+    // onto the order as though somebody had chosen it.
+    shippingAddress: order.shippingAddress,
+    billingAddress: order.billingAddress,
     promisedShippingDate: iso(order.promisedShippingDate),
     requiredDeliveryDate: iso(order.requiredDeliveryDate),
     cancelled: order.cancelled,

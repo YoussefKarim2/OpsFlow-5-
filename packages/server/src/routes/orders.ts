@@ -108,6 +108,10 @@ const createSchema = z.object({
   externalWorkType: z.string().optional(),
   shippingAddress: z.string().optional(),
   billingAddress: z.string().optional(),
+  /// The factory's own PO date, distinct from the customer's.
+  internalPoDate: z.string().optional().nullable(),
+  /// Null is "nobody has said yet", which is not the same as "no".
+  productionSample: z.boolean().optional().nullable(),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).default('MEDIUM'),
   colors: z.array(z.object({ colorId: z.string(), productName: z.string().optional() })).default([]),
   sizes: z.array(z.string()).default([]),
@@ -165,6 +169,8 @@ ordersRouter.post('/', requirePermission('order:create'), asyncHandler(async (re
         externalWorkType: input.externalWorkType,
         shippingAddress: input.shippingAddress,
         billingAddress: input.billingAddress,
+        internalPoDate: input.internalPoDate ? new Date(input.internalPoDate) : null,
+        productionSample: input.productionSample ?? null,
         priority: input.priority,
       },
     });
@@ -347,6 +353,11 @@ ordersRouter.patch('/:id', requirePermission('order:edit'), asyncHandler(async (
       poDate: input.poDate ? new Date(input.poDate) : undefined,
       promisedShippingDate: input.promisedShippingDate ? new Date(input.promisedShippingDate) : undefined,
       requiredDeliveryDate: input.requiredDeliveryDate ? new Date(input.requiredDeliveryDate) : undefined,
+      // Present-and-empty clears the date; absent leaves it alone. A field the
+      // form did not send must not be wiped by the form not sending it.
+      internalPoDate: input.internalPoDate === undefined
+        ? undefined
+        : input.internalPoDate ? new Date(input.internalPoDate) : null,
     },
   });
 

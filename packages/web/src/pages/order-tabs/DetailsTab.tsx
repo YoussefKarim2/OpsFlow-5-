@@ -34,6 +34,10 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
     cutPercentage: order.cutPercentage,
     accessoryPercentage: order.accessoryPercentage,
     poDate: order.poDate?.slice(0, 10) ?? '',
+    internalPoDate: order.internalPoDate?.slice(0, 10) ?? '',
+    productionSample: order.productionSample,
+    shippingAddress: order.shippingAddress ?? '',
+    billingAddress: order.billingAddress ?? '',
     promisedShippingDate: order.promisedShippingDate?.slice(0, 10) ?? '',
     requiredDeliveryDate: order.requiredDeliveryDate?.slice(0, 10) ?? '',
     externalReference: order.externalReference ?? '',
@@ -86,55 +90,129 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
         )}
       </div>
 
+      {/* ── Order Details_Coordinator ────────────────────────────────────
+          Laid out as the workbook sheet is: the order's own facts down the
+          left, the addresses and free-text blocks down the right, in the same
+          sequence, because the people filling this in have the sheet in front
+          of them and read down it. */}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <CardHeader title="Product" />
+          <CardHeader title="Order details" subtitle="The order as the customer placed it." />
           <div className="grid gap-3 p-4 sm:grid-cols-2">
-            <Row label="PO number" value={order.poNumber} mono />
-            <Edit label="Order name" editing={editing} value={form.orderName}
-              onChange={(v) => setForm({ ...form, orderName: v })} display={order.orderName} />
+            <Row label="Customer" value={order.client.name} />
+            <Edit label="Customer PO" editing={editing} value={form.externalReference}
+              onChange={(v) => setForm({ ...form, externalReference: v })}
+              display={order.externalReference} hint="The customer's own number for this order." />
+            <Edit label="Customer PO date" editing={editing} type="date" value={form.poDate}
+              onChange={(v) => setForm({ ...form, poDate: v })} display={fmtDate(order.poDate)} />
+            <Edit label="Required delivery date" editing={editing} type="date" value={form.requiredDeliveryDate}
+              onChange={(v) => setForm({ ...form, requiredDeliveryDate: v })} display={fmtDate(order.requiredDeliveryDate)} />
             <Select label="Season" editing={editing} value={form.season} options={values.SEASON?.map((v) => v.value) ?? []}
               onChange={(v) => setForm({ ...form, season: v })} display={order.season} />
+
+            <Row label="Internal PO no." value={order.poNumber} mono />
+            <Edit label="Internal PO date" editing={editing} type="date" value={form.internalPoDate}
+              onChange={(v) => setForm({ ...form, internalPoDate: v })} display={fmtDate(order.internalPoDate)} />
+            <Edit label="Order name" editing={editing} value={form.orderName}
+              onChange={(v) => setForm({ ...form, orderName: v })} display={order.orderName} />
+
+            {/* Three states, not two: nobody has said yet is not the same as no,
+                and the sheet colours an unanswered cell for exactly that reason. */}
+            <div>
+              <p className="label">Production sample</p>
+              {editing ? (
+                <select
+                  className="input"
+                  value={form.productionSample == null ? '' : form.productionSample ? 'yes' : 'no'}
+                  onChange={(e) => setForm({
+                    ...form,
+                    productionSample: e.target.value === '' ? null : e.target.value === 'yes',
+                  })}
+                >
+                  <option value="">Not decided</option>
+                  <option value="yes">Yes</option>
+                  <option value="no">No</option>
+                </select>
+              ) : (
+                <p className={clsx(
+                  'text-sm',
+                  order.productionSample === false ? 'font-semibold text-red-700' : 'text-ink-800',
+                )}>
+                  {order.productionSample == null ? '—' : order.productionSample ? 'Yes' : 'No'}
+                </p>
+              )}
+            </div>
+
             <Select label="Item type" editing={editing} value={form.itemType} options={values.ITEM_TYPE?.map((v) => v.value) ?? []}
               onChange={(v) => setForm({ ...form, itemType: v })} display={order.itemType} />
             <Select label="Gender" editing={editing} value={form.gender} options={values.GENDER?.map((v) => v.value) ?? []}
               onChange={(v) => setForm({ ...form, gender: v })} display={order.gender} />
-            <Edit label="Style number" editing={editing} value={form.styleNumber}
+            <Edit label="Style no." editing={editing} value={form.styleNumber}
               onChange={(v) => setForm({ ...form, styleNumber: v })} display={order.styleNumber} />
-            <Select label="Fit" editing={editing} value={form.fit} options={values.FIT?.map((v) => v.value) ?? []}
-              onChange={(v) => setForm({ ...form, fit: v })} display={order.fit} />
-            <Select label="Block pattern" editing={editing} value={form.blockPattern} options={values.BLOCK_PATTERN?.map((v) => v.value) ?? []}
-              onChange={(v) => setForm({ ...form, blockPattern: v })} display={order.blockPattern} />
-            <Select label="Fabric" editing={editing} value={form.fabric} options={values.FABRIC?.map((v) => v.value) ?? []}
-              onChange={(v) => setForm({ ...form, fabric: v })} display={order.fabric} />
-          </div>
-        </Card>
-
-        <Card>
-          <CardHeader title="Commercial & dates" />
-          <div className="grid gap-3 p-4 sm:grid-cols-2">
-            <Row label="Client" value={order.client.name} />
             <Row label="Coordinator" value={order.coordinator?.name} />
-            <Row label="Outside work manager" value={order.outsideWorkManager?.name} />
-            <Row label="External factory" value={order.externalFactory?.name} />
-            <Edit label="Price per piece (USD)" editing={editing} type="number" value={String(form.pricePerPieceUsd)}
+            <Edit label="Price in US$" editing={editing} type="number" step="0.01" value={String(form.pricePerPieceUsd)}
               onChange={(v) => setForm({ ...form, pricePerPieceUsd: Number(v) })}
               display={order.pricePerPieceUsd != null ? `$${order.pricePerPieceUsd.toFixed(2)}` : null} />
-            <Select label="Shipping method" editing={editing} value={form.shippingMethod} options={values.SHIPPING_METHOD?.map((v) => v.value) ?? []}
+            <Select label="Method of shipping" editing={editing} value={form.shippingMethod} options={values.SHIPPING_METHOD?.map((v) => v.value) ?? []}
               onChange={(v) => setForm({ ...form, shippingMethod: v })} display={order.shippingMethod} />
             <Edit label="Cut percentage" editing={editing} type="number" step="0.01" value={String(form.cutPercentage)}
               onChange={(v) => setForm({ ...form, cutPercentage: Number(v) })}
               display={`${(order.cutPercentage * 100).toFixed(1)}%`}
               hint="A fraction — 0.05 means 5%. Drives the cut order." />
+            <Select label="Fabric" editing={editing} value={form.fabric} options={values.FABRIC?.map((v) => v.value) ?? []}
+              onChange={(v) => setForm({ ...form, fabric: v })} display={order.fabric} />
+            <Select label="Fit" editing={editing} value={form.fit} options={values.FIT?.map((v) => v.value) ?? []}
+              onChange={(v) => setForm({ ...form, fit: v })} display={order.fit} />
+            <Select label="Block pattern" editing={editing} value={form.blockPattern} options={values.BLOCK_PATTERN?.map((v) => v.value) ?? []}
+              onChange={(v) => setForm({ ...form, blockPattern: v })} display={order.blockPattern} />
             <Edit label="Accessory percentage" editing={editing} type="number" step="0.01" value={String(form.accessoryPercentage)}
               onChange={(v) => setForm({ ...form, accessoryPercentage: Number(v) })}
               display={`${(order.accessoryPercentage * 100).toFixed(1)}%`} />
-            <Edit label="PO date" editing={editing} type="date" value={form.poDate}
-              onChange={(v) => setForm({ ...form, poDate: v })} display={fmtDate(order.poDate)} />
             <Edit label="Promised shipping" editing={editing} type="date" value={form.promisedShippingDate}
               onChange={(v) => setForm({ ...form, promisedShippingDate: v })} display={fmtDate(order.promisedShippingDate)} />
-            <Edit label="Required delivery" editing={editing} type="date" value={form.requiredDeliveryDate}
-              onChange={(v) => setForm({ ...form, requiredDeliveryDate: v })} display={fmtDate(order.requiredDeliveryDate)} />
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader title="Addresses and instructions" subtitle="Where it ships, and what the floor must know." />
+          <div className="space-y-3 p-4">
+            <AddressPicker
+              label="Shipping address"
+              editing={editing}
+              value={form.shippingAddress}
+              options={values.SHIPPING_ADDRESS?.map((v) => v.value) ?? []}
+              onChange={(v) => setForm({ ...form, shippingAddress: v })}
+              display={order.client.shippingAddress}
+              hint="Pick one, or type an address that is not on the list."
+            />
+            <AddressPicker
+              label="Billing address"
+              editing={editing}
+              value={form.billingAddress}
+              options={values.SHIPPING_ADDRESS?.map((v) => v.value) ?? []}
+              onChange={(v) => setForm({ ...form, billingAddress: v })}
+              display={order.client.billingAddress}
+            />
+
+            <div>
+              <p className="label">General notes</p>
+              {editing ? (
+                <textarea className="input min-h-[5rem]" value={form.notes.general ?? ''}
+                  onChange={(e) => setForm({ ...form, notes: { ...form.notes, general: e.target.value } })} />
+              ) : (
+                <FreeText text={order.notes.general} />
+              )}
+            </div>
+
+            <div>
+              <p className="label">Packing instructions</p>
+              {editing ? (
+                <textarea className="input min-h-[5rem]" value={form.notes.packing ?? ''}
+                  onChange={(e) => setForm({ ...form, notes: { ...form.notes, packing: e.target.value } })} />
+              ) : (
+                <FreeText text={order.notes.packing} />
+              )}
+            </div>
           </div>
         </Card>
       </div>
@@ -260,6 +338,54 @@ function Select({
       ) : (
         <p className="text-sm text-ink-800">{display || '—'}</p>
       )}
+    </div>
+  );
+}
+
+/**
+ * An address chosen from the list, or typed.
+ *
+ * A dropdown alone would be wrong: these four are the addresses used today, not
+ * the only ones that will ever exist, and a customer with a new warehouse must
+ * not be unshippable until somebody edits reference data. So the list fills the
+ * field and the field stays editable — which is also how the workbook's own
+ * validation behaves.
+ */
+function AddressPicker({
+  label, editing, value, options, onChange, display, hint,
+}: {
+  label: string; editing: boolean; value: string; options: string[];
+  onChange: (v: string) => void; display: string | null | undefined; hint?: string;
+}) {
+  if (!editing) {
+    return (
+      <div>
+        <p className="label">{label}</p>
+        <p className="whitespace-pre-line text-sm text-ink-800">{display || '—'}</p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <p className="label">{label}</p>
+      <select
+        className="input mb-1.5"
+        value={options.includes(value) ? value : ''}
+        onChange={(e) => { if (e.target.value) onChange(e.target.value); }}
+      >
+        <option value="">Choose a saved address…</option>
+        {options.map((o) => (
+          <option key={o} value={o}>{o.length > 70 ? `${o.slice(0, 70)}…` : o}</option>
+        ))}
+      </select>
+      <textarea
+        className="input min-h-[3.5rem]"
+        value={value}
+        placeholder="Or type an address"
+        onChange={(e) => onChange(e.target.value)}
+      />
+      {hint && <p className="mt-1 text-2xs text-ink-500">{hint}</p>}
     </div>
   );
 }
