@@ -13,6 +13,7 @@ import { api, ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { ChangePasswordForm } from './ChangePassword';
 import { EmailStatusPanel } from './admin/EmailStatusPanel';
+import { BackupsPanel } from './admin/BackupsPanel';
 import { NotificationPreferencesPanel } from '../components/NotificationPreferencesPanel';
 import {
   Card, CardHeader, StatTile, Num, ProgressBar, Field, Spinner, ErrorNote,
@@ -449,7 +450,7 @@ export function FactoriesPage() {
 }
 
 export function SettingsPage() {
-  const { user, can } = useAuth();
+  const { user, can, isSuperAdmin } = useAuth();
 
   return (
     <div className="space-y-4 p-5">
@@ -485,6 +486,9 @@ export function SettingsPage() {
       {/* Behind audit:read, the same gate as the audit log — the delivery log
           names every recipient of every message, which is a staff directory. */}
       {can('audit:read') && <EmailStatusPanel />}
+      {/* Super admins only, matching the endpoint — showing this panel to
+          anyone else would only produce a row of 403s. */}
+      {isSuperAdmin && <BackupsPanel />}
 
       <Card>
         <CardHeader title="Your permissions" subtitle={`${user?.permissions.length ?? 0} granted`} />

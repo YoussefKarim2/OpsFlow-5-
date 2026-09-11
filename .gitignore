@@ -12,3 +12,4 @@ dist-test/
 # runs `prisma migrate deploy` against them. Only the local shadow-database
 # artefacts are ignored.
 packages/server/prisma/migrations/**/*.tmp
+.backups/

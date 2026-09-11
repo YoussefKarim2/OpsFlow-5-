@@ -1841,3 +1841,21 @@ enum ImportStatus {
   COMMITTED
   FAILED
 }
+
+/// An uploaded file's bytes, when STORAGE_DRIVER=db.
+///
+/// Lives in the database rather than on disk because a container without a
+/// mounted volume loses its filesystem on every deploy, and an attachment row
+/// pointing at a file that no longer exists is worse than no attachment at all.
+/// Being here also means uploads are inside the backup, not beside it.
+model StoredFile {
+  key       String   @id
+  fileName  String
+  mimeType  String
+  size      Int
+  bytes     Bytes
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("stored_files")
+}

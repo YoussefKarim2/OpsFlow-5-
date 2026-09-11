@@ -14,7 +14,9 @@
     "migrate:deploy": "prisma migrate deploy",
     "generate": "prisma generate",
     "seed": "tsx prisma/seed.ts",
-    "studio": "prisma studio"
+    "studio": "prisma studio",
+    "restore": "tsx src/scripts/restore-backup.ts",
+    "backup": "tsx src/scripts/take-backup.ts"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

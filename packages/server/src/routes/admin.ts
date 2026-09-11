@@ -12,6 +12,8 @@
  * see what happened without being able to change who works here.
  */
 
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import { Router } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db.js';
@@ -22,6 +24,10 @@ import {
   changeRole, setSuperAdmin, updateUserProfile, unlockUser, listRoles,
 } from '../services/user-service.js';
 import { SUPER_ADMIN_EMAILS } from '../config.js';
+import {
+  runBackup, listStoredBackups, lastBackupRun, backupDir, backupRecipients,
+} from '../services/backup/backup-worker.js';
+import { readBackup, describeBackup } from '../services/backup/backup-service.js';
 
 export const adminRouter = Router();
 adminRouter.use(authenticate);
@@ -352,6 +358,51 @@ adminRouter.get('/audit/:entityType/:entityId', requirePermission('audit:read'),
     take: 200,
   });
   res.json({ data: rows });
+}));
+
+// ── Backups ─────────────────────────────────────────────────────────────────
+//
+// Super-admin only, and read-only apart from "take one now". There is
+// deliberately no restore endpoint: a restore replaces every row in the
+// database, and that is not something anyone should be able to do by clicking
+// a button in a browser they left logged in. It lives in a CLI command that
+// has to be run on the server, on purpose, by someone who means it.
+
+adminRouter.get('/backups', requireSuperAdmin, asyncHandler(async (_req, res) => {
+  const stored = await listStoredBackups();
+  res.json({
+    data: {
+      backups: stored,
+      lastRun: lastBackupRun(),
+      directory: backupDir(),
+      emailedTo: backupRecipients(),
+    },
+  });
+}));
+
+adminRouter.post('/backups', requireSuperAdmin, asyncHandler(async (_req, res) => {
+  const summary = await runBackup();
+  // A failed backup is news, not a server error — the caller wants to read why.
+  res.status(summary.ok ? 201 : 500).json({ data: summary });
+}));
+
+adminRouter.get('/backups/:filename', requireSuperAdmin, asyncHandler(async (req, res) => {
+  // The name comes from a URL, so anything that is not exactly one of ours is
+  // refused rather than sanitised — no path traversal, no ambiguity.
+  const { filename } = req.params;
+  const stored = await listStoredBackups();
+  if (!stored.some((b) => b.filename === filename)) {
+    res.status(404).json({ error: { message: 'No such backup.' } });
+    return;
+  }
+  const buffer = await fs.readFile(path.join(backupDir(), filename));
+  // Parsed before it is served, so a corrupt file is discovered here rather
+  // than on the day someone tries to restore from it.
+  const payload = readBackup(buffer);
+  res.setHeader('Content-Type', 'application/gzip');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('X-Backup-Summary', describeBackup(payload.counts));
+  res.send(buffer);
 }));
 
 /**

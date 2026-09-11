@@ -6,6 +6,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import { ZodError } from 'zod';
 import { Prisma } from '@prisma/client';
+import { prisma } from './db.js';
 import { config, isProd, TRUST_PROXY } from './config.js';
 import { AppError } from './errors.js';
 import { requestContextMiddleware, setChangeFlusher } from './request-context.js';
@@ -59,8 +60,39 @@ export function createApp() {
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: true }));
 
+  /**
+   * Liveness — is this process answering at all?
+   *
+   * Deliberately touches nothing: no database, no disk. This is what the
+   * platform's healthcheck watches, and it must fail only when the process
+   * really is wedged. If it pinged the database, a thirty-second database
+   * blip would be read as "the API is broken", and the platform would restart
+   * a perfectly healthy container — repeatedly, during exactly the incident
+   * when a restart helps least.
+   */
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, service: 'opsflow-api', version: '0.1.0', env: config.NODE_ENV });
+    res.json({
+      ok: true, service: 'opsflow-api', version: '0.1.0', env: config.NODE_ENV,
+      uptimeSeconds: Math.round(process.uptime()),
+    });
+  });
+
+  /**
+   * Readiness — can this process actually do its job?
+   *
+   * Pings the database, so a 503 here means "up, but not serving". Useful to a
+   * human diagnosing an outage and to a load balancer deciding where to send
+   * traffic; not wired to anything that restarts the container.
+   */
+  app.get('/api/health/ready', (_req, res) => {
+    void prisma.$queryRaw`SELECT 1`.then(
+      () => res.json({ ok: true, database: 'up' }),
+      (err: unknown) => res.status(503).json({
+        ok: false,
+        database: 'down',
+        error: err instanceof Error ? err.message : 'unreachable',
+      }),
+    );
   });
 
   app.use('/api/auth', authRouter);

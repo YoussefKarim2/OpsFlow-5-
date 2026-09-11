@@ -1,6 +1,10 @@
 {
   "$schema": "https://schema.railpack.com",
   "deploy": {
-    "startCommand": "npm run migrate:deploy -w @opsflow/server && npm run start -w @opsflow/server"
+    "startCommand": "npm run migrate:deploy -w @opsflow/server && npm run start -w @opsflow/server",
+    "healthCheckPath": "/api/health",
+    "healthCheckTimeout": 120,
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
   }
 }

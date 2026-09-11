@@ -49,7 +49,17 @@ const schema = z.object({
   /** Failed sign-ins for one account before it is temporarily locked. */
   LOGIN_MAX_ATTEMPTS: z.coerce.number().int().min(3).default(8),
   LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().min(1).default(15),
-  STORAGE_DRIVER: z.enum(['local', 's3']).default('local'),
+  /**
+   * Where uploaded files go.
+   *
+   *   `db`    — in Postgres. Survives a redeploy on a container with no volume,
+   *             and is included in the backups. The safe default.
+   *   `local` — on the filesystem. Fast, and correct *only* if STORAGE_LOCAL_DIR
+   *             is a mounted volume. On a plain container it silently loses
+   *             every upload on the next deploy.
+   *   `s3`    — an object store, for when document volume outgrows the database.
+   */
+  STORAGE_DRIVER: z.enum(['local', 's3', 'db']).default('db'),
   STORAGE_LOCAL_DIR: z.string().default('./.storage'),
   S3_BUCKET: z.string().optional(),
   S3_REGION: z.string().optional(),
@@ -91,6 +101,29 @@ const schema = z.object({
    * default — these conditions change over hours or days, not seconds, so
    * there is nothing to gain from checking more often than that.
    */
+  // ── Database backups ────────────────────────────────────────────────────
+  //
+  // A backup nobody has restored is not a backup, so the restore path is
+  // exercised by tests rather than assumed. These settings control how often
+  // one is taken and where it goes.
+  //
+  // BACKUP_DIR is deliberately *not* under the upload directory: on a container
+  // with no mounted volume both vanish on redeploy, and keeping them separate
+  // makes it obvious which one needs a volume.
+  BACKUP_ENABLED: envBool(true),
+  BACKUP_INTERVAL_HOURS: z.coerce.number().min(0.25).default(12),
+  BACKUP_DIR: z.string().default('./.backups'),
+  /** How many backups to keep on disk. Oldest beyond this are deleted. */
+  BACKUP_RETAIN: z.coerce.number().int().min(1).default(14),
+  /** Wait this long after boot before the first backup, so startup stays quick. */
+  BACKUP_STARTUP_DELAY_SECONDS: z.coerce.number().int().min(0).default(120),
+  /** Mail a copy of every backup out. The only off-box copy this deployment has. */
+  BACKUP_EMAIL_ENABLED: envBool(true),
+  /** Who receives it. Empty means the super admins. */
+  BACKUP_EMAIL_TO: z.string().default(''),
+  /** Graph refuses inline attachments past roughly 4 MB; stay under it. */
+  BACKUP_EMAIL_MAX_BYTES: z.coerce.number().int().min(1).default(3_500_000),
+
   ALERT_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(60).default(3600),
 
   /**
@@ -188,6 +221,21 @@ export const ALWAYS_NOTIFY_EMAILS: readonly string[] = parseEmailList(config.ALW
  * Addresses mail may actually be sent to, or empty for "no restriction".
  * Parsed once, at boot. See `EMAIL_RECIPIENT_ALLOWLIST` above.
  */
+/**
+ * Local disk storage on a container with no mounted volume destroys every
+ * upload on the next deploy, and nothing about it looks broken until someone
+ * opens an order and the purchase order they attached last month is gone. Say
+ * so at boot, loudly, because the alternative is finding out the slow way.
+ */
+if (config.NODE_ENV === 'production' && config.STORAGE_DRIVER === 'local') {
+  console.warn(
+    `WARNING: STORAGE_DRIVER=local in production. Uploaded files are written to `
+    + `${config.STORAGE_LOCAL_DIR}, which is lost on every redeploy unless that `
+    + `path is a mounted volume. Use STORAGE_DRIVER=db (stored in Postgres, `
+    + `included in backups) or s3 unless you have mounted one.`,
+  );
+}
+
 export const EMAIL_RECIPIENT_ALLOWLIST: readonly string[] = parseEmailList(config.EMAIL_RECIPIENT_ALLOWLIST);
 
 /**

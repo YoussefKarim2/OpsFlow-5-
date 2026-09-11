@@ -396,6 +396,68 @@ npm run studio -w @opsflow/server   # Prisma Studio
 
 ---
 
+## Staying up, and not losing anything
+
+Two different promises, kept by different machinery.
+
+### The site stays up
+
+- **Uncaught errors don't kill the process silently.** A stray promise rejection
+  from a background job is logged and the server keeps serving. A genuine
+  uncaught exception is logged and *then* shuts down cleanly, because a process
+  in an unknown state writing wrong data is worse than two seconds of downtime.
+  The platform restarts it. See `src/process-guards.ts`.
+- **`/api/health`** is liveness — it touches nothing, so it fails only when the
+  process really is wedged. That is what Railway's healthcheck watches. If it
+  pinged the database, a brief database blip would be read as "the API is
+  broken" and restart a healthy container during exactly the incident when a
+  restart helps least.
+- **`/api/health/ready`** is readiness — it pings the database, so a 503 means
+  "up, but not serving". For humans diagnosing an outage; wired to nothing that
+  restarts anything.
+- **A broken screen doesn't blank the app.** React unmounts the whole tree on a
+  render error, which looks to the user exactly like the system disappearing.
+  An error boundary inside the shell keeps the sidebar working so they can
+  navigate away, and clears itself when they do.
+
+### The data stays put
+
+- **Backups run on a schedule** (`BACKUP_INTERVAL_HOURS`, default 12), kept on
+  disk (`BACKUP_RETAIN`, default 14) and **emailed off the server**. The emailed
+  copy is the one that still exists after losing the machine — the only off-box
+  channel this deployment already has credentials for.
+- **Take one by hand** before a risky migration:
+  `npm run backup -w @opsflow/server`
+- **Restore** — deliberately a command, not a button:
+  `npm run restore -w @opsflow/server -- ./.backups/<file>.json.gz --yes`
+  It refuses to run without `--yes`, because overwriting a good database with
+  an old copy is the one thing worse than losing it.
+- **Super admins can see and download backups** in Settings.
+
+The restore path is exercised, not assumed. A full dump of a live database
+(2,343 rows, 57 tables) restored into an empty one and compared **column by
+column**: every value identical, including binary attachments and `Decimal`
+prices. Three bugs only that exercise could have found — enum columns, `numeric`
+columns and JSON arrays all arrive as text through a parameterised INSERT, and
+Postgres refuses to guess — are fixed in `src/services/backup/restore.ts`.
+
+> Row counts matching is not the same as data matching. The comparison hashes
+> every row, and the one table that differed turned out to differ only in
+> physical *column order* — which is why the check compares values per column
+> rather than trusting a whole-row digest.
+
+### Uploaded files
+
+`STORAGE_DRIVER` defaults to **`db`**: uploads are stored in Postgres, so they
+survive a redeploy and are inside the backups rather than beside them.
+
+`STORAGE_DRIVER=local` writes to the filesystem and is correct **only** if
+`STORAGE_LOCAL_DIR` is a mounted volume. On a container without one — which was
+the case here — every uploaded purchase order and artwork file is destroyed on
+the next deploy, while the attachment rows in the database go on pointing
+confidently at keys that no longer exist. The server warns about this at boot in
+production rather than letting it be discovered months later.
+
 ## The three rules this codebase follows
 
 **1. Only facts are stored.** Status, progress, every shortage, every alert, the projected completion

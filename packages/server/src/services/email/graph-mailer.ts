@@ -123,11 +123,27 @@ export function resetTokenCache(): void {
 // Send
 // ─────────────────────────────────────────────────────────────────────────────
 
+export interface OutboundAttachment {
+  filename: string;
+  /** MIME type. `application/gzip` for a backup, and Graph is not fussy. */
+  contentType: string;
+  content: Buffer;
+}
+
 export interface OutboundMessage {
   to: readonly string[];
   subject: string;
   html: string;
   text: string;
+  /**
+   * Files to attach, base64'd inline in the sendMail call.
+   *
+   * Graph accepts inline attachments only while the whole request stays under
+   * about 4 MB, and base64 inflates by a third — so the caller checks the size
+   * before it gets here (see the backup worker). Nothing in normal operation
+   * attaches anything; this exists so a database backup can leave the machine.
+   */
+  attachments?: readonly OutboundAttachment[];
 }
 
 /**
@@ -159,6 +175,16 @@ export async function sendMail(
       body: { contentType: 'HTML', content: message.html },
       toRecipients: [{ emailAddress: { address: sender } }],
       bccRecipients: recipients.map((address) => ({ emailAddress: { address } })),
+      ...(message.attachments && message.attachments.length > 0
+        ? {
+          attachments: message.attachments.map((a) => ({
+            '@odata.type': '#microsoft.graph.fileAttachment',
+            name: a.filename,
+            contentType: a.contentType,
+            contentBytes: a.content.toString('base64'),
+          })),
+        }
+        : {}),
     },
     saveToSentItems: config.MICROSOFT_SAVE_TO_SENT_ITEMS,
   };

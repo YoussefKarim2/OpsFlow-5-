@@ -1,9 +1,10 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Permission } from '@opsflow/shared';
 import { AuthProvider, useAuth } from './lib/auth';
 import { AppShell } from './components/AppShell';
 import { Spinner, ToastProvider, EmptyState } from './components/ui';
+import { ErrorBoundary } from './components/ErrorBoundary';
 
 import { DashboardPage } from './pages/Dashboard';
 import { OrdersPage } from './pages/Orders';
@@ -44,6 +45,7 @@ const queryClient = new QueryClient({
  */
 function Protected({ children, requires }: { children: React.ReactNode; requires?: Permission }) {
   const { user, loading, can } = useAuth();
+  const location = useLocation();
 
   if (loading) return <div className="flex h-full items-center justify-center"><Spinner label="Signing in…" /></div>;
   if (!user) return <Navigate to="/login" replace />;
@@ -65,7 +67,15 @@ function Protected({ children, requires }: { children: React.ReactNode; requires
     );
   }
 
-  return <AppShell>{children}</AppShell>;
+  // The boundary sits *inside* the shell so a screen that fails to render
+  // leaves the sidebar and the header working — the user can walk away from
+  // the broken page instead of being trapped on it. Keyed by path so that
+  // walking away actually clears the error rather than carrying it along.
+  return (
+    <AppShell>
+      <ErrorBoundary key={location.pathname}>{children}</ErrorBoundary>
+    </AppShell>
+  );
 }
 
 export default function App() {

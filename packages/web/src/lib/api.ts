@@ -533,6 +533,37 @@ export const api = {
     setSuperAdmin: (id: string, isSuperAdmin: boolean) =>
       post<AdminUser>(`/admin/users/${id}/super-admin`, { isSuperAdmin }),
     roles: () => get<{ data: Array<{ key: string; label: string; permissionCount: number; userCount: number }> }>('/admin/roles'),
+    backups: () => get<{
+      data: {
+        backups: Array<{ filename: string; bytes: number; createdAt: string }>;
+        lastRun: {
+          at: string; ok: boolean; filename?: string; bytes?: number;
+          rows?: number; tables?: number; emailed?: boolean; error?: string;
+        } | null;
+        directory: string;
+        emailedTo: string[];
+      };
+    }>('/admin/backups'),
+    takeBackup: () => post<{
+      data: { at: string; ok: boolean; filename?: string; bytes?: number;
+        rows?: number; tables?: number; emailed?: boolean; error?: string };
+    }>('/admin/backups'),
+    /**
+     * Downloads through fetch rather than a plain link, because the API needs
+     * the bearer token and an <a href> cannot carry one.
+     */
+    downloadBackup: async (filename: string): Promise<void> => {
+      const res = await fetch(`${BASE}/admin/backups/${encodeURIComponent(filename)}`, {
+        headers: { Authorization: `Bearer ${getToken() ?? ''}` },
+      });
+      if (!res.ok) throw new ApiError('Could not download that backup.', res.status, 'DOWNLOAD_FAILED');
+      const url = URL.createObjectURL(await res.blob());
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    },
     allowlist: () => get<{
       allowlist: string[];
       holders: Array<{ email: string; name: string; active: boolean; effective: boolean }>;

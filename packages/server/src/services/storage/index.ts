@@ -10,6 +10,7 @@
 import { config } from '../../config.js';
 import { LocalDiskDriver } from './local-driver.js';
 import { S3Driver } from './s3-driver.js';
+import { DbStorageDriver } from './db-driver.js';
 
 export interface PutOptions {
   fileName: string;
@@ -42,6 +43,8 @@ function createDriver(): StorageDriver {
         secretAccessKey: config.S3_SECRET_ACCESS_KEY ?? '',
         endpoint: config.S3_ENDPOINT,
       });
+    case 'db':
+      return new DbStorageDriver();
     case 'local':
     default:
       return new LocalDiskDriver(config.STORAGE_LOCAL_DIR);
