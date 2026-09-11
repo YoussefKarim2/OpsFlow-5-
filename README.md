@@ -8,6 +8,10 @@ like it — with one relational system.
 **[ARCHITECTURE.md](./ARCHITECTURE.md) is the document to read first.** It explains what the Excel file
 actually is, the three findings that drove the design, and every decision made because of them.
 
+**[docs/DISASTER-RECOVERY.md](./docs/DISASTER-RECOVERY.md) is the one to read second** — what is backed up,
+what is not, and how to restore. It needs about thirty minutes of setup before the nightly backup can run
+at all, and it names one thing (uploaded attachments) that is not protected until a variable is changed.
+
 ---
 
 ## Getting it running
@@ -422,10 +426,22 @@ Two different promises, kept by different machinery.
 
 ### The data stays put
 
-- **Backups run on a schedule** (`BACKUP_INTERVAL_HOURS`, default 12), kept on
-  disk (`BACKUP_RETAIN`, default 14) and **emailed off the server**. The emailed
-  copy is the one that still exists after losing the machine — the only off-box
-  channel this deployment already has credentials for.
+There are two layers, and they are not interchangeable.
+
+**Offsite — the one that matters.** A nightly GitHub Actions job dumps the
+database, encrypts it before it leaves the runner, and writes it to a bucket
+that is not at Railway. A backup kept inside the account it protects is not a
+backup. Set it up: **`docs/DISASTER-RECOVERY.md`**. Read that document now
+rather than during an incident.
+
+**In-app — the convenient one.** The running server also takes a full dump on a
+schedule (`BACKUP_INTERVAL_HOURS`, default 12), keeps the last few
+(`BACKUP_RETAIN`), and shows them in Settings so anyone can see when the last
+one was and download it. On an ephemeral container this does not survive a
+deploy, so it complements the offsite job and does not replace it.
+`BACKUP_EMAIL_ENABLED` can mail each dump out, and is off by default because a
+database dump contains password hashes and staff personal data and this leg does
+not encrypt it.
 - **Take one by hand** before a risky migration:
   `npm run backup -w @opsflow/server`
 - **Restore** — deliberately a command, not a button:
@@ -449,7 +465,13 @@ Postgres refuses to guess — are fixed in `src/services/backup/restore.ts`.
 ### Uploaded files
 
 `STORAGE_DRIVER` defaults to **`db`**: uploads are stored in Postgres, so they
-survive a redeploy and are inside the backups rather than beside them.
+survive a redeploy and are inside the database backups rather than beside them —
+with no bucket to configure first.
+
+**`s3` is the better answer once a bucket exists** (R2, B2, Wasabi — see
+`docs/DISASTER-RECOVERY.md`), and the driver is written and tested. Object
+storage is where large documents belong; keeping them in Postgres makes every
+backup carry them too.
 
 `STORAGE_DRIVER=local` writes to the filesystem and is correct **only** if
 `STORAGE_LOCAL_DIR` is a mounted volume. On a container without one — which was

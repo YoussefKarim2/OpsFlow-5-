@@ -33,7 +33,7 @@
  * do not are marked "Not required" and stay out of the way.
  */
 
-import { StageKey, StageStatus, Department } from './enums.js';
+import { StageKey, StageStatus, Department, QtyLedger } from './enums.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // What the system knows about an order, for deciding step state
@@ -132,6 +132,12 @@ export interface OrderStepDef {
   whatYouEnter: readonly string[];
   /** Which workspace screen holds the detail. Checked against ORDER_TAB_KEYS. */
   tab: OrderTabKey;
+  /**
+   * Which quantity ledger the screen should open on. Main Order and Cut Order
+   * are the same Quantity tab, so without this a jump to Cut Order lands on the
+   * Main Order grid.
+   */
+  ledger?: QtyLedger;
   /**
    * Whether this step applies to this order at all. Steps with no rule always
    * apply. A step that does not apply shows as "Not required" rather than as
@@ -257,6 +263,7 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
       'How many pieces of each colour and size',
     ],
     tab: 'quantity',
+    ledger: QtyLedger.ORDER,
     isDoneWhen: (c) => has(c.orderQty) && has(c.quantityCellCount),
     missing: (c) =>
       has(c.orderQty) ? null : 'Enter the quantity for each colour and size',
@@ -334,14 +341,15 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
     sheetName: 'Cut Order',
     label: 'Cut Order',
     purpose:
-      'How many pieces to cut. Worked out for you: the order quantity, less any finished stock, ' +
-      'plus the cutting allowance.',
+      'How many pieces to cut. Worked out for you: the main order quantity plus the ' +
+      'cutting allowance.',
     department: Department.CUTTING_MARKER,
     whatYouEnter: [
       'Nothing — this is calculated',
       'Record the pieces actually cut once cutting is done',
     ],
     tab: 'quantity',
+    ledger: QtyLedger.CUT,
     isDoneWhen: (c) => has(c.cutQty),
     missing: (c) =>
       has(c.cutQty) ? null : 'Enter the order quantities first — the cut order is calculated from them',
@@ -616,6 +624,8 @@ export interface OrderStepState {
   department: Department;
   whatYouEnter: readonly string[];
   tab: string;
+  /** Ledger the Quantity tab should open on; null for steps that do not use it. */
+  ledger: QtyLedger | null;
   state: StepState;
   /** What is still needed here, in one sentence. Null when nothing is. */
   missing: string | null;
@@ -707,6 +717,7 @@ export function deriveOrderSteps(ctx: StepContext, blockedSteps: ReadonlySet<Sta
       department: def.department,
       whatYouEnter: def.whatYouEnter,
       tab: def.tab,
+      ledger: def.ledger ?? null,
       state,
       missing: state === StepState.COMPLETED || state === StepState.NOT_REQUIRED ? null : missing,
       notRequiredReason,

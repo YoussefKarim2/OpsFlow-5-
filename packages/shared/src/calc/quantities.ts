@@ -12,7 +12,7 @@
  */
 
 import { QtyLedger, LEDGER_FUNNEL } from '../enums.js';
-import { safeDiv, safePct, roundUp, sum } from './num.js';
+import { safeDiv, safePct, sum } from './num.js';
 
 export interface QtyCell {
   colorId: string;
@@ -97,21 +97,52 @@ export function ledgerTotals(cells: readonly QtyCell[]): Record<QtyLedger, numbe
 }
 
 /**
- * Cut Order sheet, cell-for-cell.
+ * Floating-point slack for the whole-piece rounding rule below.
  *
- * Excel: `=IFERROR(IF((MainOrder - Stock) <= 0, "", ROUNDUP((MainOrder - Stock) * (1 + cutPct), 0)), "")`
- *
- * Verified against the live file at cutPct = 0.05:
- *   20 → 21 · 50 → 53 · 138 → 145 · 141 → 149 · 90 → 95 · 70 → 74 · 35 → 37
- * Grand total 1,972 ordered → 2,084 to cut.
+ * `1000 * 1.1` is `1100.0000000000002` in IEEE-754, and a naive `Math.ceil`
+ * would turn a clean 10% allowance on 1,000 pieces into 1,101. Nudging by a
+ * millionth before rounding removes that artefact without affecting any real
+ * fractional piece, which is never smaller than 0.01.
  */
-export function computeCutQty(orderQty: number, stockQty: number, cutPct: number): number {
-  const net = orderQty - stockQty;
-  if (net <= 0) return 0;
-  return roundUp(net * (1 + cutPct));
+const PIECE_EPSILON = 1e-6;
+
+/**
+ * Cut Order total — the headline figure.
+ *
+ * ROUNDING RULE (the single rule for the whole Cut Order):
+ * the allowance is applied to the Main Order total and rounded UP once, at the
+ * total. Pieces are whole, and a factory must never cut fewer than the
+ * allowance asks for, so the rounding always goes up.
+ *
+ *     cutOrderQty = ROUNDUP(mainOrderQty × (1 + cutPct))
+ *     1,972 × 1.05 = 2,070.6 → 2,071
+ *     1,000 × 1.00 = 1,000.0 → 1,000
+ *     1,000 × 1.10 = 1,100.0 → 1,100
+ *
+ * The size/colour breakdown is then apportioned to sum to exactly this number
+ * (see `computeCutMatrix`), so the header and the grid can never disagree.
+ *
+ * Note this is the ORDER quantity, not order-minus-stock: the Cut Order states
+ * how many pieces to cut against the customer's original quantity.
+ */
+export function computeCutOrderTotal(mainOrderQty: number, cutPct: number): number {
+  if (!Number.isFinite(mainOrderQty) || mainOrderQty <= 0) return 0;
+  return Math.ceil(mainOrderQty * (1 + cutPct) - PIECE_EPSILON);
 }
 
-/** Apply the cut formula across the whole matrix, producing CUT ledger cells. */
+/**
+ * Apply the cut allowance across the whole matrix, producing CUT ledger cells.
+ *
+ * Rounding up every cell independently would overshoot the headline total —
+ * on the reference order, forty cells each gaining most of a piece adds 13 —
+ * and the grid would then contradict the number printed above it. So each cell
+ * takes its exact share, the fractions are floored, and the pieces left over
+ * are handed to the largest fractions first (largest-remainder apportionment).
+ *
+ * Every cell lands within one piece of its exact share, the column sums to the
+ * headline total by construction, and the result is deterministic: ties break
+ * on colour then size position, never on object key order.
+ */
 export function computeCutMatrix(
   cells: readonly QtyCell[],
   colors: AxisRef[],
@@ -119,15 +150,43 @@ export function computeCutMatrix(
   cutPct: number,
 ): QtyCell[] {
   const order = buildMatrix(cells, colors, sizes, QtyLedger.ORDER);
-  const stock = buildMatrix(cells, colors, sizes, QtyLedger.STOCK);
-  const out: QtyCell[] = [];
-  for (const c of order.colors) {
-    for (const s of order.sizes) {
-      const qty = computeCutQty(order.cells[c.id]?.[s.id] ?? 0, stock.cells[c.id]?.[s.id] ?? 0, cutPct);
-      if (qty > 0) out.push({ colorId: c.id, sizeId: s.id, ledger: QtyLedger.CUT, qty });
-    }
+  const target = computeCutOrderTotal(order.grandTotal, cutPct);
+  if (target <= 0) return [];
+
+  interface Share { colorId: string; sizeId: string; base: number; remainder: number; rank: number }
+  const shares: Share[] = [];
+  let allocated = 0;
+
+  order.colors.forEach((c, ci) => {
+    order.sizes.forEach((s, si) => {
+      const orderQty = order.cells[c.id]?.[s.id] ?? 0;
+      if (orderQty <= 0) return;
+      const exact = orderQty * (1 + cutPct);
+      const base = Math.floor(exact + PIECE_EPSILON);
+      allocated += base;
+      shares.push({
+        colorId: c.id, sizeId: s.id,
+        base, remainder: exact - base,
+        rank: ci * order.sizes.length + si,
+      });
+    });
+  });
+
+  // Flooring can only ever land at or below the target, so this is never negative.
+  let leftover = target - allocated;
+  const byRemainder = [...shares].sort((a, b) => b.remainder - a.remainder || a.rank - b.rank);
+  for (const share of byRemainder) {
+    if (leftover <= 0) break;
+    share.base += 1;
+    leftover -= 1;
   }
-  return out;
+
+  return shares
+    .filter((share) => share.base > 0)
+    .map((share) => ({
+      colorId: share.colorId, sizeId: share.sizeId,
+      ledger: QtyLedger.CUT, qty: share.base,
+    }));
 }
 
 /**
@@ -193,8 +252,7 @@ export interface CutVariance {
 
 export function computeCutVariance(cells: readonly QtyCell[], cutPct: number, actualCutQty: number | null): CutVariance {
   const orderedQty = ledgerTotal(cells, QtyLedger.ORDER);
-  const stockQty = ledgerTotal(cells, QtyLedger.STOCK);
-  const plannedCutQty = roundUp(Math.max(0, orderedQty - stockQty) * (1 + cutPct));
+  const plannedCutQty = computeCutOrderTotal(orderedQty, cutPct);
   const actual = actualCutQty ?? ledgerTotal(cells, QtyLedger.CUT);
   return {
     orderedQty,

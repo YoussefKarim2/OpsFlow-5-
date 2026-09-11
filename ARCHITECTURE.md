@@ -89,7 +89,7 @@ Extracted and reimplemented exactly:
 
 | Excel | Location | Rule |
 |---|---|---|
-| `ROUNDUP((MainOrder − Stock) × (1 + cutPct))` | `Cut Order!D21` | Cut qty per cell. Verified: 20→21, 50→53, 138→145, 141→149 at 5%. |
+| `ROUNDUP(MainOrder × (1 + cutPct))` | `Cut Order!S44` | Cut order total, rounded up once at the total: 1,972 at 5% → 2,071. The colour/size grid is apportioned by largest remainder to sum to exactly that, so the header and the grid cannot disagree. |
 | `=K17-I17` | `BOM!L17` | Shortage = issued − required (negative = short) |
 | `=SUM(D23:R23)` / `=SUM(D23:D45)` | `Main Order` | Row/column/grand totals |
 | `=D22/D14` | `Costing!D17` | Work days = machine-days used ÷ machine count |

@@ -1,0 +1,75 @@
+# Nightly encrypted backup of the production database.
+#
+# Runs on GitHub, not on Railway, and writes to a bucket that does not have to
+# be at Railway either. That separation is the point: a backup living inside the
+# account it protects is not a backup. If the Railway account is lost, closed or
+# billed to a dead card, this copy is somewhere else entirely.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#
+#   DATABASE_URL         the production connection string, from Railway
+#   BACKUP_PASSPHRASE    a long random string. LOSE THIS AND THE BACKUPS ARE
+#                        UNREADABLE — store it in a password manager, not here
+#   S3_BUCKET            bucket name only, no s3:// prefix
+#   AWS_ACCESS_KEY_ID    a key that can only write to that bucket
+#   AWS_SECRET_ACCESS_KEY
+#
+# Optional repository variables (same page, "Variables" tab):
+#
+#   S3_ENDPOINT          for Cloudflare R2 / Backblaze B2 / Wasabi
+#   S3_PREFIX            defaults to "opsflow"
+#   RETAIN_DAYS          defaults to 30
+#   AWS_REGION           defaults to auto
+
+name: Nightly database backup
+
+on:
+  schedule:
+    # 02:00 UTC — after the factory day, before the next one.
+    - cron: '0 2 * * *'
+  # So you can take one on demand before a risky migration.
+  workflow_dispatch:
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # The client must be at least as new as the server, or pg_dump refuses.
+      - name: Install PostgreSQL 16 client
+        run: |
+          sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+          curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client-16
+          pg_dump --version
+
+      - name: Take the backup
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+          S3_BUCKET: ${{ secrets.S3_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ vars.AWS_REGION || 'auto' }}
+          S3_ENDPOINT: ${{ vars.S3_ENDPOINT }}
+          S3_PREFIX: ${{ vars.S3_PREFIX || 'opsflow' }}
+          RETAIN_DAYS: ${{ vars.RETAIN_DAYS || '30' }}
+        run: |
+          chmod +x scripts/backup.sh
+          ./scripts/backup.sh
+
+      # A backup job that fails quietly is the same as no backup job at all.
+      - name: Report failure
+        if: failure()
+        run: |
+          echo "### ❌ Nightly backup FAILED" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "The database was **not** backed up tonight. Check the log above." >> "$GITHUB_STEP_SUMMARY"
+          echo "Until this is fixed the most recent copy is from a previous run." >> "$GITHUB_STEP_SUMMARY"

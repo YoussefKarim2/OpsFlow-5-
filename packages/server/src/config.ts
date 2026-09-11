@@ -117,8 +117,18 @@ const schema = z.object({
   BACKUP_RETAIN: z.coerce.number().int().min(1).default(14),
   /** Wait this long after boot before the first backup, so startup stays quick. */
   BACKUP_STARTUP_DELAY_SECONDS: z.coerce.number().int().min(0).default(120),
-  /** Mail a copy of every backup out. The only off-box copy this deployment has. */
-  BACKUP_EMAIL_ENABLED: envBool(true),
+  /**
+   * Mail a copy of every backup out.
+   *
+   * Off by default, deliberately. The nightly GitHub Actions job in
+   * docs/DISASTER-RECOVERY.md is the offsite mechanism: it encrypts the dump
+   * before it leaves the runner and writes it to a bucket outside Railway.
+   * This email leg sends the dump *unencrypted*, and a database dump contains
+   * password hashes and staff personal data — so it is a reasonable fallback
+   * for a deployment that has no bucket yet, and a bad habit once it does.
+   * Turning it on should be a decision, not a default.
+   */
+  BACKUP_EMAIL_ENABLED: envBool(false),
   /** Who receives it. Empty means the super admins. */
   BACKUP_EMAIL_TO: z.string().default(''),
   /** Graph refuses inline attachments past roughly 4 MB; stay under it. */

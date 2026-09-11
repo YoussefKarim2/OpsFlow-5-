@@ -3,14 +3,19 @@
  *
  * Creates the reference data, the roles and users, the 27 workflow task
  * templates from `Progress Status`, and PO A302059B exactly as the workbook
- * records it — 1,972 pieces across four colours, a 2,084-piece cut order, a
+ * records it — 1,972 pieces across four colours, a 2,071-piece cut order, a
  * six-lay marker plan consuming 1,194 m of Rosetta, 23 BOM lines with nothing
  * issued, and an external printing operation blocked on customer approval.
  *
  * Idempotent: safe to run repeatedly.
+ *
+ * Refuses to run against anything that is not obviously a development database
+ * — see `assertSafeToSeed`. The seed deletes stock movements, so pointing it at
+ * production by accident is not a recoverable mistake.
  */
 
 import { PrismaClient, type Prisma } from '@prisma/client';
+import { assertSafeToSeed } from '../src/util/seed-guard.js';
 import argon2 from 'argon2';
 import {
   WORKFLOW_TEMPLATE, ROLE_PERMISSIONS, ROLE_LABEL, computeCutMatrix, planDueDate,
@@ -29,6 +34,9 @@ const prisma = new PrismaClient();
 const DEFAULT_PASSWORD = 'opsflow-demo-2026';
 
 async function main(): Promise<void> {
+  // Before the first write, not after the tenth.
+  assertSafeToSeed();
+
   console.log('Seeding OpsFlow…\n');
 
   // ── Roles ─────────────────────────────────────────────────────────────────
@@ -255,7 +263,7 @@ async function main(): Promise<void> {
   }
   await prisma.stageQuantity.createMany({ data: orderCells });
 
-  // CUT ledger — computed, not transcribed. Yields exactly 2,084.
+  // CUT ledger — computed, not transcribed. Yields exactly 2,071.
   const axesColors: AxisRef[] = [...colorIds.entries()].map(([name, id], i) => ({ id, name, position: i }));
   const axesSizes: AxisRef[] = [...sizeIds.entries()].map(([name, id], i) => ({ id, name, position: i }));
   const cells: QtyCell[] = orderCells.map((c) => ({
@@ -528,7 +536,7 @@ async function main(): Promise<void> {
     { orderId: order.id, actorId: factoryMgr.id, actorName: factoryMgr.name, action: 'ORDER_CREATED', summary: `created order ${ORDER.poNumber} — ${ORDER.orderName}`, createdAt: poDate },
     { orderId: order.id, actorId: factoryMgr.id, actorName: factoryMgr.name, action: 'QUANTITIES_UPDATED', summary: 'entered the quantity matrix — 1,972 pcs across 4 colours', createdAt: new Date(poDate.getTime() + 1 * 3_600_000) },
     { orderId: order.id, actorId: coordinator.id, actorName: coordinator.name, action: 'ORDER_UPDATED', summary: 'set the cut allowance to 5% and confirmed the shipping address', createdAt: new Date(poDate.getTime() + 2 * 86_400_000) },
-    { orderId: order.id, actorId: coordinator.id, actorName: coordinator.name, action: 'CUT_ORDER_GENERATED', summary: 'generated the cut order — 2,084 pieces at 5% allowance', createdAt: new Date(poDate.getTime() + 2 * 86_400_000 + 3_600_000) },
+    { orderId: order.id, actorId: coordinator.id, actorName: coordinator.name, action: 'CUT_ORDER_GENERATED', summary: 'generated the cut order — 2,071 pieces at 5% allowance', createdAt: new Date(poDate.getTime() + 2 * 86_400_000 + 3_600_000) },
     { orderId: order.id, actorId: cutting.id, actorName: cutting.name, action: 'MARKER_ADDED', summary: 'added 6 lays — 408 layers consuming 1,194 m of Rosetta', createdAt: new Date(poDate.getTime() + 4 * 86_400_000) },
     { orderId: order.id, actorId: coordinator.id, actorName: coordinator.name, action: 'BOM_ITEM_ADDED', summary: 'completed the bill of materials — 23 lines', createdAt: new Date(poDate.getTime() + 5 * 86_400_000) },
     { orderId: order.id, actorId: outsideWorkManager.id, actorName: outsideWorkManager.name, action: 'APPROVAL_REQUESTED', summary: 'requested print artwork approval from John Orr — Florida Celtic', createdAt: new Date(poDate.getTime() + 8 * 86_400_000) },

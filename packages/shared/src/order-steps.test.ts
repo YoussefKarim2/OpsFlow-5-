@@ -12,7 +12,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { StageKey, StageStatus, STAGE_META } from './enums.js';
+import { StageKey, StageStatus, STAGE_META, QtyLedger } from './enums.js';
 import {
   ORDER_STEPS, ORDER_TAB_KEYS, STEP_BY_KEY, StepState, deriveOrderSteps, type StepContext,
 } from './order-steps.js';
@@ -439,5 +439,41 @@ describe('progress across the whole order', () => {
     // Reference, details, main order and cut order are done; the rest are not.
     assert.equal(r.completedCount, 4);
     assert.ok(r.percentComplete > 0 && r.percentComplete < 100);
+  });
+});
+
+describe('steps that share a screen', () => {
+  // Main Order and Cut Order are both the Quantity tab. Without a ledger to
+  // separate them, jumping to Cut Order opened the Main Order grid and the
+  // header named the wrong step.
+  test('Main Order and Cut Order share the tab but not the ledger', () => {
+    const main = STEP_BY_KEY[StageKey.MAIN_ORDER]!;
+    const cut = STEP_BY_KEY[StageKey.CUT_ORDER]!;
+    assert.equal(main.tab, 'quantity');
+    assert.equal(cut.tab, 'quantity');
+    assert.equal(main.ledger, QtyLedger.ORDER);
+    assert.equal(cut.ledger, QtyLedger.CUT);
+    assert.notEqual(main.ledger, cut.ledger);
+  });
+
+  test('every pair of steps sharing a tab is separable', () => {
+    const byTab = new Map<string, typeof ORDER_STEPS[number][]>();
+    for (const step of ORDER_STEPS) {
+      byTab.set(step.tab, [...(byTab.get(step.tab) ?? []), step]);
+    }
+    for (const [tab, steps] of byTab) {
+      if (steps.length < 2) continue;
+      const ledgers = steps.map((s) => s.ledger);
+      assert.ok(ledgers.every(Boolean), `steps sharing "${tab}" must each declare a ledger`);
+      assert.equal(new Set(ledgers).size, steps.length, `"${tab}" ledgers must be distinct`);
+    }
+  });
+
+  test('the ledger reaches the client on the derived state', () => {
+    const r = deriveOrderSteps(started({ referenceFileCount: 1 }));
+    assert.equal(r.steps.find((s) => s.key === StageKey.CUT_ORDER)!.ledger, QtyLedger.CUT);
+    assert.equal(r.steps.find((s) => s.key === StageKey.MAIN_ORDER)!.ledger, QtyLedger.ORDER);
+    // Steps with no grid of their own must not claim one.
+    assert.equal(r.steps.find((s) => s.key === StageKey.BILL_OF_MATERIAL)!.ledger, null);
   });
 });

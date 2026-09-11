@@ -12,8 +12,9 @@ import { installProcessGuards } from './process-guards.js';
  * synthetic `uncaughtException` would fail the run it is trying to verify.
  */
 describe('process guards', () => {
+  // The handler this module just registered, invoked directly.
   const installed = <T>(event: 'unhandledRejection' | 'uncaughtException'): T =>
-    process.listeners(event).at(-1) as T;
+    process.listeners(event as 'uncaughtException').at(-1) as T;
 
   afterEach(() => {
     process.removeAllListeners('unhandledRejection');

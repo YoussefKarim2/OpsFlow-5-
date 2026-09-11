@@ -76,11 +76,16 @@ export function OrderWorkspacePage() {
   });
   const steps = stepsRes?.data;
 
-  const setTab = (key: string) => {
+  const setTab = (key: string, ledger?: string | null) => {
     const next = new URLSearchParams(params);
     next.set('tab', key);
+    if (ledger) next.set('ledger', ledger);
+    else next.delete('ledger');
     setParams(next, { replace: true });
   };
+
+  /** Which quantity grid to open — Main Order and Cut Order share the tab. */
+  const ledgerParam = params.get('ledger');
 
   if (isLoading) return <Spinner label="Loading order…" />;
   if (error) return <div className="p-6"><ErrorNote error={error} onRetry={refetch} /></div>;
@@ -93,7 +98,8 @@ export function OrderWorkspacePage() {
   // order and the main order are both the Quantity tab), so the current step
   // wins the tie — that is the one the coordinator is actually on.
   const stepForTab: OrderStepState | undefined = steps
-    ? steps.steps.find((s) => s.tab === tab && s.isCurrent)
+    ? (ledgerParam ? steps.steps.find((s) => s.tab === tab && s.ledger === ledgerParam) : undefined)
+      ?? steps.steps.find((s) => s.tab === tab && s.isCurrent)
       ?? steps.steps.find((s) => s.tab === tab)
     : undefined;
 
@@ -227,7 +233,7 @@ export function OrderWorkspacePage() {
           <StepRail
             steps={steps}
             activeKey={stepForTab?.key ?? null}
-            onJump={(s: OrderStepState) => setTab(s.tab)}
+            onJump={(s: OrderStepState) => setTab(s.tab, s.ledger)}
           />
         )}
 
@@ -243,7 +249,13 @@ export function OrderWorkspacePage() {
           {tab === 'overview'     && <OverviewTab order={order} onJump={setTab} />}
           {tab === 'reference'    && <CustomerReferenceTab orderId={order.id} />}
           {tab === 'details'      && <DetailsTab order={order} />}
-          {tab === 'quantity'     && <QuantityTab order={order} />}
+          {tab === 'quantity'     && (
+            <QuantityTab
+              order={order}
+              ledger={ledgerParam}
+              onLedgerChange={(l) => setTab('quantity', l)}
+            />
+          )}
           {tab === 'proforma'     && <ProformaTab order={order} />}
           {tab === 'tasks'        && <TasksTab order={order} />}
           {tab === 'cutting'      && <MarkerTab order={order} />}

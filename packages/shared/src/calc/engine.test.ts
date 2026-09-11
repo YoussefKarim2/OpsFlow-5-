@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { QtyLedger } from '../enums.js';
 import { safeDiv, safePct, roundUp, fmtNumber, fmtMoney, NOT_CALCULATED } from './num.js';
 import {
-  buildMatrix, computeCutQty, computeCutMatrix, ledgerTotal, computeStockDeduction,
+  buildMatrix, computeCutOrderTotal, computeCutMatrix, ledgerTotal, computeStockDeduction,
   computeCutVariance, computeFunnel, computeColorProgress, type QtyCell, type AxisRef,
 } from './quantities.js';
 import { computeProductionAnalytics } from './production.js';
@@ -113,44 +113,94 @@ describe('quantities — Main Order sheet', () => {
   });
 });
 
-describe('quantities — Cut Order sheet formula', () => {
-  test('per-cell ROUNDUP((order − stock) × 1.05) matches the sheet', () => {
-    // Cut Order!D21:M21 for SKY BLUE
-    const cases: Array<[number, number]> = [
-      [20, 21], [50, 53], [138, 145], [141, 149], [90, 95],
-      [70, 74], [35, 37], [20, 21], [10, 11], [5, 6],
-    ];
-    for (const [order, expected] of cases) {
-      assert.equal(computeCutQty(order, 0, CUT_PCT), expected, `order ${order}`);
+describe('quantities — Cut Order allowance', () => {
+  // The rule under test: ROUNDUP(mainOrderQty × (1 + cutPct)), applied ONCE at
+  // the total, with the size/colour grid apportioned to sum to exactly that.
+  // Rounding always goes up: pieces are whole and a factory must never cut
+  // fewer than the allowance asks for.
+
+  const totalOf = (ns: number[]) => ns.reduce((a, b) => a + b, 0);
+
+  test('1,972 at a 5% allowance gives a 2,071-piece cut order', () => {
+    assert.equal(computeCutOrderTotal(1972, 0.05), 2071); // 2,070.6 → 2,071
+  });
+
+  test('a zero allowance leaves the order quantity untouched', () => {
+    assert.equal(computeCutOrderTotal(1000, 0), 1000);
+  });
+
+  test('10% on 1,000 is exactly 1,100, not 1,101', () => {
+    // 1000 × 1.1 is 1100.0000000000002 in IEEE-754. A naive ceil would bill the
+    // factory for an extra piece on every clean percentage.
+    assert.equal(computeCutOrderTotal(1000, 0.1), 1100);
+  });
+
+  test('changing the percentage recalculates the quantity', () => {
+    assert.equal(computeCutOrderTotal(1972, 0), 1972);
+    assert.equal(computeCutOrderTotal(1972, 0.05), 2071);
+    assert.equal(computeCutOrderTotal(1972, 0.1), 2170); // 2,169.2 → 2,170
+  });
+
+  test('decimal results round up to whole pieces', () => {
+    assert.equal(computeCutOrderTotal(101, 0.05), 107); // 106.05 → 107
+    assert.equal(computeCutOrderTotal(1, 0.01), 2);     // 1.01   → 2
+    assert.equal(computeCutOrderTotal(0, 0.05), 0);     // nothing ordered, nothing to cut
+  });
+
+  test('the Main Order is read, never rewritten', () => {
+    const cells = orderCells();
+    const before = structuredClone(cells);
+    computeCutMatrix(cells, COLORS, SIZES, CUT_PCT);
+    assert.deepEqual(cells, before);
+    assert.equal(ledgerTotal(cells, QtyLedger.ORDER), 1972);
+  });
+
+  test('the breakdown sums to exactly the headline cut quantity', () => {
+    const cut = computeCutMatrix(orderCells(), COLORS, SIZES, CUT_PCT);
+    assert.equal(ledgerTotal(cut, QtyLedger.CUT), computeCutOrderTotal(1972, CUT_PCT));
+    assert.equal(ledgerTotal(cut, QtyLedger.CUT), 2071);
+  });
+
+  test('row and column totals reconcile to that same total', () => {
+    const cut = computeCutMatrix(orderCells(), COLORS, SIZES, CUT_PCT);
+    const m = buildMatrix(cut, COLORS, SIZES, QtyLedger.CUT);
+    assert.equal(totalOf(Object.values(m.rowTotals)), 2071);
+    assert.equal(totalOf(Object.values(m.colTotals)), 2071);
+    assert.equal(m.grandTotal, 2071);
+  });
+
+  test('every cell stays within one piece of its exact share', () => {
+    const cut = computeCutMatrix(orderCells(), COLORS, SIZES, CUT_PCT);
+    const order = buildMatrix(orderCells(), COLORS, SIZES, QtyLedger.ORDER);
+    for (const c of cut) {
+      const exact = (order.cells[c.colorId]?.[c.sizeId] ?? 0) * (1 + CUT_PCT);
+      assert.ok(Math.abs(c.qty - exact) < 1, `${c.colorId}/${c.sizeId}: ${c.qty} vs ${exact}`);
     }
   });
 
-  test('stock is deducted before the allowance is applied', () => {
-    // 138 ordered, 38 in stock → 100 net → 105 to cut.
-    assert.equal(computeCutQty(138, 38, CUT_PCT), 105);
-    // Fully covered by stock → nothing to cut.
-    assert.equal(computeCutQty(20, 25, CUT_PCT), 0);
+  test('the spare piece goes to the largest fraction', () => {
+    // 300 / 500 / 700 / 472 at 5% → 315 / 525 / 735 / 496, summing to 2,071.
+    // Only the 472 cell has a fraction (495.6), so it takes the spare piece.
+    const colors: AxisRef[] = [{ id: 'Black', name: 'Black', position: 0 }];
+    const sizes: AxisRef[] = ['S', 'M', 'L', 'XL'].map((n, i) => ({ id: n, name: n, position: i }));
+    const cells: QtyCell[] = [300, 500, 700, 472].map((qty, i) => ({
+      colorId: 'Black', sizeId: sizes[i]!.id, ledger: QtyLedger.ORDER, qty,
+    }));
+    const cut = computeCutMatrix(cells, colors, sizes, 0.05);
+    const m = buildMatrix(cut, colors, sizes, QtyLedger.CUT);
+    assert.deepEqual(sizes.map((s) => m.cells['Black']![s.id]), [315, 525, 735, 496]);
+    assert.equal(m.grandTotal, 2071);
   });
 
-  test('whole cut matrix totals 2,084 (Cut Order!S44)', () => {
-    const cut = computeCutMatrix(orderCells(), COLORS, SIZES, CUT_PCT);
-    assert.equal(ledgerTotal(cut, QtyLedger.CUT), 2084);
-  });
-
-  test('cut row totals match Cut Order!S21:S24 — 612 / 490 / 407 / 575', () => {
-    const cut = computeCutMatrix(orderCells(), COLORS, SIZES, CUT_PCT);
-    const m = buildMatrix(cut, COLORS, SIZES, QtyLedger.CUT);
-    assert.equal(m.rowTotals['SKY BLUE'], 612);
-    assert.equal(m.rowTotals['ATH. GOLD'], 490);
-    assert.equal(m.rowTotals['SCARLET'], 407);
-    assert.equal(m.rowTotals['LIME'], 575);
-  });
-
-  test('cut column totals match Cut Order!D44:M44', () => {
-    const cut = computeCutMatrix(orderCells(), COLORS, SIZES, CUT_PCT);
-    const m = buildMatrix(cut, COLORS, SIZES, QtyLedger.CUT);
-    const expected = [84, 206, 494, 503, 316, 191, 148, 74, 44, 24];
-    SIZES.forEach((s, i) => assert.equal(m.colTotals[s.id], expected[i], `size ${s.name}`));
+  test('a cut order saved earlier still loads and totals correctly', () => {
+    // Stored CUT cells are read back as they are — never re-derived from the
+    // current percentage — so records written before this rule changed still open.
+    const saved: QtyCell[] = [
+      { colorId: 'SKY BLUE', sizeId: 'YS', ledger: QtyLedger.CUT, qty: 145 },
+      { colorId: 'SKY BLUE', sizeId: 'YM', ledger: QtyLedger.CUT, qty: 149 },
+    ];
+    assert.equal(ledgerTotal(saved, QtyLedger.CUT), 294);
+    assert.equal(buildMatrix(saved, COLORS, SIZES, QtyLedger.CUT).grandTotal, 294);
   });
 });
 
@@ -166,7 +216,7 @@ describe('quantities — stock deduction and variance', () => {
     assert.equal(d.requiredProductionQty, 1934);
   });
 
-  test('cut variance reports +14 when 2,098 are actually cut against a 2,084 plan', () => {
+  test('cut variance reports +27 when 2,098 are actually cut against a 2,071 plan', () => {
     const v = computeCutVariance(orderCells(), CUT_PCT, 2098);
     assert.equal(v.plannedCutQty, 2071); // ROUNDUP(1972 × 1.05) at order level
     assert.equal(v.actualCutQty, 2098);
