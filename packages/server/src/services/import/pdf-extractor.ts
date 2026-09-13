@@ -30,7 +30,7 @@ import {
 import type { ImportIssue, ImportSheetInfo } from '@opsflow/shared';
 import { BadRequestError } from '../../errors.js';
 import type { ExtractionResult } from './extractor.js';
-import { toDate } from './extractor.js';
+import { toDate, buildLineItems } from './extractor.js';
 import { detectSizeColumns } from './tabular-extractor.js';
 
 /** One positioned run of text, as pdf.js reports it. */
@@ -829,6 +829,12 @@ export async function extractFromPdf(
     });
   }
 
+  // Line-shaped rows, for a PDF that is a list rather than a grid — a proforma
+  // invoice above all. The same builder the workbook reader uses, so the shape
+  // of the file does not change how a list is read.
+  const lineIndex: Partial<Record<ImportConcept, number>> = {};
+  for (const [i, concept] of conceptFor) if (lineIndex[concept] == null) lineIndex[concept] = i;
+
   return {
     ...emptyResult(issues, pages),
     profileKey: 'pdf',
@@ -836,6 +842,7 @@ export async function extractFromPdf(
     mappings,
     fields: named,
     matrices,
+    lineItems: buildLineItems(dataAfterHeader, lineIndex),
     issues,
   };
 }
@@ -851,6 +858,6 @@ function emptyResult(issues: ImportIssue[], pages: readonly PdfPage[]): Extracti
 
   return {
     profileKey: null, confidence: 0, sheets, mappings: [], fields: {},
-    matrices: [], bom: [], lays: [], externalColors: [], costing: {}, issues,
+    matrices: [], lineItems: [], bom: [], lays: [], externalColors: [], costing: {}, issues,
   };
 }

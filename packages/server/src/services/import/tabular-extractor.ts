@@ -35,7 +35,7 @@ import {
 import type { ImportIssue, ImportSheetInfo } from '@opsflow/shared';
 import type { ExtractionResult, ExtractedMatrix } from './extractor.js';
 import { detectFileKind } from './file-kind.js';
-import { cellText, toNumber, toDate } from './extractor.js';
+import { cellText, toNumber, toDate, buildLineItems } from './extractor.js';
 import { safeDate, toIsoDayOrNull } from '@opsflow/shared';
 import { loadWorkbook } from './open-workbook.js';
 
@@ -74,7 +74,17 @@ const MAX_SCAN_COLS = 60;
  * costs nothing to rule out: an order needs a colour, a size and a quantity, so
  * a genuine two-column order table cannot exist.
  */
-const MIN_HEADER_COLUMNS = 3;
+/**
+ * Two, not three.
+ *
+ * Three was safe when every document was a colour × size grid. A proforma that
+ * states one price at the top and then lists "Description | Quantity" is two
+ * columns wide and was invisible — no header candidate, no table, no invoice
+ * lines. The guards that actually keep a caption block from being read as a
+ * header are the numeric test, the colon test and the requirement that the row
+ * beneath be populated; the width was never the thing doing that work.
+ */
+const MIN_HEADER_COLUMNS = 2;
 
 /**
  * Rows that could plausibly be the header.
@@ -102,6 +112,19 @@ export function findHeaderCandidates(sheet: ExcelJS.Worksheet): number[] {
     // data, however early it appears.
     const numeric = cells.filter((x) => /^-?[\d,.\s]+$/.test(x.text)).length;
     if (numeric > cells.length / 2) continue;
+
+    // A caption block is not a table header.
+    //
+    // "PO Number: | PI-103 | Customer: | Meyba" is the facts stated above a
+    // document, and it scores well as a header because those *are* concept
+    // names. It was being chosen over the real table below it, and the row
+    // beneath a caption block is the next caption — so the PO number came out
+    // as "Unit price:" and the invoice had no lines at all.
+    //
+    // A column heading does not end in a colon. Two or more that do means this
+    // row is labelling values beside it, not naming columns under it.
+    const captions = cells.filter((x) => /:\s*$/.test(x.text)).length;
+    if (captions >= 2) continue;
 
     const next = sheet.getRow(r + 1);
     const populated = cells.filter((x) => {
@@ -675,9 +698,21 @@ export async function extractTabular(
     });
   }
 
+  // Line-shaped rows, for a document that is a list rather than a grid — a
+  // proforma invoice above all. Built from the same columns the matrices use,
+  // so a file that is both a grid and a list yields both.
+  const lineIndex: Partial<Record<ImportConcept, number>> = {};
+  for (const c of columns) {
+    if (c.concept !== ImportConcept.IGNORE && lineIndex[c.concept] == null) {
+      lineIndex[c.concept] = c.index;
+    }
+  }
+  const lineItems = buildLineItems(chosen.rows, lineIndex);
+
   return {
     profileKey: 'generic-tabular',
     confidence: Math.min(1, chosen.score / 10),
+    lineItems,
     sheets,
     mappings: columns.map((c) => ({
       field: c.concept,
@@ -760,6 +795,7 @@ function emptyResult(
   return {
     profileKey: 'generic-tabular',
     confidence: 0,
+    lineItems: [],
     sheets,
     mappings: [],
     fields: {},

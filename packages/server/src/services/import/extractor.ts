@@ -11,7 +11,7 @@ import ExcelJS from 'exceljs';
 import type { ImportProfile, FieldSpec, MatrixSpec } from './profiles.js';
 import { detectProfile } from './profiles.js';
 import type { ImportIssue, ImportSheetInfo, ImportFieldMapping } from '@opsflow/shared';
-import { safeDate, toIsoDateOrNull, toIsoDayOrNull, isValidDate, parseSpreadsheetDate } from '@opsflow/shared';
+import { safeDate, toIsoDateOrNull, toIsoDayOrNull, isValidDate, parseSpreadsheetDate, ImportConcept } from '@opsflow/shared';
 import { openWorkbook } from './open-workbook.js';
 
 export interface ExtractedMatrix {
@@ -48,6 +48,76 @@ export interface ExtractedLay {
   nestPcs: number | null;
 }
 
+/**
+ * One priced row of a document, as written.
+ *
+ * The matrices describe an order as colour × size; plenty of documents — a
+ * proforma invoice above all — are simply a list: a description, how many, and
+ * what each costs. That shape had nowhere to go, so a proforma laid out as a
+ * list imported with its header filled and no items at all.
+ *
+ * Deliberately generic, and deliberately not a proforma type: it is whatever
+ * line-shaped rows the reader could see, and the targets decide what a line
+ * means to them.
+ */
+export interface ExtractedLineItem {
+  description: string | null;
+  quantity: number | null;
+  unit: string | null;
+  unitPrice: number | null;
+  /** Position among the data rows — 1 is the first, for pointing at a row. */
+  rowNumber: number;
+}
+
+/**
+ * Line-shaped rows out of a table, wherever the reader found one.
+ *
+ * Shared by the workbook and PDF readers so a proforma laid out as a list is
+ * read identically whichever kind of file it arrived in. A row counts as a line
+ * if it says *something* — a description or a quantity — because a document
+ * that prices its rows separately and one that states a single price at the top
+ * are both real, and refusing the ones with a blank cell would throw away most
+ * of the invoice.
+ */
+export function buildLineItems(
+  rows: readonly (readonly unknown[])[],
+  index: Partial<Record<ImportConcept, number>>,
+): ExtractedLineItem[] {
+  const at = (row: readonly unknown[], concept: ImportConcept): unknown => {
+    const i = index[concept];
+    return i == null ? null : row[i];
+  };
+  const text = (v: unknown): string | null => {
+    const t = String(cellText(v) ?? '').trim();
+    return t === '' ? null : t;
+  };
+
+  const items: ExtractedLineItem[] = [];
+  for (const row of rows) {
+    const description = text(at(row, ImportConcept.DESCRIPTION))
+      ?? text(at(row, ImportConcept.MATERIAL));
+    const quantity = toNumber(at(row, ImportConcept.QUANTITY));
+    const unitPrice = toNumber(at(row, ImportConcept.UNIT_PRICE))
+      ?? toNumber(at(row, ImportConcept.ITEM_UNIT_PRICE));
+
+    // Nothing at all on the row: a spacer or a trailing blank, not a line.
+    if (description == null && quantity == null && unitPrice == null) continue;
+
+    // A totals line restates the invoice rather than adding to it, and
+    // invoicing it again would double the document.
+    if (description != null && /^(total|sub\s*total|grand\s*total|sum)\b/i.test(description)) continue;
+
+    items.push({
+      description,
+      quantity,
+      unit: text(at(row, ImportConcept.UNIT)) ?? 'PCS',
+      unitPrice,
+      rowNumber: items.length + 1,
+    });
+  }
+  return items;
+}
+
 export interface ExtractionResult {
   profileKey: string | null;
   confidence: number;
@@ -55,6 +125,8 @@ export interface ExtractionResult {
   mappings: ImportFieldMapping[];
   fields: Record<string, string | number | Date | null>;
   matrices: ExtractedMatrix[];
+  /** Line-shaped rows, for documents that are a list rather than a grid. */
+  lineItems: ExtractedLineItem[];
   bom: ExtractedBomLine[];
   lays: ExtractedLay[];
   externalColors: Array<{ color: string; qty: number; rate: number | null; area: number | null }>;
@@ -426,7 +498,7 @@ export async function extractWorkbook(buffer: Buffer, forcedProfile?: ImportProf
     });
     return {
       profileKey: null, confidence: detected.confidence, sheets, mappings: [],
-      fields: {}, matrices: [], bom: [], lays: [], externalColors: [], costing: {}, issues,
+      fields: {}, matrices: [], lineItems: [], bom: [], lays: [], externalColors: [], costing: {}, issues,
     };
   }
 
@@ -581,6 +653,9 @@ export async function extractWorkbook(buffer: Buffer, forcedProfile?: ImportProf
     profileKey: profile.key,
     confidence: detected.confidence,
     sheets, mappings, fields, matrices, bom, lays, externalColors, costing, issues,
+    // A profile-read workbook is a known layout with its own matrices; line
+    // items are for the documents nobody has a profile for.
+    lineItems: [],
   };
 }
 

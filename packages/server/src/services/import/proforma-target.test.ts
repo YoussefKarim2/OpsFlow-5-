@@ -20,7 +20,7 @@ import type { ExtractionResult } from './extractor.js';
 
 const base = (over: Partial<ExtractionResult> = {}): ExtractionResult => ({
   profileKey: null, confidence: 0, sheets: [], mappings: [], fields: {},
-  matrices: [], bom: [], lays: [], externalColors: [], costing: {}, issues: [],
+  matrices: [], lineItems: [], bom: [], lays: [], externalColors: [], costing: {}, issues: [],
   ...over,
 });
 
@@ -79,7 +79,9 @@ describe('building a proforma from an extraction', () => {
       matrices: [matrix([{ color: 'Red', cells: { S: 100 } }], ['S'])],
     }));
     assert.equal(d.lines[0]!.unitPrice, null);
-    assert.ok(d.issues.some((i) => /no unit price was found/i.test(i.message)));
+    // The message now names how many lines are unpriced, which is what a person
+    // needs in order to go and fill them in.
+    assert.ok(d.issues.some((i) => /1 without a price/i.test(i.message)));
     assert.equal(d.confidence, 'LOW');
   });
 
@@ -116,7 +118,7 @@ describe('reading a proforma out of a document', () => {
     const draft = buildProformaDraft({
       profileKey: null, confidence: 0, sheets: [], mappings: [],
       fields: { poNumber: 'PI-2026-44', clientName: 'Meyba International', poDate: new Date('2026-05-01') },
-      matrices: [], bom: [], lays: [], externalColors: [], costing: {}, issues: [],
+      matrices: [], lineItems: [], bom: [], lays: [], externalColors: [], costing: {}, issues: [],
     } as never);
     assert.equal(draft.number, 'PI-2026-44');
     assert.equal(draft.consignee, 'Meyba International');
@@ -127,7 +129,7 @@ describe('reading a proforma out of a document', () => {
     const draft = buildProformaDraft({
       profileKey: null, confidence: 0, sheets: [], mappings: [],
       fields: { PO_NUMBER: 'PI-7', CLIENT: 'Meyba' },
-      matrices: [], bom: [], lays: [], externalColors: [], costing: {}, issues: [],
+      matrices: [], lineItems: [], bom: [], lays: [], externalColors: [], costing: {}, issues: [],
     } as never);
     assert.equal(draft.number, 'PI-7');
     assert.equal(draft.consignee, 'Meyba');
