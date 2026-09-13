@@ -919,7 +919,21 @@ const costLineSchema = z.object({
 });
 
 const costingSchema = z.object({
-  dollarRate: z.number().positive('The dollar rate must be above zero'),
+  /**
+   * Optional, and zero is allowed.
+   *
+   * The screen sends `Number(rate) || 0`, so the very first save — before
+   * anyone has typed a rate — arrived as 0 and was refused outright: a
+   * coordinator could fill in a whole costing, press Save, and be told about a
+   * field they had not reached yet, losing the rest.
+   *
+   * Nothing downstream is endangered by allowing it. The derivation already
+   * refuses to convert without a positive rate (`costing-derive.ts`), so an
+   * unset rate produces no labour line rather than a wrong one — and the
+   * upsert below leaves any rate already stored alone rather than replacing it
+   * with the blank.
+   */
+  dollarRate: z.number().nonnegative().optional(),
   dailyCostEgp: z.number().nonnegative().optional().nullable(),
   machineCount: z.number().int().nonnegative().optional().nullable(),
   machineDaysUsed: z.number().int().nonnegative().optional().nullable(),
@@ -934,10 +948,17 @@ stepsRouter.put('/:id/costing', requirePermission('costing:write'), asyncHandler
   const body = costingSchema.parse(req.body);
   const user = currentUser(req);
 
+  // A blank rate must not overwrite a good one: absent means "not answered",
+  // not "set it to nothing". Omitted from the update entirely, and left to the
+  // column's own default on create.
+  const fields = stripLines(body);
+  const { dollarRate, ...rest } = fields as typeof fields & { dollarRate?: number };
+  const usableRate = typeof dollarRate === 'number' && dollarRate > 0 ? dollarRate : undefined;
+
   await prisma.costingRecord.upsert({
     where: { orderId },
-    create: { orderId, ...stripLines(body) },
-    update: stripLines(body),
+    create: { orderId, ...rest, ...(usableRate === undefined ? {} : { dollarRate: usableRate }) },
+    update: { ...rest, ...(usableRate === undefined ? {} : { dollarRate: usableRate }) },
   });
 
   // Recompute *after* the upsert: the labour derivation reads the dollar rate

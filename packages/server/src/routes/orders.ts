@@ -5,6 +5,9 @@ import {
   buildMatrix, computeCutMatrix, isSignificantQtyChange, type QtyCell,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
+import {
+  relationId, requiredRelationId, optionalDate, optionalNumber,
+} from '../util/form-input.js';
 import { storage } from '../services/storage/index.js';
 import { authenticate, requirePermission, requireSuperAdmin, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
@@ -100,16 +103,16 @@ const createSchema = z.object({
   fabricDeliveryToSupplier: z.string().optional().nullable(),
   supplierDeliveryDate: z.string().optional().nullable(),
   shippingMethod: z.string().optional(),
-  pricePerPieceUsd: z.number().nonnegative().optional(),
-  cutPercentage: z.number().default(0.05),
-  accessoryPercentage: z.number().default(0.05),
-  poDate: z.string().optional(),
-  promisedShippingDate: z.string().optional(),
-  requiredDeliveryDate: z.string().optional(),
-  factoryId: z.string().optional(),
-  externalFactoryId: z.string().optional(),
-  coordinatorId: z.string().optional(),
-  outsideWorkManagerId: z.string().optional(),
+  pricePerPieceUsd: optionalNumber(z.number().nonnegative()),
+  cutPercentage: optionalNumber(z.number()).default(0.05),
+  accessoryPercentage: optionalNumber(z.number()).default(0.05),
+  poDate: optionalDate,
+  promisedShippingDate: optionalDate,
+  requiredDeliveryDate: optionalDate,
+  factoryId: relationId,
+  externalFactoryId: relationId,
+  coordinatorId: relationId,
+  outsideWorkManagerId: relationId,
   externalReference: z.string().optional(),
   externalWorkSort: z.string().optional(),
   externalWorkType: z.string().optional(),
@@ -254,7 +257,12 @@ ordersRouter.post('/', requirePermission('order:create'), asyncHandler(async (re
  * `colors`, `sizes` and `quantities` stay out: they are the quantity matrix,
  * which has its own route because changing it moves ledgers.
  */
-const updateSchema = createSchema.partial().omit({ colors: true, sizes: true, quantities: true });
+const updateSchema = createSchema
+  .partial()
+  .omit({ colors: true, sizes: true, quantities: true })
+  // A blank client on an edit means the form had nothing to offer, not that the
+  // order should lose its customer. See `requiredRelationId`.
+  .extend({ clientId: requiredRelationId });
 
 ordersRouter.patch('/:id', requirePermission('order:edit'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
