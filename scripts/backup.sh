@@ -64,14 +64,26 @@ if [ "$SIZE" -lt 2048 ]; then
 fi
 
 echo "→ verifying it decrypts and is a real dump"
-if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
-      -pass env:BACKUP_PASSPHRASE -in "$DUMP" \
-    | gunzip \
-    | head -c 4096 \
-    | grep -q "PostgreSQL database dump"; then
-  echo "✗ the encrypted file did not decrypt into a PostgreSQL dump." >&2
-  exit 1
-fi
+# `head -c` closes the pipe as soon as it has its 4 KB, which makes openssl and
+# gunzip die of SIGPIPE — "error writing output file". Under `set -o pipefail`
+# that counted as the verification failing, so a perfectly good 1.7 MB backup
+# was refused and never uploaded. The check is on the *text*, not on whether the
+# producers survived being cut off, so the pipeline's exit status is
+# deliberately not consulted here.
+set +o pipefail
+HEAD_BYTES="$(openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 \
+    -pass env:BACKUP_PASSPHRASE -in "$DUMP" 2>/dev/null \
+  | gunzip 2>/dev/null \
+  | head -c 4096)"
+set -o pipefail
+
+case "$HEAD_BYTES" in
+  *"PostgreSQL database dump"*) ;;
+  *)
+    echo "✗ the encrypted file did not decrypt into a PostgreSQL dump." >&2
+    exit 1
+    ;;
+esac
 
 echo "→ uploading to s3://${S3_BUCKET}/${S3_PREFIX}/"
 aws_s3 cp "$DUMP" "s3://${S3_BUCKET}/${S3_PREFIX}/${NAME}"
