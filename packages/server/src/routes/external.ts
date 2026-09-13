@@ -271,16 +271,36 @@ externalRouter.put('/:orderId/operations', requirePermission('external:write'), 
   });
   if (!order) throw new NotFoundError('Order');
 
-  const existing = await prisma.externalOperation.findMany({
-    where: { orderId: order.id },
-    select: { id: true, status: true },
-  });
-  const keep = new Set(rows.map((r) => r.id).filter((id): id is string => !!id));
-  const removable = existing
-    .filter((e) => !keep.has(e.id) && (e.status === 'NOT_SENT' || e.status === 'WAITING_APPROVAL'))
-    .map((e) => e.id);
+  let removable: string[] = [];
 
   await prisma.$transaction(async (tx) => {
+    /**
+     * One save of this order's table at a time.
+     *
+     * This endpoint reads the existing rows, works out which have gone, and
+     * then writes — and two of those running at once both read "no Print Front
+     * row yet" and both create one. Double-clicking Save was enough to do it:
+     * the table came back with every row twice.
+     *
+     * A transaction alone does not help, because at READ COMMITTED neither
+     * transaction can see the other's uncommitted insert. An advisory lock keyed
+     * on the order does: the second save waits, then reads the first one's work
+     * and updates the row instead of adding a second. It is scoped to the
+     * transaction, so it is released however this ends, and it is keyed per
+     * order, so two coordinators working on different orders never wait.
+     */
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${order.id}))`;
+
+    // Read inside the lock, or the diff is computed from a stale picture.
+    const existing = await tx.externalOperation.findMany({
+      where: { orderId: order.id },
+      select: { id: true, status: true },
+    });
+    const keep = new Set(rows.map((r) => r.id).filter((id): id is string => !!id));
+    removable = existing
+      .filter((e) => !keep.has(e.id) && (e.status === 'NOT_SENT' || e.status === 'WAITING_APPROVAL'))
+      .map((e) => e.id);
+
     if (removable.length > 0) {
       await tx.externalOperation.deleteMany({ where: { id: { in: removable } } });
     }

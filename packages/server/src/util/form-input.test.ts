@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { z } from 'zod';
 import {
-  relationId, requiredRelationId, optionalDate, optionalNumber,
+  relationId, requiredRelationId, optionalDate, optionalNumber, shortText, longText,
 } from './form-input.js';
 
 /**
@@ -85,5 +85,34 @@ describe('input as a form actually sends it', () => {
       // Forgiving about blanks must not mean accepting nonsense.
       assert.throws(() => schema.parse({ price: -1 }));
     });
+  });
+});
+
+describe('free text with a ceiling', () => {
+  test('an ordinary value passes', () => {
+    const schema = z.object({ orderName: shortText() });
+    assert.equal(schema.parse({ orderName: 'Florida T Shirt' }).orderName, 'Florida T Shirt');
+  });
+
+  test('a pasted novel is refused rather than stored', () => {
+    // A 100,000-character order name was accepted and persisted. It renders
+    // into every list, every email and every PDF that mentions the order.
+    const schema = z.object({ orderName: shortText() });
+    assert.throws(() => schema.parse({ orderName: 'A'.repeat(100_000) }));
+  });
+
+  test('an empty string still means "not answered"', () => {
+    const schema = z.object({ orderName: shortText() });
+    assert.equal(schema.parse({ orderName: '' }).orderName, undefined);
+  });
+
+  test('notes and addresses are allowed to be genuinely long', () => {
+    const schema = z.object({ notes: longText() });
+    assert.equal(schema.parse({ notes: 'x'.repeat(5000) }).notes!.length, 5000);
+  });
+
+  test('but not unbounded', () => {
+    const schema = z.object({ notes: longText() });
+    assert.throws(() => schema.parse({ notes: 'x'.repeat(100_000) }));
   });
 });

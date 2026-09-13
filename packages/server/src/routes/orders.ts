@@ -6,7 +6,7 @@ import {
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import {
-  relationId, requiredRelationId, optionalDate, optionalNumber,
+  relationId, requiredRelationId, optionalDate, optionalNumber, shortText, longText,
 } from '../util/form-input.js';
 import { storage } from '../services/storage/index.js';
 import { authenticate, requirePermission, requireSuperAdmin, currentUser } from '../middleware/auth.js';
@@ -86,23 +86,23 @@ ordersRouter.get('/:id', requirePermission('order:read'), asyncHandler(async (re
 // ── Create ──────────────────────────────────────────────────────────────────
 
 const createSchema = z.object({
-  poNumber: z.string().min(1),
-  orderName: z.string().min(1),
-  season: z.string().min(1),
+  poNumber: z.string().min(1).max(64),
+  orderName: z.string().min(1).max(200),
+  season: z.string().min(1).max(200),
   clientId: z.string().min(1),
-  itemType: z.string().optional(),
-  gender: z.string().optional(),
-  styleNumber: z.string().optional(),
-  fit: z.string().optional(),
-  blockPattern: z.string().optional(),
-  fabric: z.string().optional(),
+  itemType: shortText(),
+  gender: shortText(),
+  styleNumber: shortText(),
+  fit: shortText(),
+  blockPattern: shortText(),
+  fabric: shortText(),
   // External Order_Ex.Op shows three fabric slots and both supplier dates;
   // all five were already columns and none of them were writable.
-  fabric2: z.string().optional().nullable(),
-  fabric3: z.string().optional().nullable(),
+  fabric2: shortText().nullable(),
+  fabric3: shortText().nullable(),
   fabricDeliveryToSupplier: z.string().optional().nullable(),
   supplierDeliveryDate: z.string().optional().nullable(),
-  shippingMethod: z.string().optional(),
+  shippingMethod: shortText(),
   pricePerPieceUsd: optionalNumber(z.number().nonnegative()),
   cutPercentage: optionalNumber(z.number()).default(0.05),
   accessoryPercentage: optionalNumber(z.number()).default(0.05),
@@ -113,11 +113,11 @@ const createSchema = z.object({
   externalFactoryId: relationId,
   coordinatorId: relationId,
   outsideWorkManagerId: relationId,
-  externalReference: z.string().optional(),
-  externalWorkSort: z.string().optional(),
-  externalWorkType: z.string().optional(),
-  shippingAddress: z.string().optional(),
-  billingAddress: z.string().optional(),
+  externalReference: shortText(),
+  externalWorkSort: shortText(),
+  externalWorkType: shortText(),
+  shippingAddress: longText(2000),
+  billingAddress: longText(2000),
   /// The factory's own PO date, distinct from the customer's.
   internalPoDate: z.string().optional().nullable(),
   /// Null is "nobody has said yet", which is not the same as "no".
@@ -128,8 +128,8 @@ const createSchema = z.object({
   /** quantities[colorId][sizeId] = qty */
   quantities: z.record(z.record(z.number().int().nonnegative())).default({}),
   notes: z.object({
-    general: z.string().optional(), spread: z.string().optional(), cut: z.string().optional(),
-    packing: z.string().optional(), external: z.string().optional(),
+    general: longText(), spread: longText(), cut: longText(),
+    packing: longText(), external: longText(),
   }).optional(),
 });
 

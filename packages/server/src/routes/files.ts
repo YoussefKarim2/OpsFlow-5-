@@ -12,7 +12,7 @@ import { Router } from 'express';
 import { prisma } from '../db.js';
 import { storage } from '../services/storage/index.js';
 import { asyncHandler } from '../util/async-handler.js';
-import { GoneError, NotFoundError, UnauthorizedError } from '../errors.js';
+import { ForbiddenError, GoneError, NotFoundError, UnauthorizedError } from '../errors.js';
 import { verifyFileToken } from '../services/file-links.js';
 import { verifySessionToken } from '../middleware/auth.js';
 
@@ -24,7 +24,32 @@ filesRouter.get('/:key', asyncHandler(async (req, res) => {
   const header = req.headers.authorization;
   const bearer = header?.startsWith('Bearer ') ? verifySessionToken(header.slice(7)) : null;
   const signed = typeof req.query.t === 'string' ? verifyFileToken(req.query.t, key) : null;
-  if (!bearer && !signed) throw new UnauthorizedError();
+  const userId = bearer ?? signed;
+  if (!userId) throw new UnauthorizedError();
+
+  /**
+   * The token names a user; that user must still be one.
+   *
+   * Verifying the signature is not the same as checking the account. This
+   * route sits outside the authenticate middleware — it has to, because a link
+   * and an <img> cannot send a header — and so it has to do the middleware's
+   * other job itself. Without this, an employee who was deactivated this
+   * morning could keep downloading every document on every order until their
+   * token expired, which is precisely the window disabling an account exists
+   * to close.
+   *
+   * The permission is checked too. Every role holds `order:read` today, so
+   * this changes nothing now; it means a role added later that should not see
+   * customer paperwork will not silently be able to.
+   */
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { active: true, role: { select: { permissions: true } } },
+  });
+  if (!user?.active) throw new UnauthorizedError();
+  if (!user.role?.permissions?.includes('order:read')) {
+    throw new ForbiddenError('You do not have access to order documents.');
+  }
 
   // The key must belong to an attachment on an order. Without this, any
   // authenticated user could read any object in the bucket by guessing a key —

@@ -61,3 +61,20 @@ export const optionalNumber = (schema: z.ZodNumber) =>
     (v) => (v === '' || v === null || (typeof v === 'number' && Number.isNaN(v)) ? undefined : v),
     schema.optional(),
   );
+
+/**
+ * A free-text field with a sane ceiling.
+ *
+ * The order fields were unbounded, so a 100,000-character order name was
+ * accepted and stored — it renders into every list, every email and every PDF,
+ * and bloats every response that mentions the order. Nothing legitimate needs
+ * more than a couple of hundred characters, and a paste accident should be
+ * refused at the door rather than discovered on a screen that will not load.
+ *
+ * Generous on purpose: addresses and notes are genuinely long.
+ */
+export const shortText = (max = 200) =>
+  z.preprocess((v) => (v === '' ? undefined : v), z.string().max(max).optional());
+
+export const longText = (max = 20_000) =>
+  z.preprocess((v) => (v === '' ? undefined : v), z.string().max(max).optional());

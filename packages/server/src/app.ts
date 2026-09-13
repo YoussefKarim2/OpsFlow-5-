@@ -191,6 +191,44 @@ function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFun
     return;
   }
 
+  /**
+   * A body that is not JSON.
+   *
+   * `express.json()` throws a SyntaxError, which is none of the shapes below,
+   * so it fell through to the 500 branch: the caller was told the server had
+   * broken when in fact the request had, and every malformed request was
+   * logged as "Unhandled error" — noise that buries the failures that really
+   * are ours.
+   */
+  if (err instanceof SyntaxError && 'body' in (err as { body?: unknown })) {
+    res.status(400).json({
+      error: 'The request body was not valid JSON.',
+      code: 'MALFORMED_JSON',
+    });
+    return;
+  }
+
+  /**
+   * An upload that broke a multer limit.
+   *
+   * Multer throws its own `MulterError`, which was none of the shapes below, so
+   * a file one megabyte over the limit came back as "Something went wrong on
+   * our side" — the user is told the server is broken when their file is
+   * simply too big, and has no idea what to do about it. The limit is a rule we
+   * chose, so the message should say so.
+   */
+  if (err instanceof Error && err.name === 'MulterError') {
+    const code = (err as Error & { code?: string }).code;
+    const message =
+      code === 'LIMIT_FILE_SIZE'
+        ? 'That file is too large. The limit is 20 MB — try a smaller copy, or split it.'
+        : code === 'LIMIT_FILE_COUNT' || code === 'LIMIT_UNEXPECTED_FILE'
+          ? 'Please upload one file at a time.'
+          : 'That file could not be accepted.';
+    res.status(413).json({ error: message, code: 'UPLOAD_REJECTED' });
+    return;
+  }
+
   if (err instanceof ZodError) {
     res.status(422).json({
       error: 'Some fields are invalid.',
