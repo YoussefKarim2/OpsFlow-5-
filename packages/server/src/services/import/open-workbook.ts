@@ -30,3 +30,21 @@ export async function openWorkbook(buffer: Buffer): Promise<ExcelJS.Workbook> {
   await loadWorkbook(wb, buffer);
   return wb;
 }
+
+/**
+ * A CSV read as a one-sheet workbook, so every reader downstream is identical.
+ *
+ * ExcelJS leaves the sheet unnamed, and an unnamed sheet reports oddly
+ * everywhere it is displayed, so it gets one.
+ */
+export async function readCsvWorkbook(buffer: Buffer): Promise<ExcelJS.Workbook> {
+  const wb = new ExcelJS.Workbook();
+  const { Readable } = await import('node:stream');
+  try {
+    await wb.csv.read(Readable.from(buffer.toString('utf8')));
+  } catch {
+    throw new BadRequestError('This CSV could not be read — check it is a plain comma-separated file.');
+  }
+  if (wb.worksheets.length > 0 && !wb.worksheets[0]!.name) wb.worksheets[0]!.name = 'CSV';
+  return wb;
+}

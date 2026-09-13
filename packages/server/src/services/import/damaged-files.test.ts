@@ -40,8 +40,19 @@ describe('files that are not what they claim to be', () => {
     assert.match(m, /could not be opened as a spreadsheet/i);
   });
 
-  test('the laying reader gets the same explanation', async () => {
-    const m = await message(() => extractLayingMarking(Buffer.from('not a workbook at all')));
+  test('the laying reader explains a corrupt workbook the same way', async () => {
+    const m = await message(() => extractLayingMarking(
+      Buffer.concat([Buffer.from('PK\u0003\u0004'), Buffer.alloc(200)]),
+    ));
     assert.match(m, /could not be opened as a spreadsheet/i);
+  });
+
+  test('plain text reaching the laying reader yields nothing, and does not throw', async () => {
+    // It sniffs as CSV, which is correct — a laying sheet exported from a
+    // cutting system is CSV. A CSV of prose simply has no lays in it, and the
+    // route's own guard is what refuses a text file wearing a .xlsx name.
+    const r = await extractLayingMarking(Buffer.from('not a workbook at all'));
+    assert.equal(r.rows.length, 0);
+    assert.equal(r.issues.filter((i) => i.level === 'ERROR').length, 0);
   });
 });

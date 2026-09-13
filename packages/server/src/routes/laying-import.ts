@@ -17,6 +17,7 @@ import { authenticate, requirePermission, currentUser } from '../middleware/auth
 import { asyncHandler } from '../util/async-handler.js';
 import { NotFoundError, BadRequestError } from '../errors.js';
 import { workbookUpload as upload, assertLooksLikeWorkbook } from '../services/import/upload-guard.js';
+import { detectFileKind } from '../services/import/file-kind.js';
 import { extractLayingMarking, type LayingExtractionResult, type LayingRow } from '../services/import/laying-extractor.js';
 import { commitLayingImport, layingRowKey, type RowResolution } from '../services/import/laying-committer.js';
 import { announceChange } from '../services/change-service.js';
@@ -115,7 +116,11 @@ layingImportRouter.post('/upload', requirePermission('import:laying'), upload.si
   const actor = currentUser(req);
   const order = await resolveOrder(req.params.orderId!);
   if (!req.file) throw new BadRequestError('No file was uploaded.');
-  assertLooksLikeWorkbook(req.file.buffer);
+  // A CSV is a legitimate laying sheet; anything else must really be a
+  // workbook rather than something wearing the name.
+  if (detectFileKind(req.file.buffer, req.file.originalname) !== 'csv') {
+    assertLooksLikeWorkbook(req.file.buffer);
+  }
 
   const key = await storage.put(req.file.buffer, {
     fileName: req.file.originalname, mimeType: req.file.mimetype, prefix: 'laying-imports',

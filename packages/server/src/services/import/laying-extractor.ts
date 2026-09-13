@@ -23,7 +23,8 @@ import {
   type ColumnAnalysis, type ImportIssue,
 } from '@opsflow/shared';
 import { findHeaderCandidates, readTableAt, type SheetTable } from './tabular-extractor.js';
-import { openWorkbook } from './open-workbook.js';
+import { openWorkbook, readCsvWorkbook } from './open-workbook.js';
+import { detectFileKind } from './file-kind.js';
 
 const LAYING_CONCEPTS = new Set<ImportConcept>([
   // MATERIAL as well as FABRIC: plenty of laying sheets head that column
@@ -115,7 +116,17 @@ export async function extractLayingMarking(
     savedMapping?: Record<string, ImportConcept>;
   } = {},
 ): Promise<LayingExtractionResult> {
-  const wb = await openWorkbook(buffer);
+  /**
+   * A laying sheet exported as CSV is still a laying sheet.
+   *
+   * Everything past this line works on rows and columns and does not care which
+   * kind of file they came out of — the order importer has read CSV the same
+   * way all along. Refusing it here meant a factory that exports from its
+   * cutting system rather than Excel could not import at all.
+   */
+  const wb = detectFileKind(buffer) === 'csv'
+    ? await readCsvWorkbook(buffer)
+    : await openWorkbook(buffer);
 
   const issues: ImportIssue[] = [];
 

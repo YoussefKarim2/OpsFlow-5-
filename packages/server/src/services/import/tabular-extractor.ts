@@ -110,8 +110,20 @@ export function findHeaderCandidates(sheet: ExcelJS.Worksheet): number[] {
 
     // Headers are labels, not measurements: a row that is mostly numbers is
     // data, however early it appears.
+    //
+    // Except when the numbers *are* the headings. Waist sizes, shoe sizes and
+    // children's ages are all numeric — "Colour | 28 | 30 | 32" is a perfectly
+    // ordinary size grid, and this rule threw the whole sheet away: no header,
+    // no colours, no quantities, nothing read at all.
+    //
+    // A data row and a size-header row have the same shape (one label, then
+    // numbers), so shape cannot tell them apart. What can is the first cell:
+    // a header begins with a column name — "Colour", "Article" — and a data row
+    // begins with a value, "Navy". Scoring already prefers the real header once
+    // both are candidates; this only stops one being discarded before scoring.
     const numeric = cells.filter((x) => /^-?[\d,.\s]+$/.test(x.text)).length;
-    if (numeric > cells.length / 2) continue;
+    const namedFirstCell = cells.length > 0 && isKnownLabel(cells[0]!.text);
+    if (numeric > cells.length / 2 && !namedFirstCell) continue;
 
     // A caption block is not a table header.
     //

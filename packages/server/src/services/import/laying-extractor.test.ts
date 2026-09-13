@@ -104,7 +104,49 @@ describe('reading a laying sheet, whatever shape it arrives in', () => {
     );
   });
 
-  test('an empty workbook does not throw', async () => {
-    await assert.doesNotReject(() => extractLayingMarking(sheet([]).then((b) => b) as never));
+  test('an empty file is refused with a sentence, not a crash', async () => {
+    // Nothing to sniff and nothing to read. Said plainly rather thanfailing
+    // somewhere deeper with a library error.
+    await assert.rejects(
+      () => extractLayingMarking(Buffer.alloc(0)),
+      /not a spreadsheet or a PDF/i,
+    );
+  });
+});
+
+describe('laying sheets exported as CSV', () => {
+  test('a CSV laying sheet reads the same as a workbook', async () => {
+    // A factory exporting from its cutting system rather than Excel could not
+    // import at all: the route refused anything that was not a zip.
+    const csv = Buffer.from(
+      'Marker No,Fabric,Panel,Size Ratio,Layers,Marker Length\n'
+      + 'M9,Rosetta,ALL,(S1),150,2.75\n'
+      + 'M10,Rosetta,ALL,(M1),90,3.10',
+    );
+    const r = await extractLayingMarking(csv);
+    assert.equal(r.rows.length, 2);
+    assert.equal(r.rows[0]!.markerNumber, 'M9');
+    assert.equal(r.rows[0]!.layers, 150);
+    assert.equal(r.rows[1]!.markerLengthM, 3.1);
+    assert.equal(r.issues.filter((i) => i.level === 'ERROR').length, 0);
+  });
+
+  test('extra columns are read rather than ignored', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('L');
+    ws.addRow(['Marker No', 'Fabric', 'Size Ratio', 'Layers', 'Marker Length', 'Nest Pcs']);
+    ws.addRow(['M1', 'Rosetta', '(S1),(M1)', 140, 2.61, 700]);
+    const r = await extractLayingMarking(Buffer.from(await wb.xlsx.writeBuffer()));
+    assert.equal(r.rows[0]!.nestPcs, 700);
+  });
+
+  test('layers written as text are still a number', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('L');
+    ws.addRow(['Marker No', 'Fabric', 'Size Ratio', 'Layers', 'Marker Length']);
+    ws.addRow(['M1', 'Rosetta', '(S1)', '140', '2.61']);
+    const r = await extractLayingMarking(Buffer.from(await wb.xlsx.writeBuffer()));
+    assert.equal(r.rows[0]!.layers, 140);
+    assert.equal(r.rows[0]!.markerLengthM, 2.61);
   });
 });
