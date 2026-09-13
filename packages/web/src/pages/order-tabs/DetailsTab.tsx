@@ -4,13 +4,54 @@
  * `='Order Details'!Dn` formulas; here they are stored once and read everywhere.
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Save, Pencil } from 'lucide-react';
+import { Save, Pencil, Plus, Trash2 } from 'lucide-react';
 import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Card, CardHeader, Field, FreeText, ErrorNote, clsx } from '../../components/ui';
+
+/** One external job on this order, as the table edits it. */
+interface ExternalRow {
+  id?: string;
+  operationSort: string | null;
+  operationType: string;
+  operationTypeAr: string | null;
+  qty: number;
+  notes: string | null;
+  /** Set once the work has left the factory; such a row is no longer editable here. */
+  status?: string;
+}
+
+/** Keep only what this table owns — the External Order stage owns the rest. */
+const toRow = (o: ExternalRow): ExternalRow => ({
+  id: o.id,
+  operationSort: o.operationSort ?? '',
+  operationType: o.operationType ?? '',
+  operationTypeAr: o.operationTypeAr ?? null,
+  qty: o.qty ?? 0,
+  notes: o.notes ?? '',
+  status: o.status,
+});
+
+const patch = (rows: ExternalRow[], i: number, change: Partial<ExternalRow>): ExternalRow[] =>
+  rows.map((r, k) => (k === i ? { ...r, ...change } : r));
+
+/**
+ * Which sort a work type belongs to, read off its own name.
+ *
+ * The reference list spells it out — "Print Back", "Emb. Sleeves" — so the sort
+ * is already in the label and asking for it twice is a way of getting a row
+ * where the two disagree. Anything unrecognised stays blank rather than
+ * guessing, and the dropdown above is still there to set it by hand.
+ */
+function sortOf(workType: string): string {
+  const t = workType.toLowerCase();
+  if (t.startsWith('print') || t.includes('print')) return 'Print';
+  if (t.startsWith('emb')) return 'Embroidery';
+  return '';
+}
 
 export function DetailsTab({ order }: { order: OrderDetailDto }) {
   const qc = useQueryClient();
@@ -51,6 +92,34 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
     notes: { ...order.notes },
   });
 
+  /**
+   * External work, as rows.
+   *
+   * One order routinely needs several outside jobs at once — printing on the
+   * front *and* the back, plus embroidery on a sleeve — and a single pair of
+   * dropdowns could hold exactly one of them. The rest went in a note, or
+   * nowhere.
+   *
+   * These are the same ExternalOperation records the External Order stage
+   * works from, not a second list beside them: what a coordinator declares here
+   * is what the external team later sends, prices and books back in. Declaring
+   * it twice in two places is how the two come to disagree.
+   */
+  const opsQuery = useQuery({
+    queryKey: ['external-ops', order.id],
+    queryFn: () => api.external.operations(order.id),
+  });
+
+  const [rows, setRows] = useState<ExternalRow[]>([]);
+  // Rows arrive after the first render, and must not overwrite an edit in
+  // progress — hence the `editing` guard rather than a plain assignment.
+  useEffect(() => {
+    if (!editing && opsQuery.data) setRows((opsQuery.data.data as ExternalRow[]).map(toRow));
+  }, [opsQuery.data, editing]);
+
+  const addRow = () =>
+    setRows((r) => [...r, { operationSort: '', operationType: '', operationTypeAr: null, qty: 0, notes: '' }]);
+
   const save = useMutation({
     mutationFn: () =>
       api.orders.update(order.id, {
@@ -63,10 +132,25 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
           cut: form.notes.cut ?? '', packing: form.notes.packing ?? '',
           external: form.notes.external ?? '',
         },
+      }).then(async () => {
+        // Saved in the same click as the rest of the tab: one Edit button, one
+        // Save. A row with nothing chosen is dropped rather than rejected —
+        // clicking "Add row" and changing your mind is not an error worth a
+        // message.
+        const meaningful = rows.filter((r) => r.operationType.trim() !== '');
+        await api.external.saveOperations(order.id, meaningful.map((r) => ({
+          ...(r.id ? { id: r.id } : {}),
+          operationType: r.operationType.trim(),
+          operationTypeAr: r.operationTypeAr ?? undefined,
+          operationSort: r.operationSort || undefined,
+          qty: Number(r.qty) || 0,
+          notes: r.notes || undefined,
+        })));
       }),
     onSuccess: () => {
       setEditing(false); setError(null);
       void qc.invalidateQueries({ queryKey: ['order', order.id] });
+      void qc.invalidateQueries({ queryKey: ['external-ops', order.id] });
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not save.'),
   });
@@ -232,32 +316,120 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
       </div>
 
       <Card>
-        <CardHeader title="External work" />
-        <div className="grid gap-3 p-4 sm:grid-cols-3">
+        <CardHeader
+          title="External work"
+          subtitle="Every outside job this order needs — one row each. Printing on the front and the back are two rows."
+        />
+        <div className="grid gap-3 border-b border-ink-100 p-4 sm:grid-cols-3">
           <Edit label="External reference" editing={editing} value={form.externalReference}
             onChange={(v) => setForm({ ...form, externalReference: v })} display={order.externalReference} />
-          <Select label="Work sort" editing={editing} value={form.externalWorkSort} options={values.EXTERNAL_WORK_SORT?.map((v) => v.value) ?? []}
-            onChange={(v) => setForm({ ...form, externalWorkSort: v })} display={order.externalWorkSort} />
-          <div>
-            <p className="label">Work type</p>
-            {editing ? (
-              <select
-                value={form.externalWorkType}
-                onChange={(e) => setForm({ ...form, externalWorkType: e.target.value })}
-                className="input"
-              >
-                <option value="">—</option>
-                {(values.EXTERNAL_WORK_TYPE ?? []).map((v) => (
-                  <option key={v.id} value={v.valueAr ?? v.value}>
-                    {v.value}{v.valueAr ? ` — ${v.valueAr}` : ''}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <div className="text-sm text-ink-800"><FreeText text={order.externalWorkType} /></div>
-            )}
-          </div>
         </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="border-b border-ink-200 bg-ink-50">
+              <tr>
+                <th className="th w-40">Sort</th>
+                <th className="th">Work type</th>
+                <th className="th w-28">Quantity</th>
+                <th className="th">Notes</th>
+                {editing && <th className="th w-12" />}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-ink-100">
+              {rows.length === 0 && (
+                <tr>
+                  <td className="td text-ink-500" colSpan={editing ? 5 : 4}>
+                    {editing ? 'No external work yet — add a row below.' : 'No external work on this order.'}
+                  </td>
+                </tr>
+              )}
+              {rows.map((r, i) => (
+                <tr key={r.id ?? `new-${i}`}>
+                  <td className="td">
+                    {editing ? (
+                      <select
+                        className="input"
+                        value={r.operationSort ?? ''}
+                        onChange={(e) => setRows(patch(rows, i, { operationSort: e.target.value }))}
+                      >
+                        <option value="">—</option>
+                        {(values.EXTERNAL_WORK_SORT ?? []).map((v) => (
+                          <option key={v.id} value={v.value}>{v.value}</option>
+                        ))}
+                      </select>
+                    ) : (r.operationSort || '—')}
+                  </td>
+                  <td className="td">
+                    {editing ? (
+                      <select
+                        className="input"
+                        value={r.operationType}
+                        onChange={(e) => {
+                          const picked = (values.EXTERNAL_WORK_TYPE ?? []).find((v) => v.value === e.target.value);
+                          setRows(patch(rows, i, {
+                            operationType: e.target.value,
+                            operationTypeAr: picked?.valueAr ?? null,
+                            // The sort is implied by the type — "Print Back" is
+                            // printing — so it fills itself in rather than
+                            // asking twice. Still overridable above.
+                            operationSort: r.operationSort || sortOf(e.target.value),
+                          }));
+                        }}
+                      >
+                        <option value="">—</option>
+                        {(values.EXTERNAL_WORK_TYPE ?? []).map((v) => (
+                          <option key={v.id} value={v.value}>
+                            {v.value}{v.valueAr ? ` — ${v.valueAr}` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span>{r.operationType || '—'}{r.operationTypeAr ? ` — ${r.operationTypeAr}` : ''}</span>
+                    )}
+                  </td>
+                  <td className="td">
+                    {editing ? (
+                      <input
+                        type="number" min={0} className="input" value={r.qty || ''}
+                        placeholder="—"
+                        onChange={(e) => setRows(patch(rows, i, { qty: Number(e.target.value) || 0 }))}
+                      />
+                    ) : (r.qty ? r.qty.toLocaleString() : '—')}
+                  </td>
+                  <td className="td">
+                    {editing ? (
+                      <input
+                        className="input" value={r.notes ?? ''} placeholder="Anything the factory must know"
+                        onChange={(e) => setRows(patch(rows, i, { notes: e.target.value }))}
+                      />
+                    ) : (r.notes || '—')}
+                  </td>
+                  {editing && (
+                    <td className="td">
+                      <button
+                        type="button"
+                        className="btn-ghost btn-sm"
+                        title="Remove this row"
+                        onClick={() => setRows(rows.filter((_, k) => k !== i))}
+                      >
+                        <Trash2 className="h-4 w-4 text-red-500" />
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {editing && (
+          <div className="border-t border-ink-100 p-3">
+            <button type="button" className="btn-secondary btn-sm" onClick={addRow}>
+              <Plus className="h-4 w-4" /> Add row
+            </button>
+          </div>
+        )}
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">

@@ -87,7 +87,17 @@ const opSchema = z.object({
   operationType: z.string().min(1),
   operationTypeAr: z.string().optional(),
   operationSort: z.string().optional(),
-  qty: z.number().int().positive(),
+  /**
+   * Zero is allowed, and it matters.
+   *
+   * External work is declared on the order long before anyone knows how many
+   * pieces it covers — "this order needs printing on the front and the back"
+   * is a fact about the garment, settled at the point of sale; the quantity is
+   * settled later, once the cut is planned. Insisting on a positive number
+   * here meant the declaration could not be recorded at all until an unrelated
+   * decision had been made, so it was recorded on a sticky note instead.
+   */
+  qty: z.number().int().nonnegative().default(0),
   unitRate: z.number().nonnegative().optional(),
   unitPriceUsd: z.number().nonnegative().optional(),
   expectedReturnDate: z.string().optional(),
@@ -200,9 +210,60 @@ externalRouter.delete('/operations/:id', requirePermission('external:write'), as
  * updated in its editable fields only, and one omitted from the payload is kept
  * rather than deleted, for the same reason the DELETE above refuses it.
  */
+/**
+ * The bulk save's row schema — deliberately *not* `opSchema`.
+ *
+ * `opSchema` fills in defaults, which is right when creating one operation from
+ * a form that shows every field, and wrong here. This endpoint now has two
+ * callers: the External Order stage, which edits the whole row, and Order
+ * Details, which edits only what kind of work the order needs. A default turns
+ * "Details did not mention the expected return date" into "set the expected
+ * return date to nothing", and the coordinator loses a date they entered on
+ * another screen without touching it.
+ *
+ * So every field is optional with no default, and the update below writes only
+ * the keys that actually arrived. Prisma ignores `undefined`, which is exactly
+ * the semantics wanted: absent means unchanged, not cleared.
+ */
+const bulkRowSchema = z.object({
+  id: z.string().optional(),
+  externalFactoryId: z.string().optional(),
+  externalReference: z.string().optional(),
+  operationType: z.string().min(1),
+  operationTypeAr: z.string().optional(),
+  operationSort: z.string().optional(),
+  qty: z.number().int().nonnegative().optional(),
+  unitRate: z.number().nonnegative().optional(),
+  unitPriceUsd: z.number().nonnegative().optional(),
+  expectedReturnDate: z.string().nullable().optional(),
+  requiresApproval: z.boolean().optional(),
+  approvalId: z.string().optional(),
+  colorIds: z.array(z.string()).optional(),
+  notes: z.string().optional(),
+});
+
+/**
+ * The fields one bulk-saved row actually writes on update.
+ *
+ * Pulled out as a function so the rule can be tested without a database,
+ * because the rule is the whole point: a key the caller did not send must not
+ * appear in the result at all. Prisma treats `undefined` as "leave alone" and
+ * `null` as "clear it", and the difference between those two is a coordinator's
+ * expected return date.
+ */
+export function bulkUpdateData(row: z.infer<typeof bulkRowSchema>): Record<string, unknown> {
+  const { id: _id, expectedReturnDate, ...fields } = row;
+  return {
+    ...fields,
+    ...(expectedReturnDate !== undefined
+      ? { expectedReturnDate: expectedReturnDate ? new Date(expectedReturnDate) : null }
+      : {}),
+  };
+}
+
 externalRouter.put('/:orderId/operations', requirePermission('external:write'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
-  const rows = z.array(opSchema.extend({ id: z.string().optional() })).parse(req.body.operations);
+  const rows = z.array(bulkRowSchema).parse(req.body.operations);
 
   const order = await prisma.order.findFirst({
     where: { OR: [{ id: req.params.orderId }, { poNumber: req.params.orderId }] },
@@ -224,21 +285,21 @@ externalRouter.put('/:orderId/operations', requirePermission('external:write'), 
       await tx.externalOperation.deleteMany({ where: { id: { in: removable } } });
     }
     for (const row of rows) {
-      const { id, expectedReturnDate, requiresApproval, ...fields } = row;
-      const data = {
-        ...fields,
-        requiresApproval,
-        expectedReturnDate: expectedReturnDate ? new Date(expectedReturnDate) : null,
-      };
+      const { id, expectedReturnDate, ...fields } = row;
       if (id) {
         // Status is never written here; it belongs to the transition route.
-        await tx.externalOperation.update({ where: { id }, data });
+        // Only the keys this caller sent are written — see bulkRowSchema.
+        await tx.externalOperation.update({ where: { id }, data: bulkUpdateData(row) });
       } else {
+        // A new row does need the defaults, since nothing exists to preserve.
         await tx.externalOperation.create({
           data: {
-            ...data,
+            ...fields,
             orderId: order.id,
-            status: requiresApproval ? 'WAITING_APPROVAL' : 'NOT_SENT',
+            qty: row.qty ?? 0,
+            requiresApproval: row.requiresApproval ?? false,
+            expectedReturnDate: expectedReturnDate ? new Date(expectedReturnDate) : null,
+            status: row.requiresApproval ? 'WAITING_APPROVAL' : 'NOT_SENT',
           },
         });
       }
