@@ -20,6 +20,7 @@ import { getOrderDetail, refreshOrderCache } from '../services/order-service.js'
 import { reserveOrderMaterials } from '../services/inventory-service.js';
 import { workbookUpload as upload } from '../services/import/upload-guard.js';
 import { detectFileKind } from '../services/import/file-kind.js';
+import { logActivity } from '../services/activity-service.js';
 import { extractFromPdf } from '../services/import/pdf-extractor.js';
 
 export const importRouter = Router();
@@ -168,6 +169,76 @@ function toResponse(result: ExtractionResult & { analysis?: TabularAnalysis }) {
      */
     canCommit: true,
   };
+}
+
+/**
+ * MIME type for an imported document, from what the sniffer already decided.
+ *
+ * `ImportJob` never stored one — it had no need, since the extractor works from
+ * the bytes. The attachment does need it: it is what tells the browser to open
+ * a PDF in its viewer rather than download it.
+ */
+export function mimeForImport(buffer: Buffer, fileName: string): string {
+  switch (detectFileKind(buffer, fileName)) {
+    case 'pdf': return 'application/pdf';
+    case 'csv': return 'text/csv';
+    default: return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  }
+}
+
+/**
+ * File the imported document against the order it just created.
+ *
+ * The document the order was read from is the single most useful thing to be
+ * able to look at later — it is the customer's own paperwork, and the answer to
+ * "is that really what they asked for". It was already being stored, to let the
+ * commit re-read it, and then left where nothing could ever reach it: the
+ * Customer Reference screen showed nothing, and the file existed only as a row
+ * in an import log.
+ *
+ * The bytes are copied rather than shared. Pointing two rows at one key means
+ * removing either one deletes the other's file, and an order's documents should
+ * not be able to disappear because an import record was tidied up.
+ *
+ * Never fatal: the order exists by this point, and failing the whole import
+ * over a filing step would undo something that genuinely worked.
+ */
+async function attachImportedDocument(
+  orderId: string, job: { fileName: string }, buffer: Buffer, actor: { id: string; name: string },
+): Promise<void> {
+  try {
+    const mimeType = mimeForImport(buffer, job.fileName);
+    const storageKey = await storage.put(buffer, {
+      fileName: job.fileName, mimeType, prefix: `orders/${orderId}`,
+    });
+    const stage = await prisma.orderStage.findUnique({
+      where: { orderId_stageKey: { orderId, stageKey: 'CUSTOMER_ORDER_REF' } },
+      select: { id: true },
+    });
+    await prisma.attachment.create({
+      data: {
+        orderId,
+        orderStageId: stage?.id ?? null,
+        stageKey: 'CUSTOMER_ORDER_REF',
+        fileName: job.fileName,
+        documentType: 'CUSTOMER_PO',
+        mimeType,
+        sizeBytes: buffer.byteLength,
+        storageKey,
+        storageDriver: storage.name,
+        checksum: createHash('sha256').update(buffer).digest('hex'),
+        uploadedById: actor.id,
+      },
+    });
+    await logActivity({
+      orderId, actorId: actor.id, actorName: actor.name,
+      action: 'attachment.upload',
+      summary: `Filed "${job.fileName}" — the document this order was imported from`,
+      entityType: 'Attachment', entityId: orderId,
+    });
+  } catch (err) {
+    console.error('[import] could not file the imported document:', err);
+  }
 }
 
 importRouter.get('/profiles', requirePermission('import:run'), asyncHandler(async (_req, res) => {
@@ -402,6 +473,10 @@ importRouter.post('/:jobId/commit', requirePermission('import:run'), asyncHandle
       where: { id: job.id },
       data: { status: 'COMMITTED', createdOrderId: result.orderId, committedAt: new Date() },
     });
+
+    // The customer's own paperwork, filed against the order it produced, so it
+    // can be opened from Customer Reference for as long as the order exists.
+    await attachImportedDocument(result.orderId, job, buffer, actor);
 
     // §10: reserving on confirmation is what turns a BOM into a stock
     // commitment. Partial by design — securing what exists and reporting the
