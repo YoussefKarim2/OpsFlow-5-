@@ -28,7 +28,7 @@
 
 import ExcelJS from 'exceljs';
 import {
-  ImportConcept, analyseColumns, assessMapping, normaliseHeader,
+  ImportConcept, analyseColumns, assessMapping, normaliseHeader, CONCEPT_SYNONYMS,
   CONCEPT_META, ANALYSIS_CHECKLIST,
   type ColumnAnalysis,
 } from '@opsflow/shared';
@@ -406,6 +406,19 @@ function buildWideMatrix(ctx: BuildContext, sizeColumns: Array<{ index: number; 
  * matching a known concept, so the coordinator does not have to retype what is
  * already in the file.
  */
+/**
+ * Whether a piece of text is a column heading rather than a value.
+ *
+ * Compared against the synonym table exactly, not fuzzily: a near-miss would
+ * reject real values ("Mens" resembling a gender heading), and the only thing
+ * worth excluding here is a cell that literally *is* a caption.
+ */
+function isKnownLabel(text: string): boolean {
+  const normalised = normaliseHeader(text).replace(/:\s*$/, '').trim();
+  if (!normalised) return false;
+  return Object.values(CONCEPT_SYNONYMS).some((list) => list.includes(normalised));
+}
+
 function readHeaderBlock(
   sheet: ExcelJS.Worksheet,
   aboveRow: number,
@@ -431,6 +444,20 @@ function readHeaderBlock(
       for (const [dr, dc] of [[0, 1], [0, 2], [1, 0]] as const) {
         const raw = rawValue(sheet.getRow(r + dr).getCell(c + dc));
         if (raw == null || String(cellText(raw)).trim() === '') continue;
+
+        // A caption is not a value.
+        //
+        // "PURCHASE ORDER" as a document title scores as a PO-number label, and
+        // the cell directly below it is the *next* label — "PO Number:" — so the
+        // search-below rule read the caption as the order's number. The order
+        // was then created as PO "PO Number:", which is the sort of wrong that
+        // looks deliberate.
+        //
+        // Anything ending in a colon, or reading as a known column heading in
+        // its own right, is a caption rather than an answer.
+        const candidate = String(cellText(raw)).trim();
+        if (/:\s*$/.test(candidate)) continue;
+        if (isKnownLabel(candidate)) continue;
 
         const parsed =
           meta.type === 'number' ? toNumber(raw)

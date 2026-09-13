@@ -470,3 +470,58 @@ describe('header-row detection in isolation', () => {
     assert.equal(readSheetTable(sheet), null);
   });
 });
+
+describe('reading the facts stated above the table', () => {
+  test('a document title is not mistaken for the value below it', async () => {
+    // "PURCHASE ORDER" scores as a PO-number heading, and the cell below it is
+    // the *next* heading. The search-below rule read that caption as the
+    // number, and the order was created as PO "PO Number:" — wrong in a way
+    // that looks deliberate.
+    const buffer = await buildWorkbook([{
+      name: 'Order',
+      rows: [
+        ['PURCHASE ORDER'],
+        ['PO Number:', 'MEY-8817', '', 'Customer:', 'Meyba International'],
+        [],
+        ['Colour', 'S', 'M', 'L'],
+        ['Navy', 100, 200, 150],
+      ],
+    }]);
+    const r = await extractTabular(buffer);
+    assert.equal(r.fields.poNumber, 'MEY-8817');
+    assert.equal(r.fields.clientName, 'Meyba International');
+  });
+
+  test('a value that merely resembles a heading is still read', async () => {
+    // The guard must reject captions, not plausible answers.
+    const buffer = await buildWorkbook([{
+      name: 'Order',
+      rows: [
+        ['PO Number:', 'PO-1', '', 'Gender:', 'Mens'],
+        [],
+        ['Colour', 'S', 'M'],
+        ['Navy', 10, 20],
+      ],
+    }]);
+    const r = await extractTabular(buffer);
+    assert.equal(r.fields.gender, 'Mens');
+    assert.equal(r.fields.poNumber, 'PO-1');
+  });
+
+  test('the value to the right still wins over anything below', async () => {
+    const buffer = await buildWorkbook([{
+      name: 'Order',
+      rows: [
+        ['Season:', 'SS26'],
+        ['Style:', 'UFEC01010'],
+        [],
+        ['Colour', 'S', 'M', 'L'],
+        ['Navy', 10, 20, 30],
+        ['White', 15, 25, 35],
+      ],
+    }]);
+    const r = await extractTabular(buffer);
+    assert.equal(r.fields.season, 'SS26');
+    assert.equal(r.fields.styleNumber, 'UFEC01010');
+  });
+});
