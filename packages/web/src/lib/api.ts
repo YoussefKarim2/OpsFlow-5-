@@ -545,21 +545,45 @@ export async function fetchFileUrl(downloadUrl: string): Promise<string> {
 /**
  * Open an attachment in a new tab.
  *
- * The tab is opened *before* the fetch and then pointed at the result: a
- * `window.open` that happens after an await is a pop-up as far as the browser
- * is concerned, and gets blocked. Opening first and navigating second is the
- * one ordering that survives.
+ * Two browser rules shape this, and both were breaking it:
+ *
+ *   The tab is opened *before* the fetch and then pointed at the result. A
+ *   `window.open` that happens after an `await` is a pop-up as far as the
+ *   browser is concerned and gets blocked; opening first and navigating second
+ *   is the one ordering that survives.
+ *
+ *   The object URL is revoked on a delay, not immediately. Revoking it in the
+ *   same tick as the navigation pulls the bytes out from under the tab that is
+ *   still loading them, and the new tab renders blank.
+ *
+ * If the tab could not be opened at all — a blocker, or a browser that refuses
+ * to render this type inline — the file is saved instead. Getting the document
+ * is the point; which of the two ways it arrives is not.
  */
-export async function openFile(downloadUrl: string): Promise<void> {
+export async function openFile(downloadUrl: string, fileName?: string): Promise<void> {
   const tab = window.open('', '_blank');
+  let url: string;
   try {
-    const url = await fetchFileUrl(downloadUrl);
-    if (tab) tab.location.href = url;
-    else window.location.href = url;
+    url = await fetchFileUrl(downloadUrl);
   } catch (err) {
     tab?.close();
     throw err;
   }
+
+  if (tab) {
+    tab.location.href = url;
+  } else {
+    const a = document.createElement('a');
+    a.href = url;
+    if (fileName) a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  // Long enough for the tab to have taken its own reference, short enough that
+  // a morning of opening documents does not accumulate them.
+  if (url.startsWith('blob:')) window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 export const api = {

@@ -78,7 +78,7 @@ export function AttachmentsPanel({
   });
 
   const open = useMutation({
-    mutationFn: (d: AttachmentDto) => openFile(d.downloadUrl),
+    mutationFn: (d: AttachmentDto) => openFile(d.downloadUrl, d.fileName),
     onError: (e) => toast.error(e instanceof ApiError ? e.message : 'Could not open that file.'),
   });
 

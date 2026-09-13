@@ -55,7 +55,35 @@ export function createApp() {
   // same address — turning a per-attacker limit into a company-wide outage.
   app.set('trust proxy', TRUST_PROXY);
 
-  app.use(helmet());
+  /**
+   * Helmet's defaults, with one deliberate widening: `blob:`.
+   *
+   * Attachments are fetched with the bearer token the rest of the app uses —
+   * an <img src> or an <a href> cannot carry an Authorization header — and the
+   * bytes then reach the browser as a blob: URL. Under the stock policy
+   * (`default-src 'self'`, `img-src 'self' data:`) every one of those was
+   * blocked: the file downloaded correctly and the browser then refused to
+   * display it, which looked exactly like "I can see the file but cannot open
+   * it".
+   *
+   * blob: is not a network origin. It addresses bytes this page already holds,
+   * created by this page, readable by nobody else — so allowing it grants no
+   * new reach to an attacker. `default-src` stays 'self', and each directive
+   * that can actually render a file is widened on its own rather than opening
+   * the policy wholesale. `script-src` is pointedly not among them: a blob is
+   * a document to look at, never code to run.
+   */
+  app.use(helmet({
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        'img-src': ["'self'", 'data:', 'blob:'],
+        'media-src': ["'self'", 'blob:'],
+        'object-src': ["'self'", 'blob:'],
+        'frame-src': ["'self'", 'blob:'],
+      },
+    },
+  }));
   app.use(cors({ origin: config.CORS_ORIGIN.split(',').map((s) => s.trim()), credentials: true }));
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: true }));
