@@ -11,7 +11,7 @@ import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { ExternalLink } from 'lucide-react';
 import { fmtDate } from '@opsflow/shared';
-import { api } from '../../lib/api';
+import { api, openFile } from '../../lib/api';
 import { Card, Spinner, EmptyState } from '../../components/ui';
 
 const TYPES = [
@@ -74,9 +74,9 @@ export function DocumentsTab({ orderId }: { orderId: string }) {
                   <td className="td text-xs">{d.uploadedByName}</td>
                   <td className="td text-xs">{fmtDate(d.createdAt)}</td>
                   <td className="td text-right">
-                    <a href={d.downloadUrl} target="_blank" rel="noreferrer" className="btn-ghost btn-sm">
+                    <button type="button" onClick={() => void openFile(d.downloadUrl)} className="btn-ghost btn-sm">
                       Open <ExternalLink className="h-3 w-3" />
-                    </a>
+                    </button>
                   </td>
                 </tr>
               ))}

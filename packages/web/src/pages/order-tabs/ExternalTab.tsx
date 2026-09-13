@@ -17,6 +17,7 @@ import { useAuth } from '../../lib/auth';
 import {
   Card, CardHeader, Modal, Field, Num, FreeText, Spinner, EmptyState, clsx,
 } from '../../components/ui';
+import { AttachmentsPanel } from '../../components/Attachments';
 
 interface Op {
   id: string; externalFactoryName: string | null; externalReference: string | null;
@@ -483,6 +484,13 @@ export function ExternalTab({ order }: { order: OrderDetailDto; focus?: "externa
         approval={recording}
         onClose={() => setRecording(null)}
         onDone={() => { setRecording(null); invalidate(); }}
+      />
+      <AttachmentsPanel
+        orderId={order.id}
+        documentType="EXTERNAL_OP_DOC"
+        stageKey="EXTERNAL_ORDER"
+        title="External work files"
+        detail="Artwork sent out, and paperwork that came back with the work."
       />
     </div>
   );

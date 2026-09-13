@@ -15,6 +15,7 @@ import { useAuth } from '../../lib/auth';
 import {
   Card, CardHeader, StatTile, Num, Modal, Field, Spinner, ErrorNote, EmptyState, clsx,
 } from '../../components/ui';
+import { AttachmentsPanel } from '../../components/Attachments';
 
 interface Audit {
   id: string; inspectionDate: string; factoryName: string | null; auditType: string;
@@ -174,6 +175,13 @@ export function QualityTab({ order }: { order: OrderDetailDto }) {
           void qc.invalidateQueries({ queryKey: ['quality', order.id] });
           void qc.invalidateQueries({ queryKey: ['order', order.id] });
         }}
+      />
+      <AttachmentsPanel
+        orderId={order.id}
+        documentType="QUALITY_REPORT"
+        stageKey="AUDIT"
+        title="Quality reports"
+        detail="Inspection reports and photographs of anything found."
       />
     </div>
   );

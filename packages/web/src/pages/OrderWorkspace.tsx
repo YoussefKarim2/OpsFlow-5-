@@ -13,14 +13,15 @@
  */
 
 import { useState } from 'react';
-import { useParams, useSearchParams, Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import { ChevronLeft, LayoutGrid, ListOrdered } from 'lucide-react';
+import { useParams, useSearchParams, Link, useNavigate } from 'react-router-dom';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import { ChevronLeft, LayoutGrid, ListOrdered, Trash2 } from 'lucide-react';
 import { fmtDate, type OrderStepState, type OrderTabKey } from '@opsflow/shared';
-import { api } from '../lib/api';
+import { api, ApiError } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import {
   ProgressBar, HealthBadge, StatusBadge, PriorityBadge,
-  Spinner, ErrorNote, TabStrip,
+  Spinner, ErrorNote, TabStrip, Modal, Field,
 } from '../components/ui';
 
 import { OverviewTab } from './order-tabs/OverviewTab';
@@ -61,6 +62,11 @@ export function OrderWorkspacePage() {
   const [params, setParams] = useSearchParams();
   const tab = (params.get('tab') as TabKey) || 'overview';
   const [showAllTabs, setShowAllTabs] = useState(false);
+  const { isSuperAdmin } = useAuth();
+  const navigate = useNavigate();
+  const [deleting, setDeleting] = useState(false);
+  const [confirmText, setConfirmText] = useState('');
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const { data: order, isLoading, error, refetch } = useQuery({
     queryKey: ['order', id],
@@ -75,6 +81,19 @@ export function OrderWorkspacePage() {
     enabled: Boolean(order),
   });
   const steps = stepsRes?.data;
+
+  /**
+   * Deleting asks for the PO number to be typed back.
+   *
+   * An order is months of work, and the confirmation has to cost more than a
+   * reflex. Typing the number means reading it, which means looking at which
+   * order is actually about to go.
+   */
+  const remove = useMutation({
+    mutationFn: () => api.orders.remove(id, confirmText.trim()),
+    onSuccess: () => { setDeleting(false); navigate('/orders', { replace: true }); },
+    onError: (e) => setDeleteError(e instanceof ApiError ? e.message : 'Could not delete this order.'),
+  });
 
   const setTab = (key: string, ledger?: string | null) => {
     const next = new URLSearchParams(params);
@@ -175,6 +194,22 @@ export function OrderWorkspacePage() {
             </div>
 
             <div className="w-full max-w-xs shrink-0">
+              {/*
+                Deleting an order is a super-admin action and nothing else. It
+                is not behind a permission because permissions are a table an
+                administrator can edit, and this is the one action with no undo.
+              */}
+              {isSuperAdmin && (
+                <div className="mb-2 flex justify-end">
+                  <button
+                    type="button"
+                    className="btn-ghost btn-sm text-red-600 hover:bg-red-50"
+                    onClick={() => { setConfirmText(''); setDeleting(true); }}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Delete order
+                  </button>
+                </div>
+              )}
               <div className="mb-1 flex items-baseline justify-between">
                 <span className="text-2xs font-semibold uppercase tracking-wider text-ink-500">
                   Order Progress
@@ -277,6 +312,42 @@ export function OrderWorkspacePage() {
           {tab === 'activity'     && <ActivityTab orderId={order.id} />}
         </div>
       </div>
+
+      <Modal
+        open={deleting}
+        onClose={() => setDeleting(false)}
+        title={`Delete order ${order.poNumber}?`}
+        subtitle="This removes the order and everything filed under it. It cannot be undone."
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-ink-700">
+            Quantities, the bill of material, markers, tasks, approvals, packing, invoices and
+            every attached file go with it. The audit trail keeps a record that it was deleted,
+            and by whom.
+          </p>
+          <Field label={`Type "${order.poNumber}" to confirm`}>
+            <input
+              className="input"
+              value={confirmText}
+              onChange={(e) => { setConfirmText(e.target.value); setDeleteError(null); }}
+              placeholder={order.poNumber}
+              autoFocus
+            />
+          </Field>
+          {deleteError && <p className="text-sm text-red-700">{deleteError}</p>}
+          <div className="flex justify-end gap-2">
+            <button className="btn-secondary" onClick={() => setDeleting(false)}>Cancel</button>
+            <button
+              className="btn-primary bg-red-600 hover:bg-red-700"
+              disabled={confirmText.trim() !== order.poNumber || remove.isPending}
+              onClick={() => remove.mutate()}
+            >
+              {remove.isPending ? 'Deleting…' : 'Delete this order'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
     </div>
   );
 }

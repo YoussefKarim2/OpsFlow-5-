@@ -12,6 +12,7 @@ import { useAuth } from '../../lib/auth';
 import {
   Card, CardHeader, StatTile, Num, Modal, Field, Spinner, ErrorNote, EmptyState, clsx,
 } from '../../components/ui';
+import { AttachmentsPanel } from '../../components/Attachments';
 
 interface PackingList {
   id: string; reference: string | null; approved: boolean; approvedAt: string | null;
@@ -258,6 +259,22 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
         open={shipping} order={order} producedQty={order.production.producedQty}
         onClose={() => setShipping(false)}
         onDone={() => { setShipping(false); invalidate(); }}
+      />
+      <AttachmentsPanel
+        orderId={order.id}
+        documentType="PACKING_LIST"
+        stageKey="PACKING"
+        title="Packing files"
+        detail="Packing lists and carton photographs for this order."
+      />
+      {/* Shipping paperwork is filed separately: it belongs to the shipment,
+          not the packing, and is what a forwarder asks for by name. */}
+      <AttachmentsPanel
+        orderId={order.id}
+        documentType="SHIPPING_DOC"
+        stageKey="PACKING"
+        title="Shipping documents"
+        detail="Bills of lading, airway bills, customs paperwork and certificates."
       />
     </div>
   );

@@ -27,6 +27,7 @@ import { api, type ProformaDto } from '../../lib/api';
 import {
   Card, Field, Spinner, ConfirmDialog, Num, clsx, useToast, ErrorNote,
 } from '../../components/ui';
+import { AttachmentsPanel } from '../../components/Attachments';
 
 interface LineDraft {
   description: string;
@@ -554,6 +555,13 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
         }
       />
       </div>
+      <AttachmentsPanel
+        orderId={order.id}
+        documentType="PROFORMA_INVOICE"
+        stageKey="PROFORMA_INVOICE"
+        title="Proforma invoice files"
+        detail="The signed proforma, and anything the customer sent back with it."
+      />
     </div>
   );
 }

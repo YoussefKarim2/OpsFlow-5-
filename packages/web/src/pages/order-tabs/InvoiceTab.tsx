@@ -21,6 +21,7 @@ import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
 import { api } from '../../lib/api';
 import { Card, CardHeader, Num, EmptyState, Spinner, clsx } from '../../components/ui';
 import { PackingTab } from './PackingTab';
+import { AttachmentsPanel } from '../../components/Attachments';
 
 export function InvoiceTab({ order }: { order: OrderDetailDto }) {
   const { data: proformaRes, isLoading } = useQuery({
@@ -181,6 +182,13 @@ export function InvoiceTab({ order }: { order: OrderDetailDto }) {
         <Send className="h-3 w-3" />
         OpsFlow records the invoice; it does not send it. Send it however you normally do.
       </p>
+      <AttachmentsPanel
+        orderId={order.id}
+        documentType="INVOICE"
+        stageKey="INVOICE"
+        title="Invoice files"
+        detail="The commercial invoice and anything issued with it."
+      />
     </div>
   );
 }

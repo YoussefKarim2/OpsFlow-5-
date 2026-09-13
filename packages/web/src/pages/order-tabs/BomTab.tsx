@@ -21,6 +21,7 @@ import { useAuth } from '../../lib/auth';
 import {
   Card, CardHeader, StatTile, Num, ProgressBar, Modal, Field, Spinner, ErrorNote, clsx,
 } from '../../components/ui';
+import { AttachmentsPanel } from '../../components/Attachments';
 
 interface BomRow {
   id: string; category: string; position: string | null; item: string;
@@ -225,6 +226,13 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
           void qc.invalidateQueries({ queryKey: ['bom', order.id] });
           void qc.invalidateQueries({ queryKey: ['order', order.id] });
         }}
+      />
+      <AttachmentsPanel
+        orderId={order.id}
+        documentType="BOM"
+        stageKey="BILL_OF_MATERIAL"
+        title="Bill of material files"
+        detail="Supplier lists, swatch sheets and anything costing this bill."
       />
     </div>
   );

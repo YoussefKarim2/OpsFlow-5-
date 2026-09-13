@@ -10,8 +10,9 @@ import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Upload, ExternalLink, Trash2, FileText, Image as ImageIcon } from 'lucide-react';
 import { fmtDate } from '@opsflow/shared';
-import { api, type AttachmentDto } from '../../lib/api';
+import { api, type AttachmentDto, openFile } from '../../lib/api';
 import { Card, Spinner, EmptyState, ConfirmDialog, Field, clsx, useToast } from '../../components/ui';
+import { AuthedImage } from '../../components/Attachments';
 
 /**
  * The document types that belong to step 1. The full list lives on the
@@ -141,23 +142,21 @@ export function CustomerReferenceTab({ orderId }: { orderId: string }) {
           <div className="card-header"><h3 className="card-title">Reference images</h3></div>
           <div className="grid grid-cols-2 gap-3 p-4 sm:grid-cols-3 lg:grid-cols-4">
             {images.map((d) => (
-              <a
+              <button
                 key={d.id}
-                href={d.downloadUrl}
-                target="_blank"
-                rel="noreferrer"
-                className="group overflow-hidden rounded border border-ink-200 bg-white"
+                type="button"
+                onClick={() => void openFile(d.downloadUrl)}
+                className="group overflow-hidden rounded border border-ink-200 bg-white text-left"
               >
-                <img
-                  src={d.downloadUrl}
+                <AuthedImage
+                  downloadUrl={d.downloadUrl}
                   alt={d.fileName}
                   className="h-32 w-full bg-ink-50 object-contain"
-                  loading="lazy"
                 />
                 <span className="block truncate border-t border-ink-100 px-2 py-1 text-2xs text-ink-600 group-hover:text-ink-900">
                   {d.fileName}
                 </span>
-              </a>
+              </button>
             ))}
           </div>
         </Card>
@@ -202,9 +201,9 @@ export function CustomerReferenceTab({ orderId }: { orderId: string }) {
                   <td className="td text-xs">{fmtDate(d.createdAt)}</td>
                   <td className="td">
                     <div className="flex justify-end gap-1">
-                      <a href={d.downloadUrl} target="_blank" rel="noreferrer" className="btn-ghost btn-sm">
+                      <button type="button" onClick={() => void openFile(d.downloadUrl)} className="btn-ghost btn-sm">
                         Open <ExternalLink className="h-3 w-3" />
-                      </a>
+                      </button>
                       <button
                         className="btn-ghost btn-sm text-red-600 hover:bg-red-50"
                         onClick={() => setConfirmDelete(d)}

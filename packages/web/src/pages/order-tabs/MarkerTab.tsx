@@ -14,6 +14,7 @@ import { useAuth } from '../../lib/auth';
 import { api } from '../../lib/api';
 import { Card, CardHeader, StatTile, Num, Spinner, EmptyState, clsx } from '../../components/ui';
 import { LayingMarkingImportWizard } from './LayingMarkingImportWizard';
+import { AttachmentsPanel } from '../../components/Attachments';
 
 interface Plan {
   lays: Array<{
@@ -302,6 +303,13 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
           onClose={() => setImporting(false)}
         />
       )}
+      <AttachmentsPanel
+        orderId={order.id}
+        documentType="MARKER_FILE"
+        stageKey="LAYING_FABRIC"
+        title="Marker files"
+        detail="Marker plots and lay sheets for this order."
+      />
     </div>
   );
 }

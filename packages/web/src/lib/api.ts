@@ -93,7 +93,13 @@ const patch = <T>(p: string, body: unknown, reason?: string) =>
   request<T>(p, { method: 'PATCH', body: JSON.stringify(body), reason });
 const put = <T>(p: string, body: unknown) =>
   request<T>(p, { method: 'PUT', body: JSON.stringify(body) });
-const del = (p: string) => request<void>(p, { method: 'DELETE' });
+// A DELETE may carry a body — the order delete asks for the PO number back as
+// confirmation, which belongs in the request rather than the URL.
+const del = (p: string, body?: unknown) =>
+  request<void>(p, {
+    method: 'DELETE',
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
 
 const qs = (params: Record<string, unknown>): string => {
   const sp = new URLSearchParams();
@@ -506,6 +512,56 @@ export interface Page<T> {
   totalPages: number;
 }
 
+/**
+ * Fetch a file the API protects, and hand back a URL the browser can use.
+ *
+ * `<a href>` and `<img src>` cannot carry an Authorization header, and the file
+ * route is authenticated — so every attachment link in the app was quietly
+ * returning 401 and every reference image was a broken icon. The file has to be
+ * fetched the way every other request is, then handed to the browser as an
+ * object URL.
+ *
+ * An absolute URL is left alone: the S3 driver returns a presigned link that
+ * already carries its own credentials in the query string, and re-fetching it
+ * with a bearer token would be both pointless and wrong.
+ */
+export async function fetchFileUrl(downloadUrl: string): Promise<string> {
+  if (/^https?:\/\//i.test(downloadUrl)) return downloadUrl;
+
+  const res = await fetch(downloadUrl.startsWith('/api') ? downloadUrl : `${BASE}${downloadUrl}`, {
+    headers: { Authorization: `Bearer ${getToken() ?? ''}` },
+  });
+  if (!res.ok) {
+    throw new ApiError(
+      res.status === 404
+        ? 'That file is no longer stored on the server.'
+        : 'Could not open that file.',
+      res.status, 'FILE_OPEN_FAILED',
+    );
+  }
+  return URL.createObjectURL(await res.blob());
+}
+
+/**
+ * Open an attachment in a new tab.
+ *
+ * The tab is opened *before* the fetch and then pointed at the result: a
+ * `window.open` that happens after an await is a pop-up as far as the browser
+ * is concerned, and gets blocked. Opening first and navigating second is the
+ * one ordering that survives.
+ */
+export async function openFile(downloadUrl: string): Promise<void> {
+  const tab = window.open('', '_blank');
+  try {
+    const url = await fetchFileUrl(downloadUrl);
+    if (tab) tab.location.href = url;
+    else window.location.href = url;
+  } catch (err) {
+    tab?.close();
+    throw err;
+  }
+}
+
 export const api = {
   auth: {
     login: (email: string, password: string) => post<LoginResponse>('/auth/login', { email, password }),
@@ -700,6 +756,9 @@ export const api = {
     activity: (id: string, limit = 50) => get<{ data: ActivityDto[] }>(`/orders/${id}/activity${qs({ limit })}`),
     auditTrail: (id: string) => get<{ data: unknown[] }>(`/orders/${id}/audit-trail`),
     attachments: (id: string) => get<{ data: AttachmentDto[] }>(`/orders/${id}/attachments`),
+    /** Super admins only, and the PO number must be typed back to confirm. */
+    remove: (id: string, confirm: string) =>
+      del(`/orders/${id}`, { confirm }),
     /** Step 17 — where the order came from and what it is made of. */
     provenance: (id: string) => get<OrderProvenanceDto>(`/orders/${id}/provenance`),
   },

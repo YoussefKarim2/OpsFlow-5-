@@ -5,7 +5,8 @@ import {
   buildMatrix, computeCutMatrix, isSignificantQtyChange, type QtyCell,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
-import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
+import { storage } from '../services/storage/index.js';
+import { authenticate, requirePermission, requireSuperAdmin, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 import {
@@ -543,4 +544,63 @@ ordersRouter.get('/:id/audit-trail', requirePermission('order:read'), asyncHandl
       reason: r.reason, createdAt: r.createdAt.toISOString(),
     })),
   });
+}));
+
+/**
+ * Delete an order, and everything filed under it.
+ *
+ * Super admins only, and deliberately not behind a permission: permissions are
+ * a table an administrator can edit, and this is the one action with no undo.
+ * `requireSuperAdmin` consults the named list in the environment instead, so a
+ * role misconfiguration cannot hand it to anybody.
+ *
+ * The database cascades the rows — quantities, BOM, markers, tasks, approvals,
+ * attachments, the lot. What it cannot cascade is the *file bytes*, which live
+ * under their own keys in the storage driver with no foreign key pointing at
+ * them; deleting the order would leave them behind forever, taking up space in
+ * the backups with nothing left that could ever reference them. So they go
+ * first, while the rows that name them still exist.
+ *
+ * The PO number must be typed back to confirm. An order is months of work and
+ * a mis-click is not a good enough reason to lose it.
+ */
+ordersRouter.delete('/:id', requireSuperAdmin, asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const order = await prisma.order.findFirst({
+    where: { OR: [{ id: req.params.id }, { poNumber: req.params.id }] },
+    select: { id: true, poNumber: true, orderName: true },
+  });
+  if (!order) throw new NotFoundError('Order');
+
+  const confirm = String((req.body as { confirm?: unknown } | undefined)?.confirm ?? '').trim();
+  if (confirm !== order.poNumber) {
+    throw new ValidationError(
+      `Type the PO number "${order.poNumber}" to confirm. This cannot be undone.`,
+    );
+  }
+
+  const files = await prisma.attachment.findMany({
+    where: { orderId: order.id },
+    select: { storageKey: true },
+  });
+  // One failed delete must not abandon the rest: a key already gone is not a
+  // reason to keep the order.
+  for (const f of files) await storage.delete(f.storageKey).catch(() => undefined);
+
+  await prisma.order.delete({ where: { id: order.id } });
+
+  // Logged against no order, because there is no longer an order to log against
+  // — the audit trail has to outlive the thing it describes.
+  await logActivity({
+    orderId: null,
+    actorId: actor.id,
+    actorName: actor.name,
+    action: 'order.delete',
+    summary: `deleted order ${order.poNumber}${order.orderName ? ` — ${order.orderName}` : ''}`
+      + ` and ${files.length} attached file${files.length === 1 ? '' : 's'}`,
+    entityType: 'Order',
+    entityId: order.id,
+  });
+
+  res.status(204).end();
 }));
