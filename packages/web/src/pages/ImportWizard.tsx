@@ -21,7 +21,7 @@ import {
   ArrowRight, ArrowLeft, Save, Loader2,
 } from 'lucide-react';
 import {
-  CONCEPT_META, ImportConcept, fmtNumber,
+  CONCEPT_META, ImportConcept, fmtNumber, fieldLabel,
   type ColumnAnalysis,
 } from '@opsflow/shared';
 import { api, type ImportAnalysisDto } from '../lib/api';
@@ -514,14 +514,42 @@ function MapStep({
  * must type something". Everything else the committer defaults, so nothing on
  * this screen has to be filled in for an import to go through.
  */
+/**
+ * The fields always offered, in the order a coordinator looks for them.
+ *
+ * These appear whether or not the document carried them, because a blank PO
+ * number is something you need to see and fill in. Everything *else* the reader
+ * found is added after them — see `reviewFields` — so a value taken off the
+ * page can never be applied without being shown.
+ */
 const REVIEW_FIELDS: Array<{ field: string; label: string; required?: boolean }> = [
   { field: 'poNumber', label: 'PO number', required: true },
   { field: 'clientName', label: 'Customer' },
   { field: 'orderName', label: 'Order name' },
   { field: 'styleNumber', label: 'Style' },
   { field: 'season', label: 'Season' },
+  { field: 'poDate', label: 'PO date' },
   { field: 'requiredDeliveryDate', label: 'Delivery date' },
+  { field: 'promisedShippingDate', label: 'Promised shipping date' },
 ];
+
+/**
+ * Every field on the review screen: the standard ones, plus anything the
+ * document turned out to state.
+ *
+ * A reader that fills in a price, a fabric or a delivery address and then does
+ * not show it has made a decision on the coordinator's behalf that they cannot
+ * see, let alone correct. Whatever was read is editable here before anything is
+ * created — which is the whole promise of a review screen.
+ */
+function reviewFields(order: Record<string, unknown>): Array<{ field: string; label: string; required?: boolean }> {
+  const standard = new Set(REVIEW_FIELDS.map((f) => f.field));
+  const found = Object.keys(order)
+    .filter((k) => !standard.has(k) && order[k] != null && String(order[k]).trim() !== '')
+    .sort()
+    .map((field) => ({ field, label: fieldLabel(field) }));
+  return [...REVIEW_FIELDS, ...found];
+}
 
 const CONFIDENCE: Record<string, { label: string; chip: string }> = {
   HIGH:   { label: 'High confidence',   chip: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' },
@@ -701,7 +729,7 @@ function ReviewStep({
       <Card>
         <CardHeader
           title="Order details"
-          subtitle="Anything the file did not carry can be typed here."
+          subtitle="Everything read from the file, and anything it did not carry. All of it editable before the order is created."
           action={
             <button className="btn-secondary btn-sm" onClick={onApplyFields} disabled={applying}>
               {applying ? 'Applying…' : 'Apply changes'}
@@ -709,7 +737,7 @@ function ReviewStep({
           }
         />
         <div className="grid gap-3 p-4 sm:grid-cols-3">
-          {REVIEW_FIELDS.map((f) => (
+          {reviewFields(p.order as Record<string, unknown>).map((f) => (
             <Field key={f.field} label={f.label + (f.required ? ' *' : '')}>
               <input
                 className={clsx('input', f.required && !value(f.field) && 'border-amber-400')}

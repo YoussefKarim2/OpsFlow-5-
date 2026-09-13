@@ -382,18 +382,30 @@ export async function extractFromPdf(
     .filter((_, i) => !chosen || i < chosen.band.start || i >= chosen.band.start + chosen.band.rows.length)
     .map((line) => line.map((c) => c.text));
 
-  const header = chosen?.header ?? null;
-  if (!header) {
+  /**
+   * No table is not the end of the read.
+   *
+   * This used to return an empty result here, which threw away the entire
+   * second half of this function — the PO number, the customer, the dates, the
+   * style, every "Label: value" pair on the page. A purchase order whose table
+   * is a picture, or laid out in a way the band detector cannot see, states all
+   * of those in plain text a few lines above it, and the reader was discarding
+   * them because of what it could *not* read elsewhere on the same page. The
+   * order arrived blank and the file looked unscanned.
+   *
+   * An absent table is now an empty one: the matrix code below finds nothing to
+   * do, the prose code finds everything it always could, and the import carries
+   * whatever the document actually stated.
+   */
+  const header = chosen?.header ?? { index: -1, analyses: [] as ColumnAnalysis[] };
+  if (!chosen) {
     issues.push({
-      // Warning: the header details usually read fine even when the table does
-      // not, and importing those beats discarding them.
       level: 'WARNING', field: null, sheet: null, cell: null,
       message:
-        'No table could be recognised in this PDF. The text was read, but no row ' +
-        'looked like column headings, so no quantities were taken from it. Anything ' +
-        'read from the page is below; you can import and add the quantities on the order.',
+        'No table of quantities could be recognised in this PDF — the text was read, '
+        + 'but no row looked like column headings. Everything else stated on the page '
+        + 'has still been read and is shown below; add the quantities on the order.',
     });
-    return emptyResult(issues, pages);
   }
 
   // ── The rows under the header ───────────────────────────────────────────
@@ -508,15 +520,56 @@ export async function extractFromPdf(
     }
   }
 
-  function readPair(label: string | undefined, value: string | undefined): void {
+  /**
+   * A pair packed into one cell — "PO Number: 77-06".
+   *
+   * The column splitter separates cells on a wide gap, so a label set tight
+   * against its value is one cell, not two, and the pairwise reads above never
+   * see it. Splitting on the colon recovers it. Still routed through readPair,
+   * so the synonym test decides whether it is believed.
+   */
+  for (const row of proseRows) {
+    for (const cell of row) {
+      const packed = /^([^:]{2,40}):\s*(.+)$/.exec(cell.trim());
+      if (packed) readPair(`${packed[1]!.trim()}:`, packed[2]!.trim());
+    }
+  }
+
+  /**
+   * A label with its value on the line beneath it.
+   *
+   * Form-style purchase orders stack them — "ORDER NUMBER" and the number below
+   * it in a box — which reads as two separate one-cell lines and matched
+   * nothing. Restricted to single-cell lines so a table row cannot be mistaken
+   * for a value, and the synonym test still has the last word.
+   */
+  for (let i = 0; i + 1 < proseRows.length; i += 1) {
+    const labelLine = proseRows[i]!;
+    const valueLine = proseRows[i + 1]!;
+    if (labelLine.length !== 1 || valueLine.length !== 1) continue;
+    readPair(labelLine[0], valueLine[0], false);
+  }
+
+  /**
+   * @param requireColon Whether the label must end in one.
+   *
+   * Across a line it must. Two pieces of text sharing a baseline are not
+   * necessarily related — a letterhead sets the supplier block, "Delivery
+   * address" and the customer's street on one baseline in three separate
+   * columns, and pairing neighbours there read the buyer's street as the
+   * delivery address. The colon is what distinguishes a label introducing the
+   * value beside it from two unrelated blocks that happen to line up.
+   *
+   * Down the page it need not: a lone label with a lone value directly beneath
+   * it is the layout of every form ever printed, and there the adjacency itself
+   * is the evidence the colon would otherwise have supplied.
+   */
+  function readPair(
+    label: string | undefined, value: string | undefined, requireColon = true,
+  ): void {
     const v = (value ?? '').trim();
     if (!v || !label?.trim()) return;
-
-    // Only a line that actually labels something. Without the colon a
-    // letterhead reads as pairs — "Piekstraat 71" became a destination — and a
-    // street address on the review screen is worse than a blank, because
-    // somebody has to notice it is wrong.
-    if (!/:\s*$/.test(label)) return;
+    if (requireColon && !/:\s*$/.test(label)) return;
 
     const [match] = analyseColumns([normaliseHeader(label)], [[v]], {},
       options.allowedConcepts ? new Set(options.allowedConcepts) : undefined);
@@ -570,11 +623,27 @@ export async function extractFromPdf(
   // kind of document that is the product heading — "UFEC 2026 S/S Jersey
   // (UFEC01010)" — and the code in brackets is the style number.
   const bandStartLine = chosen?.band.start ?? flatLines.length;
+  // A line already read as somebody's value is not also the style heading.
+  // Without this the scan below walks back up the page and re-uses the value it
+  // just took — "SS26" became the order name as well as the season.
+  const alreadyRead = new Set(
+    Object.values(fields).map((v) => String(v ?? '').trim()).filter(Boolean),
+  );
+  // Nor is a *label* the style heading. "Season" sitting above its own value is
+  // the caption of a field, not the name of the garment.
+  const everySynonym = new Set(Object.values(CONCEPT_SYNONYMS).flat());
   for (let i = Math.min(bandStartLine, flatLines.length) - 1; i >= 0; i--) {
     const line = flatLines[i]!;
     if (!line || line.includes(':') || COMPANY.test(line) || SELF.test(line)) continue;
     if (line.length < 4 || line.length > 90) continue;
     if (/^[\d\s.,-]+$/.test(line)) continue;                 // a row of numbers
+    // A heading, not a sentence. "We confirm the above order per contract."
+    // is prose that happens to sit above the table, and taking it as the order
+    // name puts a paragraph in a field meant for "UFEC 2026 S/S Jersey".
+    if (/[.!?]\s*$/.test(line)) continue;
+    if (line.split(/\s+/).length > 8) continue;
+    if (alreadyRead.has(line)) continue;
+    if (everySynonym.has(normaliseHeader(line).replace(/:\s*$/, '').trim())) continue;
     const bracketed = /\(([^)]{3,30})\)\s*$/.exec(line);
     if (fields[ImportConcept.ORDER_NAME] == null) {
       fields[ImportConcept.ORDER_NAME] = bracketed ? line.slice(0, bracketed.index).trim() : line;

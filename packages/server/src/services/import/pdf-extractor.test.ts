@@ -467,3 +467,113 @@ describe('what the extraction hands to the committer', () => {
     assert.equal(po[0]!.level, 'WARNING');
   });
 });
+
+/**
+ * A document whose table cannot be read is still a document.
+ *
+ * The reader used to abandon the whole page the moment it failed to recognise a
+ * table, discarding the PO number, the customer, the dates and the style — all
+ * of which are printed in plain text above it. The order arrived blank and the
+ * file looked as though it had never been scanned.
+ */
+describe('a purchase order the table detector cannot see', () => {
+  const at2 = (t: string, x: number, y: number) => at(t, x, y, t.length * 5);
+
+  const read = () => extractFromPdf(Buffer.alloc(0), {
+    reader: async () => [{
+      pageNumber: 1,
+      items: [
+        at2('PURCHASE ORDER', 30, 760),
+        at2('Order number:', 30, 730), at2('77-06', 200, 730),
+        at2('Customer:', 30, 712), at2('Meyba International', 200, 712),
+        // Deliberately no table: prose only, the way a short order arrives.
+        at2('Please supply the goods described in our contract.', 30, 660),
+      ],
+    }],
+  });
+
+  test('the header details are read even though no table was found', async () => {
+    const r = await read();
+    assert.equal(r.fields.poNumber, '77-06');
+    assert.equal(r.fields.clientName, 'Meyba International');
+  });
+
+  test('the missing table is a warning, not a refusal', async () => {
+    const r = await read();
+    assert.equal(r.issues.some((i) => i.level === 'ERROR'), false);
+    assert.ok(r.issues.some((i) => /no table of quantities/i.test(i.message)));
+  });
+
+  test('what was read is on the review screen, not just in the fields', async () => {
+    // A field extracted and not displayed cannot be checked or corrected.
+    // Review rows are keyed by concept; the committer reads the field names.
+    const r = await read();
+    const shown = new Map(r.mappings.filter((m) => m.sampleValue).map((m) => [m.field, m.sampleValue]));
+    assert.equal(shown.get('PO_NUMBER'), '77-06');
+    assert.equal(shown.get('CLIENT'), 'Meyba International');
+  });
+});
+
+describe('labels the column splitter does not separate', () => {
+  const at2 = (t: string, x: number, y: number) => at(t, x, y, t.length * 5);
+
+  test('a label and value packed into one cell are still read', async () => {
+    // "Order number: 77-06" set tight is one cell, not two, so the pairwise
+    // reads never saw it.
+    const r = await extractFromPdf(Buffer.alloc(0), {
+      reader: async () => [{
+        pageNumber: 1,
+        items: [at2('Order number: 77-06', 30, 700), at2('Some prose here', 30, 660)],
+      }],
+    });
+    assert.equal(r.fields.poNumber, '77-06');
+  });
+
+  test('a label with its value on the line beneath it is read', async () => {
+    // The layout of every printed form: label in a box, value under it.
+    const r = await extractFromPdf(Buffer.alloc(0), {
+      reader: async () => [{
+        pageNumber: 1,
+        items: [at2('Order number', 30, 700), at2('77-06', 30, 680)],
+      }],
+    });
+    assert.equal(r.fields.poNumber, '77-06');
+  });
+
+  test('two stacked lines that are not a label are left alone', async () => {
+    // The guard that keeps this from turning a letterhead into fields.
+    const r = await extractFromPdf(Buffer.alloc(0), {
+      reader: async () => [{
+        pageNumber: 1,
+        items: [at2('Piekstraat 71', 30, 700), at2('3071 EL Rotterdam', 30, 680)],
+      }],
+    });
+    assert.notEqual(r.fields.shippingAddress, '3071 EL Rotterdam');
+  });
+});
+
+describe('what counts as the order name', () => {
+  const at2 = (t: string, x: number, y: number) => at(t, x, y, t.length * 5);
+  const readWith = (items: ReturnType<typeof at2>[]) =>
+    extractFromPdf(Buffer.alloc(0), { reader: async () => [{ pageNumber: 1, items }] });
+
+  test('a sentence above the table is prose, not a name', async () => {
+    const r = await readWith([
+      at2('Order number: 77-06', 30, 700),
+      at2('We confirm the above order per contract.', 30, 660),
+    ]);
+    assert.notEqual(r.fields.orderName, 'We confirm the above order per contract.');
+  });
+
+  test('a value already read as a field is not also the name', async () => {
+    // "SS26" is the season; it is not additionally the name of the garment.
+    const r = await readWith([at2('Season', 30, 700), at2('SS26', 30, 684)]);
+    assert.equal(r.fields.season, 'SS26');
+    assert.notEqual(r.fields.orderName, 'SS26');
+  });
+
+  test('a label is not the name either', async () => {
+    const r = await readWith([at2('Season', 30, 700), at2('SS26', 30, 684)]);
+    assert.notEqual(r.fields.orderName, 'Season');
+  });
+});
