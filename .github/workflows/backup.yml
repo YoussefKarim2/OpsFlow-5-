@@ -68,7 +68,13 @@ jobs:
           fi
           echo "server major version: ${MAJOR}"
           sudo apt-get install -y -qq "postgresql-client-${MAJOR}"
-          pg_dump --version
+
+          # Installing it is not the same as using it. The runner ships its own
+          # PostgreSQL, and /usr/bin/pg_dump stays pointed at that one — so the
+          # right client was present and the wrong one still ran. The versioned
+          # directory goes first on PATH for every later step.
+          echo "/usr/lib/postgresql/${MAJOR}/bin" >> "$GITHUB_PATH"
+          "/usr/lib/postgresql/${MAJOR}/bin/pg_dump" --version
 
       - name: Take the backup
         env:
