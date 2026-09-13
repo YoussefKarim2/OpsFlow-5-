@@ -43,7 +43,7 @@ function healthy(over: Partial<GateContext> = {}): GateContext {
   };
 }
 
-const cutting = (ctx: GateContext) => evaluateStageGates(StageKey.FOLLOW_UP, ctx, 'Cutting');
+const cutting = (ctx: GateContext) => evaluateStageGates(StageKey.LAYING_FABRIC, ctx, 'Cutting');
 
 describe('the cutting gate', () => {
   test('a healthy order can start cutting', () => {
@@ -108,7 +108,7 @@ describe('the cutting gate', () => {
 
   test('every requirement is reported, met or not, so the list is a checklist', () => {
     const r = cutting(healthy());
-    assert.equal(r.requirements.length, STAGE_GATES[StageKey.FOLLOW_UP]!.length);
+    assert.equal(r.requirements.length, STAGE_GATES[StageKey.LAYING_FABRIC]!.length);
     assert.ok(r.requirements.every((x) => x.met));
     assert.ok(r.requirements.every((x) => x.label.length > 0));
   });
@@ -167,7 +167,7 @@ describe('whole-order evaluation', () => {
       {},
     );
     assert.equal(r.blockers.length, 1);
-    assert.equal(r.blockers[0]!.stageKey, StageKey.FOLLOW_UP);
+    assert.equal(r.blockers[0]!.stageKey, StageKey.LAYING_FABRIC);
   });
 
   test('a completed stage’s gates are history and are not reported', () => {
@@ -175,11 +175,11 @@ describe('whole-order evaluation', () => {
     const ctx = healthy({
       materialShortageCount: 1,
       materialShortageDetail: 'Short by 476 M.',
-      completedStages: new Set([StageKey.FOLLOW_UP]),
+      completedStages: new Set([StageKey.LAYING_FABRIC]),
     });
     const r = evaluateAllGates(ctx, {});
     assert.deepEqual(r.blockers, []);
-    assert.ok(!r.readyStages.includes(StageKey.FOLLOW_UP));
+    assert.ok(!r.readyStages.includes(StageKey.LAYING_FABRIC));
   });
 
   test('each blocker carries the stage it belongs to, for grouping', () => {

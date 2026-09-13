@@ -69,14 +69,14 @@ describe('a reference page is not a task', () => {
 
   test('it is left out of the progress denominator', () => {
     const r = deriveOrderSteps(fresh());
-    // Eighteen steps, less Database (reference) and less External Order (this
-    // order has no printing), leaves sixteen pieces of actual work.
-    assert.equal(r.steps.length, 18);
-    assert.equal(r.applicableCount, 16);
+    // Seventeen steps, less Database (reference) and less External Order (this
+    // order has no printing), leaves fifteen pieces of actual work.
+    assert.equal(r.steps.length, 17);
+    assert.equal(r.applicableCount, 15);
 
     // Declaring external work adds one back; Database never comes back.
     const withPrinting = deriveOrderSteps(fresh({ externalWorkDeclared: true }));
-    assert.equal(withPrinting.applicableCount, 17);
+    assert.equal(withPrinting.applicableCount, 16);
   });
 
   test('opening it cannot move an order’s progress', () => {
@@ -85,12 +85,12 @@ describe('a reference page is not a task', () => {
 });
 
 describe('the step list matches the workbook', () => {
-  test('the workbook’s eighteen steps, in its own order', () => {
-    assert.equal(ORDER_STEPS.length, 18);
+  test('the workbook’s seventeen steps, in its own order', () => {
+    assert.equal(ORDER_STEPS.length, 17);
     assert.deepEqual(
       ORDER_STEPS.map((s) => s.order),
-      Array.from({ length: 18 }, (_, i) => i + 1),
-      'step numbers must run 1..18 with no gaps or repeats',
+      Array.from({ length: 17 }, (_, i) => i + 1),
+      'step numbers must run 1..17 with no gaps or repeats',
     );
   });
 
@@ -110,24 +110,24 @@ describe('the step list matches the workbook', () => {
       StageKey.ORDER_DETAILS,
       StageKey.MAIN_ORDER,
       StageKey.PROFORMA_INVOICE,
-      StageKey.PROGRESS_STATUS,
       StageKey.STOCK,
       StageKey.CUT_ORDER,
       StageKey.LAYING_FABRIC,
       StageKey.BILL_OF_MATERIAL,
       StageKey.EXTERNAL_ORDER,       // after cutting, laying and the BOM
       StageKey.CUSTOM_INSTRUCTIONS,
-      StageKey.FOLLOW_UP,
       StageKey.PRODUCTION_FOLLOW_UP,
       StageKey.PACKING,
       StageKey.AUDIT,
       StageKey.ACTUAL_COSTING,
       StageKey.DATABASE,
       StageKey.INVOICE,
+      // Last in the process: the checklist you tick off once the work is done.
+      StageKey.PROGRESS_STATUS,
     ]);
   });
 
-  test('every one of the eighteen names the sheet it came from', () => {
+  test('every one of the seventeen names the sheet it came from', () => {
     // The sheet name is how somebody checks a step against the workbook.
     for (const s of ORDER_STEPS) {
       assert.ok(s.sheetName.length > 1, `${s.key} does not name its sheet`);

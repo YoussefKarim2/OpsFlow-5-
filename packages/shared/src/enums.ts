@@ -58,7 +58,6 @@ export const StageKey = {
   CUSTOM_INSTRUCTIONS: 'CUSTOM_INSTRUCTIONS',
   EXTERNAL_ORDER: 'EXTERNAL_ORDER',
   STOCK: 'STOCK',
-  FOLLOW_UP: 'FOLLOW_UP',
   PRODUCTION_FOLLOW_UP: 'PRODUCTION_FOLLOW_UP',
   PACKING: 'PACKING',
   AUDIT: 'AUDIT',
@@ -90,26 +89,25 @@ export const STAGE_META: Record<
   ORDER_DETAILS:        { order: 2,  label: 'Order Details',            weight: 4,  group: 'ORDER' },
   MAIN_ORDER:           { order: 3,  label: 'Main Order',               weight: 4,  group: 'ORDER' },
   PROFORMA_INVOICE:     { order: 4,  label: 'Proforma Invoice',         weight: 2,  group: 'ORDER' },
-  EXTERNAL_ORDER:       { order: 10,  label: 'External Order',           weight: 8,  group: 'PRODUCTION' },
-  PROGRESS_STATUS:      { order: 5,  label: 'Progress Status',          weight: 1,  group: 'ORDER' },
-  CUT_ORDER:            { order: 7,  label: 'Cut Order',                weight: 6,  group: 'MATERIALS' },
-  LAYING_FABRIC:        { order: 8,  label: 'Laying Fabric',            weight: 8,  group: 'MATERIALS' },
-  BILL_OF_MATERIAL:     { order: 9,  label: 'Bill of Material',         weight: 9,  group: 'MATERIALS' },
-  CUSTOM_INSTRUCTIONS:  { order: 11, label: 'Custom Instructions',      weight: 3,  group: 'MATERIALS' },
-  PACKING:              { order: 14, label: 'Packing',                  weight: 8,  group: 'DELIVERY' },
-  STOCK:                { order: 6, label: 'Stock',                    weight: 3,  group: 'MATERIALS' },
-  FOLLOW_UP:            { order: 12, label: 'Follow-up',                weight: 5,  group: 'PRODUCTION' },
-  PRODUCTION_FOLLOW_UP: { order: 13, label: 'Production Follow-up',     weight: 18, group: 'PRODUCTION' },
-  AUDIT:                { order: 15, label: 'Audit',                    weight: 10, group: 'DELIVERY' },
-  ACTUAL_COSTING:       { order: 16, label: 'Actual Costing',           weight: 4,  group: 'DELIVERY' },
+  EXTERNAL_ORDER:       { order: 9,  label: 'External Order',           weight: 8,  group: 'PRODUCTION' },
+  PROGRESS_STATUS:      { order: 17,  label: 'Progress Status',          weight: 1,  group: 'ORDER' },
+  CUT_ORDER:            { order: 6,  label: 'Cut Order',                weight: 6,  group: 'MATERIALS' },
+  LAYING_FABRIC:        { order: 7,  label: 'Laying Fabric',            weight: 8,  group: 'MATERIALS' },
+  BILL_OF_MATERIAL:     { order: 8,  label: 'Bill of Material',         weight: 9,  group: 'MATERIALS' },
+  CUSTOM_INSTRUCTIONS:  { order: 10, label: 'Custom Instructions',      weight: 3,  group: 'MATERIALS' },
+  PACKING:              { order: 12, label: 'Packing',                  weight: 8,  group: 'DELIVERY' },
+  STOCK:                { order: 5, label: 'Stock',                    weight: 3,  group: 'MATERIALS' },
+  PRODUCTION_FOLLOW_UP: { order: 11, label: 'Production Follow-up',     weight: 23, group: 'PRODUCTION' },
+  AUDIT:                { order: 13, label: 'Audit',                    weight: 10, group: 'DELIVERY' },
+  ACTUAL_COSTING:       { order: 14, label: 'Actual Costing',           weight: 4,  group: 'DELIVERY' },
   /// Reference, not work: weight 0 so opening it cannot move an order's
   /// progress. It is step 17 because the workbook's menu puts it there.
-  DATABASE:             { order: 17, label: 'Database',                 weight: 0,  group: 'ORDER' },
-  INVOICE:              { order: 18, label: 'Invoice',                  weight: 3,  group: 'DELIVERY' },
+  DATABASE:             { order: 15, label: 'Database',                 weight: 0,  group: 'ORDER' },
+  INVOICE:              { order: 16, label: 'Invoice',                  weight: 3,  group: 'DELIVERY' },
   /// Not one of the eighteen. The workbook has no "completed" sheet; this is
   /// the terminal state an order reaches, kept because OrderStatus and the
   /// gate engine both refer to it.
-  COMPLETED:            { order: 19, label: 'Completed / Shipped',      weight: 2,  group: 'DELIVERY' },
+  COMPLETED:            { order: 18, label: 'Completed / Shipped',      weight: 2,  group: 'DELIVERY' },
 };
 
 export const StageStatus = {

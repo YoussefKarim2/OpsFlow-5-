@@ -89,6 +89,13 @@ export const STAGE_GATES: Partial<Record<StageKey, GateRequirement[]>> = {
     },
   ],
 
+  // Everything the cutting floor needs in place before a blade touches fabric.
+  //
+  // These four used to hang off the Follow-up stage, which was removed. They
+  // were never really about following anything up — the comment above them
+  // always described cutting — so they move to the stage where the fabric is
+  // actually laid and cut, rather than being deleted with the stage that
+  // happened to be holding them.
   [StageKey.LAYING_FABRIC]: [
     {
       key: 'cut-quantity',
@@ -98,22 +105,6 @@ export const STAGE_GATES: Partial<Record<StageKey, GateRequirement[]>> = {
       explain: () => 'The cut order has not been generated, so the lay plan has no target.',
       action: () => ({ label: 'Generate the cut order', tab: 'quantity' }),
     },
-  ],
-
-  [StageKey.BILL_OF_MATERIAL]: [
-    {
-      key: 'bom-lines',
-      label: 'Materials listed',
-      severity: 'BLOCKER',
-      test: (c) => c.hasBom,
-      explain: () => 'The bill of materials is empty.',
-      action: () => ({ label: 'Add materials', tab: 'bom' }),
-    },
-  ],
-
-  // The stage the brief calls out by name. Everything the cutting floor needs
-  // in place before a blade touches fabric.
-  [StageKey.FOLLOW_UP]: [
     {
       key: 'materials-available',
       label: 'Fabric and trims available',
@@ -153,6 +144,18 @@ export const STAGE_GATES: Partial<Record<StageKey, GateRequirement[]>> = {
       action: () => ({ label: 'Issue materials', tab: 'bom' }),
     },
   ],
+
+  [StageKey.BILL_OF_MATERIAL]: [
+    {
+      key: 'bom-lines',
+      label: 'Materials listed',
+      severity: 'BLOCKER',
+      test: (c) => c.hasBom,
+      explain: () => 'The bill of materials is empty.',
+      action: () => ({ label: 'Add materials', tab: 'bom' }),
+    },
+  ],
+
 
   [StageKey.EXTERNAL_ORDER]: [
     {

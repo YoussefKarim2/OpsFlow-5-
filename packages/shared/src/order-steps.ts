@@ -190,7 +190,7 @@ const has = (n: number) => n > 0;
 export const ORDER_TAB_KEYS = [
   'overview', 'reference', 'details', 'quantity', 'proforma', 'tasks',
   'cutting', 'materials', 'bom', 'instructions', 'external', 'approvals',
-  'production', 'quality', 'packing', 'stock', 'followup',
+  'production', 'quality', 'packing', 'stock',
   'shipping', 'costing', 'documents', 'activity',
   'database', 'progress', 'audit', 'invoice',
 ] as const;
@@ -289,34 +289,8 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
     hasStarted: (c) => c.hasProformaInvoice,
   },
   {
-    key: StageKey.PROGRESS_STATUS,
-    order: 5,
-    sheetName: 'Progress Status',
-    label: 'Progress Checklist',
-    purpose:
-      'The factory’s own task list for this order — twenty-seven jobs, each with a department ' +
-      'and the information it needs.',
-    department: Department.COORDINATOR,
-    whatYouEnter: [
-      'Tick each job as your department finishes it',
-      'The time it actually took',
-    ],
-    tab: 'progress',
-    isDoneWhen: (c) => {
-      const t = c.taskCounts[StageKey.PROGRESS_STATUS];
-      return !!t && t.total > 0 && t.completed >= t.total;
-    },
-    missing: (c) => {
-      const t = c.taskCounts[StageKey.PROGRESS_STATUS];
-      if (!t || t.total === 0) return 'The task list has not been created for this order yet';
-      const left = t.total - t.completed;
-      return left > 0 ? `${left} job${left === 1 ? '' : 's'} still open` : null;
-    },
-    hasStarted: (c) => (c.taskCounts[StageKey.PROGRESS_STATUS]?.completed ?? 0) > 0,
-  },
-  {
     key: StageKey.STOCK,
-    order: 6,
+    order: 5,
     sheetName: 'Stock_Packing',
     label: 'Finished Stock',
     purpose:
@@ -337,7 +311,7 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
   },
   {
     key: StageKey.CUT_ORDER,
-    order: 7,
+    order: 6,
     sheetName: 'Cut Order',
     label: 'Cut Order',
     purpose:
@@ -357,7 +331,7 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
   },
   {
     key: StageKey.LAYING_FABRIC,
-    order: 8,
+    order: 7,
     sheetName: 'Laying fabric instructions_Patr',
     label: 'Laying & Marker',
     purpose: 'How the fabric is spread and cut: the lays, the layers and the marker for each.',
@@ -377,7 +351,7 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
   },
   {
     key: StageKey.BILL_OF_MATERIAL,
-    order: 9,
+    order: 8,
     sheetName: 'Bill Of Matrial_Coord_Warehouse',
     label: 'Bill of Materials',
     purpose: 'Everything the order needs from the store — fabric, thread, labels, packaging.',
@@ -400,7 +374,7 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
   },
   {
     key: StageKey.EXTERNAL_ORDER,
-    order: 10,
+    order: 9,
     sheetName: 'External Order_Ex.Op',
     label: 'External Order',
     purpose: 'Printing, embroidery or anything else done outside the factory.',
@@ -428,7 +402,7 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
   },
   {
     key: StageKey.CUSTOM_INSTRUCTIONS,
-    order: 11,
+    order: 10,
     sheetName: 'Custom Instructions_Coordinator',
     label: 'Special Instructions',
     purpose: 'Anything unusual about this order that a department needs to know.',
@@ -449,30 +423,8 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
     hasStarted: (c) => has(c.customInstructionCount),
   },
   {
-    key: StageKey.FOLLOW_UP,
-    order: 12,
-    sheetName: 'Follow up',
-    label: 'Follow-up',
-    purpose: 'Where the order stands right now, and what is holding it up.',
-    department: Department.FOLLOW_UP,
-    whatYouEnter: [
-      'Nothing — this is a summary',
-      'Chase whatever it shows as blocked',
-    ],
-    tab: 'followup',
-    isDoneWhen: (c) => has(c.orderQty) && c.shippedQty >= c.orderQty,
-    missing: (c) => {
-      // With no order quantity there is nothing to follow up against, and
-      // "0 pieces not yet shipped" would read as though the order were done.
-      if (!has(c.orderQty)) return 'The order quantity has not been entered yet';
-      const left = Math.max(0, c.orderQty - c.shippedQty);
-      return left > 0 ? `${left.toLocaleString()} pieces not yet shipped` : null;
-    },
-    hasStarted: (c) => has(c.producedQty),
-  },
-  {
     key: StageKey.PRODUCTION_FOLLOW_UP,
-    order: 13,
+    order: 11,
     sheetName: 'Production Follow up',
     label: 'Production',
     purpose: 'What the line actually produced, day by day.',
@@ -492,7 +444,7 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
   },
   {
     key: StageKey.PACKING,
-    order: 14,
+    order: 12,
     sheetName: 'Packing_Coordinator',
     label: 'Packing',
     purpose: 'The packing list: which pieces went into which carton.',
@@ -512,7 +464,7 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
   },
   {
     key: StageKey.AUDIT,
-    order: 15,
+    order: 13,
     sheetName: 'Audit_Quality Manger',
     label: 'Quality Audit',
     purpose: 'The final inspection, and what it found.',
@@ -533,7 +485,7 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
   },
   {
     key: StageKey.ACTUAL_COSTING,
-    order: 16,
+    order: 14,
     sheetName: 'Actual Costing_Coordinator',
     label: 'Actual Costing',
     purpose: 'What the order really cost, once it is made.',
@@ -551,7 +503,7 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
   },
   {
     key: StageKey.DATABASE,
-    order: 17,
+    order: 15,
     sheetName: 'Data-Base',
     label: 'Database',
     purpose:
@@ -571,7 +523,7 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
   },
   {
     key: StageKey.INVOICE,
-    order: 18,
+    order: 16,
     sheetName: 'Invoice',
     label: 'Invoice & Shipment',
     purpose: 'Booking the shipment and invoicing the customer.',
@@ -584,6 +536,32 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
     isDoneWhen: (c) => c.shipmentBooked && has(c.shippedQty),
     missing: (c) => (c.shipmentBooked ? null : 'Book the shipment'),
     hasStarted: (c) => c.shipmentBooked || has(c.shippedQty),
+  },
+  {
+    key: StageKey.PROGRESS_STATUS,
+    order: 17,
+    sheetName: 'Progress Status',
+    label: 'Progress Checklist',
+    purpose:
+      'The factory’s own task list for this order — twenty-seven jobs, each with a department ' +
+      'and the information it needs.',
+    department: Department.COORDINATOR,
+    whatYouEnter: [
+      'Tick each job as your department finishes it',
+      'The time it actually took',
+    ],
+    tab: 'progress',
+    isDoneWhen: (c) => {
+      const t = c.taskCounts[StageKey.PROGRESS_STATUS];
+      return !!t && t.total > 0 && t.completed >= t.total;
+    },
+    missing: (c) => {
+      const t = c.taskCounts[StageKey.PROGRESS_STATUS];
+      if (!t || t.total === 0) return 'The task list has not been created for this order yet';
+      const left = t.total - t.completed;
+      return left > 0 ? `${left} job${left === 1 ? '' : 's'} still open` : null;
+    },
+    hasStarted: (c) => (c.taskCounts[StageKey.PROGRESS_STATUS]?.completed ?? 0) > 0,
   },
 ];
 

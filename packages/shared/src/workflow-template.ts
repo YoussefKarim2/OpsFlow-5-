@@ -174,12 +174,22 @@ export const WORKFLOW_TEMPLATE: TaskTemplate[] = [
   },
 
   // ── Sequence 8 — Daily tracking begins ──────────────────────────────────
+  // These two were the Follow-up stage's rows. That stage is gone, but the jobs
+  // are not: somebody still enters the daily detail and somebody still chases a
+  // deviation. They belong with Production, which is where both actually happen.
   {
-    key: 'FU_DAILY_DETAIL', stageKey: StageKey.FOLLOW_UP, department: Department.FOLLOW_UP,
+    key: 'FU_DAILY_DETAIL', stageKey: StageKey.PRODUCTION_FOLLOW_UP, department: Department.FOLLOW_UP,
     title: 'Enter daily order detail',
     requirementAr: 'إضافة تفاصيل الاوردر اليومية',
     requirementEn: 'Add the daily order details.',
     estimatedMinutes: 35, sequence: 8, priority: Priority.HIGH, critical: false,
+  },
+  {
+    key: 'CO_TRACK_ESCALATE', stageKey: StageKey.PRODUCTION_FOLLOW_UP, department: Department.COORDINATOR,
+    title: 'Track order status and escalate deviations',
+    requirementAr: 'متابعة موقف الاوردر وإبلاغ مدير المصنع في حالة أي انحراف في الاوردر في أي مرحلة',
+    requirementEn: 'Follow the order status and notify the factory manager of any deviation at any stage.',
+    estimatedMinutes: 20, sequence: 9, priority: Priority.HIGH, critical: true,
   },
   {
     key: 'PM_DAILY_PRODUCTION', stageKey: StageKey.PRODUCTION_FOLLOW_UP, department: Department.PRODUCTION_MANAGER,
@@ -190,13 +200,6 @@ export const WORKFLOW_TEMPLATE: TaskTemplate[] = [
   },
 
   // ── Sequence 9 — Coordinator monitors and escalates ─────────────────────
-  {
-    key: 'CO_TRACK_ESCALATE', stageKey: StageKey.FOLLOW_UP, department: Department.COORDINATOR,
-    title: 'Track order status and escalate deviations',
-    requirementAr: 'متابعة موقف الاوردر وإبلاغ مدير المصنع في حالة أي انحراف في الاوردر في أي مرحلة',
-    requirementEn: 'Follow the order status and notify the factory manager of any deviation at any stage.',
-    estimatedMinutes: 20, sequence: 9, priority: Priority.HIGH, critical: true,
-  },
 
   // ── Sequence 10–11 — Packing ────────────────────────────────────────────
   {

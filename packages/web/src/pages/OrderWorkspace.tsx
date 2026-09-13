@@ -41,7 +41,6 @@ import { CustomerReferenceTab } from './order-tabs/CustomerReferenceTab';
 import { InstructionsTab } from './order-tabs/InstructionsTab';
 import { StockTab } from './order-tabs/StockTab';
 import { ProformaTab } from './order-tabs/ProformaTab';
-import { OrderFollowUpTab } from './order-tabs/OrderFollowUpTab';
 import { StepRail, StepHeader } from './order-tabs/StepRail';
 import { DocumentsTab } from './order-tabs/DocumentsTab';
 import { ProgressStatusTab } from './order-tabs/ProgressStatusTab';
@@ -140,7 +139,6 @@ export function OrderWorkspacePage() {
     { key: 'quality',    label: 'Quality' },
     { key: 'packing',    label: 'Packing' },
     { key: 'stock',      label: 'Stock' },
-    { key: 'followup',   label: 'Follow-up', badge: order.blockers.length, tone: 'red' },
     { key: 'audit',      label: 'Audit' },
     { key: 'costing',    label: 'Costing' },
     { key: 'database',   label: 'Database' },
@@ -306,7 +304,6 @@ export function OrderWorkspacePage() {
           {tab === 'audit'        && <OrderAuditTab order={order} />}
           {tab === 'database'     && <DatabaseTab orderId={order.id} />}
           {tab === 'invoice'      && <InvoiceTab order={order} />}
-          {tab === 'followup'     && <OrderFollowUpTab order={order} steps={steps} onJump={setTab} />}
           {tab === 'costing'      && <CostingTab order={order} />}
           {tab === 'documents'    && <DocumentsTab orderId={order.id} />}
           {tab === 'activity'     && <ActivityTab orderId={order.id} />}

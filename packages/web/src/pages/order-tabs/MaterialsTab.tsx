@@ -330,7 +330,7 @@ function IssueModal({
       orderId,
       qty: Number(qty),
       bomItemId: requirement!.id,
-      stage: 'FOLLOW_UP',
+      stage: 'PRODUCTION_FOLLOW_UP',
       issuedToName: issuedToName || undefined,
     }),
     onSuccess: () => { setQty(''); setIssuedTo(''); setError(null); onDone(); },
