@@ -22,6 +22,7 @@ import { commitLayingImport, layingRowKey, type RowResolution } from '../service
 import { announceChange } from '../services/change-service.js';
 import { storage } from '../services/storage/index.js';
 import { refreshOrderCache } from '../services/order-service.js';
+import { logActivity } from '../services/activity-service.js';
 
 export const layingImportRouter = Router({ mergeParams: true });
 layingImportRouter.use(authenticate);
@@ -85,7 +86,13 @@ async function buildResponse(jobId: string, fileName: string, orderId: string, e
     issues: extraction.issues,
     detectedPoNumbers: extraction.detectedPoNumbers,
     priorImportExists: priorCommitted > 0,
-    canCommit: !extraction.issues.some((i) => i.level === 'ERROR'),
+    /**
+     * Always true. No two factories draw a laying sheet the same way, so the
+     * reader failing to recognise one is not grounds to refuse the file: the
+     * review screen shows what was read, the columns can be assigned by hand,
+     * and anything still missing is defaulted rather than fatal.
+     */
+    canCommit: true,
   };
 }
 
@@ -203,8 +210,7 @@ layingImportRouter.post('/:jobId/commit', requirePermission('import:laying'), as
   const extraction = await extractLayingMarking(buffer, {
     sheetName: (job.detectedSheets as { sheetName?: string } | null)?.sheetName,
   });
-  const errors = extraction.issues.filter((i) => i.level === 'ERROR');
-  if (errors.length > 0) throw new BadRequestError('This file cannot be imported until its errors are resolved.', { issues: errors });
+  // Deliberately no gate on extraction issues — see `canCommit` above.
 
   try {
     const result = await commitLayingImport(prisma, {
@@ -214,6 +220,10 @@ layingImportRouter.post('/:jobId/commit', requirePermission('import:laying'), as
     });
 
     await prisma.importJob.update({ where: { id: job.id }, data: { status: 'COMMITTED', committedAt: new Date() } });
+
+    // The sheet itself, filed against the order so it can be opened later.
+    await attachLayingSheet(order.id, job, buffer, actor);
+
     await refreshOrderCache(order.id);
 
     await announceChange({
@@ -237,6 +247,62 @@ layingImportRouter.post('/:jobId/commit', requirePermission('import:laying'), as
     throw err;
   }
 }));
+
+/**
+ * File the laying sheet against the order it was imported into.
+ *
+ * The sheet was already being stored so the commit could re-read it, and then
+ * left where nothing could reach it — the lay plan appeared, but the document
+ * it came from did not, and there was no way to check a row against the
+ * original. It is filed as a marker file on Laying & Marker, where it opens
+ * with one click for as long as the order exists.
+ *
+ * The bytes are copied rather than shared with the import job: two rows
+ * pointing at one key means removing either deletes the other's file.
+ *
+ * Never fatal — the lays are already imported by the time this runs, and
+ * failing the whole import over a filing step would undo work that succeeded.
+ */
+async function attachLayingSheet(
+  orderId: string, job: { fileName: string; storageKey: string },
+  buffer: Buffer, actor: { id: string; name: string },
+): Promise<void> {
+  try {
+    const mimeType = job.fileName.toLowerCase().endsWith('.csv')
+      ? 'text/csv'
+      : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    const storageKey = await storage.put(buffer, {
+      fileName: job.fileName, mimeType, prefix: `orders/${orderId}`,
+    });
+    const stage = await prisma.orderStage.findUnique({
+      where: { orderId_stageKey: { orderId, stageKey: 'LAYING_FABRIC' } },
+      select: { id: true },
+    });
+    await prisma.attachment.create({
+      data: {
+        orderId,
+        orderStageId: stage?.id ?? null,
+        stageKey: 'LAYING_FABRIC',
+        fileName: job.fileName,
+        documentType: 'MARKER_FILE',
+        mimeType,
+        sizeBytes: buffer.byteLength,
+        storageKey,
+        storageDriver: storage.name,
+        checksum: createHash('sha256').update(buffer).digest('hex'),
+        uploadedById: actor.id,
+      },
+    });
+    await logActivity({
+      orderId, actorId: actor.id, actorName: actor.name,
+      action: 'attachment.upload',
+      summary: `Filed "${job.fileName}" — the laying sheet this lay plan was read from`,
+      entityType: 'Attachment', entityId: orderId,
+    });
+  } catch (err) {
+    console.error('[laying-import] could not file the laying sheet:', err);
+  }
+}
 
 layingImportRouter.get('/', requirePermission('cutting:read'), asyncHandler(async (req, res) => {
   const order = await resolveOrder(req.params.orderId!);

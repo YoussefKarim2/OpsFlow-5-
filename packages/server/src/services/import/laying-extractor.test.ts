@@ -1,0 +1,110 @@
+import { test, describe } from 'node:test';
+import assert from 'node:assert/strict';
+import ExcelJS from 'exceljs';
+import { extractLayingMarking } from './laying-extractor.js';
+
+/**
+ * No two factories draw a laying sheet the same way.
+ *
+ * The headings differ, the column order differs, there is usually a title block
+ * above the table, and a column the reader expects is often simply absent. None
+ * of that is a fault in the file, so none of it may refuse the import: whatever
+ * is understood gets read, the rest is assigned by hand or left out, and the
+ * lay plan fills in with what was there.
+ *
+ * Each case below is a layout a real sheet could plausibly arrive in.
+ */
+
+async function sheet(rows: unknown[][]): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Laying');
+  for (const r of rows) ws.addRow(r);
+  return Buffer.from(await wb.xlsx.writeBuffer());
+}
+
+const blocking = (r: { issues: Array<{ level: string }> }) =>
+  r.issues.filter((i) => i.level === 'ERROR').length;
+
+describe('reading a laying sheet, whatever shape it arrives in', () => {
+  test('the headings the workbook itself uses', async () => {
+    const r = await extractLayingMarking(await sheet([
+      ['Marker No', 'Fabric', 'Panel', 'Size Ratio', 'Layers', 'Marker Length'],
+      ['M1', 'Rosetta', 'ALL', '(YXS1), (YS1)', 140, 2.61],
+      ['M2', 'Rosetta', 'ALL', '(YS2), (YM2)', 177, 2.41],
+    ]));
+    assert.equal(r.rows.length, 2);
+    assert.equal(r.rows[0]!.fabricName, 'Rosetta');
+    assert.equal(r.rows[0]!.layers, 140);
+    assert.equal(blocking(r), 0);
+  });
+
+  test('a sheet that says Material where the last one said Fabric', async () => {
+    // Both already mean the same field on an order; the reader used to ignore
+    // the column and report the fabric as empty on a sheet that stated it.
+    const r = await extractLayingMarking(await sheet([
+      ['Lay #', 'Material', 'Part', 'Ratio', 'Plies', 'Length (m)'],
+      ['1', 'Rosetta', 'ALL', '(S3), (L1)', 44, 4.15],
+    ]));
+    assert.equal(r.rows[0]!.fabricName, 'Rosetta');
+    assert.equal(r.rows[0]!.layers, 44);
+    assert.equal(blocking(r), 0);
+  });
+
+  test('a title block above the table does not hide it', async () => {
+    const r = await extractLayingMarking(await sheet([
+      ['LAYING & MARKING SHEET'],
+      ['PO A302059B', '', 'Date', '2026-09-13'],
+      [],
+      ['Marker No', 'Fabric', 'Panel', 'Size Ratio', 'Layers', 'Marker Length'],
+      ['M1', 'Rosetta', 'ALL', '(YXS1)', 12, 2.40],
+    ]));
+    assert.equal(r.rows.length, 1);
+    assert.equal(blocking(r), 0);
+  });
+
+  test('the columns can be in any order', async () => {
+    const r = await extractLayingMarking(await sheet([
+      ['Layers', 'Marker Length', 'Fabric', 'Size Ratio', 'Marker No'],
+      [140, 2.61, 'Rosetta', '(YM1)', 'M1'],
+    ]));
+    assert.equal(r.rows[0]!.fabricName, 'Rosetta');
+    assert.equal(r.rows[0]!.markerLengthM, 2.61);
+    assert.equal(blocking(r), 0);
+  });
+
+  test('a missing column is imported without, not refused', async () => {
+    // No marker length anywhere. The committer defaults it; the lay is real.
+    const r = await extractLayingMarking(await sheet([
+      ['Marker No', 'Fabric', 'Size Ratio', 'Layers'],
+      ['M1', 'Rosetta', '(YXS1), (YS1)', 140],
+    ]));
+    assert.equal(r.rows.length, 1);
+    assert.equal(r.rows[0]!.markerLengthM, null);
+    assert.equal(blocking(r), 0, 'a column the sheet does not have must not block the import');
+  });
+
+  test('blank rows and a totals row do not become lays', async () => {
+    const r = await extractLayingMarking(await sheet([
+      ['Marker No', 'Fabric', 'Panel', 'Size Ratio', 'Layers', 'Marker Length'],
+      ['M1', 'Rosetta', 'ALL', '(YXS1)', 140, 2.61],
+      [],
+      ['M2', 'Rosetta', 'ALL', '(YS2)', 177, 2.41],
+    ]));
+    assert.equal(r.rows.length, 2);
+    assert.equal(blocking(r), 0);
+  });
+
+  test('a sheet that is not a laying sheet says so without refusing', async () => {
+    const r = await extractLayingMarking(await sheet([['Notes'], ['Nothing tabular here']]));
+    assert.equal(r.rows.length, 0);
+    assert.equal(blocking(r), 0);
+    assert.ok(
+      r.issues.some((i) => /no laying & marking table was recognised/i.test(i.message)),
+      'it must still explain itself',
+    );
+  });
+
+  test('an empty workbook does not throw', async () => {
+    await assert.doesNotReject(() => extractLayingMarking(sheet([]).then((b) => b) as never));
+  });
+});

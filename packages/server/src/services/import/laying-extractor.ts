@@ -25,6 +25,11 @@ import {
 import { findHeaderCandidates, readTableAt, type SheetTable } from './tabular-extractor.js';
 
 const LAYING_CONCEPTS = new Set<ImportConcept>([
+  // MATERIAL as well as FABRIC: plenty of laying sheets head that column
+  // "Material" rather than "Fabric", and both already mean the same field on
+  // an order. Without it the column scored as a concept this reader ignores,
+  // and the fabric came through empty on a sheet that plainly stated it.
+  ImportConcept.MATERIAL,
   ImportConcept.LAY_NUMBER, ImportConcept.MARKER_NUMBER, ImportConcept.FABRIC,
   ImportConcept.COLOR, ImportConcept.PANEL, ImportConcept.SIZE_RATIO,
   ImportConcept.LAYERS, ImportConcept.MARKER_LENGTH, ImportConcept.MARKER_WIDTH,
@@ -142,10 +147,16 @@ export async function extractLayingMarking(
   // it just happens to contain a plausible-looking header row.
   if (!chosen || chosen.matched < 2) {
     issues.push({
-      level: 'ERROR', field: null, sheet: null, cell: null,
+      // A warning, not a refusal. Laying sheets are drawn by hand and no two
+      // factories lay them out the same way, so "I could not recognise this
+      // one" is a statement about the reader, not a fault in the file. The
+      // review screen lets the columns be assigned by hand, and the import
+      // still completes with whatever was understood.
+      level: 'WARNING', field: null, sheet: null, cell: null,
       message:
-        'No Laying & Marking table could be found in this file. The importer looks for a header row with ' +
-        'columns such as Fabric, Layers, Marker Length or Marker No. — check the sheet has those headings.',
+        'No Laying & Marking table was recognised automatically. The importer looks for a header row with ' +
+        'columns such as Fabric, Layers, Marker Length or Marker No. Assign the columns on the review screen, ' +
+        'or import anyway and enter the lays on the order.',
     });
     return emptyResult(candidateSheets, issues);
   }
@@ -179,7 +190,8 @@ export async function extractLayingMarking(
   for (const row of table.rows) {
     const layers = toNumber(cellAt(row, ImportConcept.LAYERS));
     const markerLengthM = toNumber(cellAt(row, ImportConcept.MARKER_LENGTH));
-    const fabricName = toText(cellAt(row, ImportConcept.FABRIC));
+    const fabricName = toText(cellAt(row, ImportConcept.FABRIC))
+      ?? toText(cellAt(row, ImportConcept.MATERIAL));
     // A row with none of the essentials is a blank or trailing row, not a lay.
     if (layers == null && markerLengthM == null && fabricName == null) continue;
 
@@ -209,8 +221,12 @@ export async function extractLayingMarking(
   const readiness = assessMapping(columns, LAYING_ESSENTIALS);
   if (!readiness.ready) {
     issues.push({
-      level: 'ERROR', field: null, sheet: table.sheetName, cell: null,
-      message: `Missing required columns: ${readiness.missing.map((c) => CONCEPT_META[c].label).join(', ')}. Map them below and try again.`,
+      // Also a warning. A sheet that states a size ratio and a layer count but
+      // no marker length is still worth importing — the committer defaults
+      // what is absent, and the rest of the lay plan is real.
+      level: 'WARNING', field: null, sheet: table.sheetName, cell: null,
+      message: `These columns were not recognised: ${readiness.missing.map((c) => CONCEPT_META[c].label).join(', ')}. `
+        + `Assign them below if the sheet has them under different headings, or import without them.`,
     });
   }
   if (rows.length === 0 && readiness.ready) {
