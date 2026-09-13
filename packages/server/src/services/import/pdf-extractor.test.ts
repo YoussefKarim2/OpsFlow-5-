@@ -93,7 +93,9 @@ describe('extraction as a whole', () => {
       reader: async () => [{ pageNumber: 1, items: [] }],
     }).then((result) => {
       assert.equal(result.issues.length, 1);
-      assert.equal(result.issues[0]!.level, 'ERROR');
+      // A warning: it names the problem without stranding the user, who can
+      // still create the order and type it in.
+      assert.equal(result.issues[0]!.level, 'WARNING');
       assert.match(result.issues[0]!.message, /scan or a photograph/);
       // Names OCR as the missing capability rather than implying the file is bad.
       assert.match(result.issues[0]!.message, /OCR/);
@@ -212,7 +214,13 @@ describe('reading the data out of a PDF', () => {
       }],
     });
     assert.equal(result.matrices.length, 0);
-    assert.ok(result.issues.some((i) => i.level === 'ERROR'), 'must explain itself');
+    assert.ok(
+      result.issues.some((i) => i.message.length > 20), 'must explain itself',
+    );
+    assert.equal(
+      result.issues.some((i) => i.level === 'ERROR'), false,
+      'explaining itself must not turn into refusing the import',
+    );
   });
 });
 

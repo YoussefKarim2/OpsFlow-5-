@@ -331,9 +331,9 @@ describe('when the file cannot be read', () => {
     const result = await extractTabular(buffer);
 
     assert.deepEqual(result.matrices, []);
-    const error = result.issues.find((i) => i.level === 'ERROR');
-    assert.ok(error);
-    assert.match(error!.message, /no table could be found/i);
+    const said = result.issues.find((i) => /no table could be found/i.test(i.message));
+    assert.ok(said, 'the reader must say it found no table');
+    assert.equal(said!.level, 'WARNING', 'and say it without blocking the import');
   });
 
   test('a table with no quantity column reports exactly what is missing', async () => {
@@ -346,9 +346,10 @@ describe('when the file cannot be read', () => {
       ],
     }]);
     const result = await extractTabular(buffer);
-    const error = result.issues.find((i) => i.level === 'ERROR' && i.field === ImportConcept.QUANTITY);
-    assert.ok(error, 'the missing quantity column was not reported');
-    assert.match(error!.message, /Quantity/);
+    const said = result.issues.find((i) => i.field === ImportConcept.QUANTITY);
+    assert.ok(said, 'the missing quantity column was not reported');
+    assert.match(said!.message, /Quantity/);
+    assert.equal(said!.level, 'WARNING', 'a missing column informs, it does not block');
   });
 
   test('a missing PO number is a warning the review screen can fix, not a hard failure', async () => {

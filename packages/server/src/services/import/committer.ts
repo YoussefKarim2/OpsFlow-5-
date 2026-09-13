@@ -99,6 +99,35 @@ async function findUserByName(tx: Prisma.TransactionClient, name: unknown): Prom
   return user?.id ?? null;
 }
 
+/**
+ * A PO number for an order whose document did not state one.
+ *
+ * `normalisePoNumber` is right to insist on a real number when someone creates
+ * an order by hand — that is a typo, and the person is right there to fix it.
+ * An import is the opposite situation: the document is what it is, the number
+ * may be in a logo or a scan the reader cannot see, and refusing the whole
+ * order over it leaves the coordinator holding a genuine purchase order the
+ * system will not accept.
+ *
+ * So the import names it provisionally and moves on. The placeholder is
+ * obviously a placeholder, sorts by the day it arrived, and is renamed on the
+ * order the moment anyone looks at the document — the PO number is editable
+ * like everything else there.
+ *
+ * Checked for a clash rather than trusted, so two imports in the same second
+ * cannot collide and turn a convenience into the error it exists to avoid.
+ */
+async function placeholderPoNumber(prisma: PrismaClient): Promise<string> {
+  const day = new Date().toISOString().slice(0, 10);
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const candidate = `IMPORT-${day}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const taken = await prisma.order.findUnique({ where: { poNumber: candidate }, select: { id: true } });
+    if (!taken) return candidate;
+  }
+  // Eight collisions is not chance; fall back to something that cannot repeat.
+  return `IMPORT-${day}-${Date.now().toString(36).toUpperCase()}`;
+}
+
 export async function commitImport(
   prisma: PrismaClient,
   extraction: ExtractionResult,
@@ -110,25 +139,46 @@ export async function commitImport(
   // still records everything; the *news* is written once, below.
   suppressChangeEvents();
 
-  const errors = extraction.issues.filter((i) => i.level === 'ERROR');
-  if (errors.length > 0) {
-    throw new ValidationError(
-      `This file cannot be imported: ${errors.length} error${errors.length === 1 ? '' : 's'} must be resolved first.`,
-      { issues: errors },
-    );
-  }
+  // Deliberately no gate on extraction issues.
+  //
+  // Everything the readers report is "we could not find X in this document" —
+  // never "this document is dangerous". Refusing the import for that put the
+  // coordinator in the one position the importer exists to avoid: holding a
+  // real purchase order the system will not accept, with no way forward but
+  // retyping it. A document that is only partly readable is still worth
+  // importing for the part that *is* readable; the rest is typed into the order
+  // afterwards, exactly as it would have been for the whole thing.
+  //
+  // Genuine refusals still exist below — a duplicate PO number is a real
+  // conflict, not a gap in the reading — and they are about correctness of what
+  // gets written, not completeness of what was read.
 
   const f = extraction.fields;
-  const poNumber = normalisePoNumber(String(f.poNumber ?? ''));
+  const poNumber = String(f.poNumber ?? '').trim()
+    ? normalisePoNumber(String(f.poNumber))
+    : await placeholderPoNumber(prisma);
 
   const clash = await prisma.order.findUnique({ where: { poNumber }, select: { id: true } });
   if (clash) {
     throw new ValidationError(`PO ${poNumber} already exists in the system.`, { orderId: clash.id });
   }
 
-  const orderMatrix = extraction.matrices.find((m) => m.ledger === 'ORDER');
   const stockMatrix = extraction.matrices.find((m) => m.ledger === 'STOCK');
-  if (!orderMatrix) throw new ValidationError('No order quantity matrix was found in the file.');
+
+  /**
+   * An order with no readable quantity grid is still an order.
+   *
+   * A PDF purchase order frequently states its colours and quantities in prose,
+   * in an image, or in a table too irregular to align — and the header details
+   * (PO number, customer, style, dates) read perfectly. Refusing the whole
+   * import for the missing grid threw away everything that *was* read.
+   *
+   * An empty matrix carries through the rest of this function untouched: no
+   * colours, no sizes, no quantity cells, no cut order — and the coordinator
+   * enters them on the order, where every one of those is editable anyway.
+   */
+  const orderMatrix = extraction.matrices.find((m) => m.ledger === 'ORDER')
+    ?? { ledger: 'ORDER', sizes: [], rows: [], sheetTotal: null, computedTotal: 0 };
 
   // `f.poDate` reaches here from the extractor, which now returns only valid
   // dates or null — but this is the one place that does *arithmetic* on it, and

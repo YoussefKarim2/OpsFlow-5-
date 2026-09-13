@@ -341,7 +341,9 @@ export async function extractFromPdf(
     // Almost always a scan. Said plainly, because "no orders found" would send
     // somebody looking for a problem in the wrong place.
     issues.push({
-      level: 'ERROR', field: null, sheet: null, cell: null,
+      // Warning: nothing readable came out, but the import still completes and
+      // creates an order to type into rather than stopping at a dead end.
+      level: 'WARNING', field: null, sheet: null, cell: null,
       message:
         'This PDF has no text layer — it is a scan or a photograph rather than a ' +
         'generated document, so there are no words in it to read. Reading it needs ' +
@@ -383,11 +385,13 @@ export async function extractFromPdf(
   const header = chosen?.header ?? null;
   if (!header) {
     issues.push({
-      level: 'ERROR', field: null, sheet: null, cell: null,
+      // Warning: the header details usually read fine even when the table does
+      // not, and importing those beats discarding them.
+      level: 'WARNING', field: null, sheet: null, cell: null,
       message:
         'No table could be recognised in this PDF. The text was read, but no row ' +
-        'looked like column headings. Check the document has a table, or enter ' +
-        'the order by hand.',
+        'looked like column headings, so no quantities were taken from it. Anything ' +
+        'read from the page is below; you can import and add the quantities on the order.',
     });
     return emptyResult(issues, pages);
   }
@@ -655,8 +659,12 @@ export async function extractFromPdf(
     if (isWide && (concept === ImportConcept.SIZE || concept === ImportConcept.COLOR
       || concept === ImportConcept.QUANTITY)) continue;
     issues.push({
-      level: 'ERROR', field: concept, sheet: 'PDF', cell: null,
-      message: `No column in this PDF looks like ${concept.toLowerCase().replace(/_/g, ' ')}. Assign one on the review screen.`,
+      // A warning, not an error. The reader not finding a column is a fact
+      // about the document, not a fault to be corrected before proceeding —
+      // and blocking on it left a perfectly good purchase order unimportable.
+      level: 'WARNING', field: concept, sheet: 'PDF', cell: null,
+      message: `No column in this PDF looks like ${concept.toLowerCase().replace(/_/g, ' ')}. `
+        + `Assign one on the review screen, or import now and fill it in on the order.`,
     });
   }
   for (const col of readiness.unconfirmed) {

@@ -98,8 +98,9 @@ export function ImportWizardPage() {
   };
 
   const analysis = result?.analysis ?? null;
-  const errors = result?.issues.filter((i) => i.level === 'ERROR') ?? [];
-  const canCommit = result?.canCommit === true;
+  // No `errors` gate any more: extraction issues inform the user, they do not
+  // decide what the user is allowed to do. The stepper follows suit — every
+  // stage a file has reached stays reachable.
 
   return (
     <div className="space-y-4 p-5">
@@ -114,7 +115,7 @@ export function ImportWizardPage() {
         {result && <button className="btn-ghost btn-sm" onClick={reset}>Start over</button>}
       </div>
 
-      <Stepper current={step} reached={result ? (canCommit ? 'review' : 'map') : 'upload'} onStep={setStep} available={!!result} />
+      <Stepper current={step} reached={result ? 'review' : 'upload'} onStep={setStep} available={!!result} />
 
       {error != null && <ErrorNote error={error} />}
 
@@ -131,7 +132,12 @@ export function ImportWizardPage() {
           result={result}
           onSheetChange={(sheetName) => remap.mutate({ sheetName })}
           busy={remap.isPending}
-          onNext={() => setStep(analysis && analysis.readiness.ready && errors.length === 0 ? 'review' : 'map')}
+          // A PDF and a recognised profile both arrive without a column
+          // analysis, and there is nothing to map without columns — sending
+          // them to the mapping screen put an empty detour between the user and
+          // the order. Only a file whose columns are genuinely unresolved goes
+          // there, and even then only to offer help, never to demand it.
+          onNext={() => setStep(analysis && !analysis.readiness.ready ? 'map' : 'review')}
         />
       )}
 
@@ -156,8 +162,8 @@ export function ImportWizardPage() {
       {step === 'map' && result && !analysis && (
         <Card>
           <EmptyState
-            title="This file matched a known layout"
-            detail="It was read with a fixed profile, so there are no columns to map. Go straight to review."
+            title="There are no columns to map"
+            detail="This file was read without a column table — a PDF, or a recognised layout. Everything that was read is on the review screen."
             action={<button className="btn-primary btn-sm" onClick={() => setStep('review')}>Review the order</button>}
           />
         </Card>
@@ -178,7 +184,6 @@ export function ImportWizardPage() {
           onBack={() => setStep(analysis ? 'map' : 'analyse')}
           onConfirm={() => commit.mutate()}
           committing={commit.isPending}
-          canCommit={canCommit}
         />
       )}
     </div>
@@ -660,7 +665,7 @@ function DetectedPanel({
 
 function ReviewStep({
   result, fieldOverrides, onField, onApplyFields, applying,
-  reserveMaterials, onReserveChange, onBack, onConfirm, committing, canCommit,
+  reserveMaterials, onReserveChange, onBack, onConfirm, committing,
 }: {
   result: ImportAnalysisDto;
   fieldOverrides: Record<string, string>;
@@ -672,7 +677,6 @@ function ReviewStep({
   onBack: () => void;
   onConfirm: () => void;
   committing: boolean;
-  canCommit: boolean;
 }) {
   const p = result.preview;
   const errors = result.issues.filter((i) => i.level === 'ERROR');
@@ -794,7 +798,14 @@ function ReviewStep({
         <button className="btn-secondary" onClick={onBack} disabled={committing}>
           <ArrowLeft className="h-4 w-4" /> Back
         </button>
-        <button className="btn-primary" onClick={onConfirm} disabled={!canCommit || committing}>
+        {/*
+          Enabled whenever an import is not already in flight.
+          Confirming is the user's call: the screen above shows exactly what was
+          and was not read, and anything missing is editable on the order. A
+          disabled button here meant a real purchase order could be uploaded,
+          reviewed, and then simply refused, with nothing to do about it.
+        */}
+        <button className="btn-primary" onClick={onConfirm} disabled={committing}>
           {committing ? 'Creating the order…' : 'Confirm import'}
         </button>
       </div>

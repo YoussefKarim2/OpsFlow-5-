@@ -202,11 +202,14 @@ describe('files that cannot be understood fail honestly', () => {
     });
 
     const result = await extractTabular(buf, {});
-    const errors = result.issues.filter((i) => i.level === 'ERROR');
-    assert.ok(errors.length > 0, 'an unreadable file must be refused, not silently accepted');
-    assert.ok(
-      errors.some((e) => e.message.length > 20),
-      'and the refusal must explain itself',
+    // Reported, and reported in words — but never as a refusal. The user
+    // decides whether to import what little was read; the reader's job is to
+    // say plainly what it could not find.
+    const said = result.issues.filter((i) => i.message.length > 20);
+    assert.ok(said.length > 0, 'an unreadable file must say so, not be silently accepted');
+    assert.equal(
+      result.issues.some((i) => i.level === 'ERROR'), false,
+      'and saying so must not block the import',
     );
   });
 

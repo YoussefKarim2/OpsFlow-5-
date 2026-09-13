@@ -126,6 +126,11 @@ function buildPreview(extraction: ExtractionResult) {
 }
 
 async function persistJob(jobId: string, result: ExtractionResult & { analysis?: TabularAnalysis }): Promise<void> {
+  // A file the readers could only partly interpret is VALIDATED, not FAILED.
+  // Nothing has failed: some of it was read, the rest gets typed in. Marking it
+  // FAILED told the coordinator the import was dead when it was one click from
+  // finishing. Only an issue the readers raise as an outright ERROR — which the
+  // order-import path no longer does for missing data — counts as a failure.
   const hasErrors = result.issues.some((i) => i.level === 'ERROR');
   await prisma.importJob.update({
     where: { id: jobId },
@@ -152,7 +157,16 @@ function toResponse(result: ExtractionResult & { analysis?: TabularAnalysis }) {
     preview: buildPreview(result),
     /** Present only for the generic path — the mapping screen renders from it. */
     analysis: result.analysis ?? null,
-    canCommit: !result.issues.some((i) => i.level === 'ERROR'),
+    /**
+     * Always true, deliberately.
+     *
+     * Confirming is the user's decision, not the reader's. Every issue the
+     * extractors raise is "this could not be found in the document", the review
+     * screen shows exactly what was and was not read, and anything missing is
+     * editable on the order afterwards. There is no state in which the right
+     * answer is to refuse the button and leave a real purchase order stranded.
+     */
+    canCommit: true,
   };
 }
 

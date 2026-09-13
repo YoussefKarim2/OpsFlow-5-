@@ -263,8 +263,9 @@ function extractMatrix(sheet: ExcelJS.Worksheet, spec: MatrixSpec, issues: Impor
 
   if (sizes.length === 0) {
     issues.push({
-      level: 'ERROR', field: null, sheet: spec.sheet, cell: `${colLetter(header.col)}${header.row}`,
-      message: `No size columns found next to "${spec.headerAnchor}" on ${spec.sheet}.`,
+      level: 'WARNING', field: null, sheet: spec.sheet, cell: `${colLetter(header.col)}${header.row}`,
+      message: `No size columns found next to "${spec.headerAnchor}" on ${spec.sheet}. `
+        + `The sizes can be added on the order.`,
     });
     return null;
   }
@@ -418,7 +419,7 @@ export async function extractWorkbook(buffer: Buffer, forcedProfile?: ImportProf
 
   if (!detected.profile) {
     issues.push({
-      level: 'ERROR', field: null, sheet: null, cell: null,
+      level: 'WARNING', field: null, sheet: null, cell: null,
       message:
         `This workbook does not match any known layout (best match ${Math.round(detected.confidence * 100)}%). ` +
         `Map the fields manually, or check that the sheet names are intact.`,
@@ -481,8 +482,9 @@ export async function extractWorkbook(buffer: Buffer, forcedProfile?: ImportProf
 
     if (spec.required && (parsed == null || parsed === '')) {
       issues.push({
-        level: 'ERROR', field: spec.field, sheet: spec.sheet, cell,
-        message: `${spec.label} is required but is empty${found ? '' : ' (anchor not found)'}.`,
+        level: 'WARNING', field: spec.field, sheet: spec.sheet, cell,
+        message: `${spec.label} is expected here but is empty${found ? '' : ' (anchor not found)'}. `
+          + `Set it on the review screen, or on the order after importing.`,
       });
     }
 
@@ -540,8 +542,9 @@ export async function extractWorkbook(buffer: Buffer, forcedProfile?: ImportProf
   const orderMatrix = matrices.find((m) => m.ledger === 'ORDER');
   if (!orderMatrix || orderMatrix.rows.length === 0) {
     issues.push({
-      level: 'ERROR', field: 'quantities', sheet: profile.matrices[0]?.sheet ?? null, cell: null,
-      message: 'No order quantities were found. An order cannot be created without a quantity matrix.',
+      level: 'WARNING', field: 'quantities', sheet: profile.matrices[0]?.sheet ?? null, cell: null,
+      message: 'No order quantities were found in this file. The order will be created without a '
+        + 'quantity grid, ready for the colours and quantities to be entered on it.',
     });
   }
 

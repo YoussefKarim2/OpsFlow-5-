@@ -532,10 +532,11 @@ export async function extractTabular(
 
   if (!chosen) {
     issues.push({
-      level: 'ERROR', field: null, sheet: null, cell: null,
+      level: 'WARNING', field: null, sheet: null, cell: null,
       message:
         'No table could be found in this file. The importer looks for a header row followed by data — ' +
-        'check that the sheet has column headings such as Colour, Size and Quantity.',
+        'check that the sheet has column headings such as Colour, Size and Quantity. ' +
+        'You can still import and enter the quantities on the order.',
     });
     return emptyResult(sheets, issues, {
       sheetName: '', headerRowIndex: 0, columns: [], layout: 'UNKNOWN', sizeColumns: [],
@@ -578,11 +579,13 @@ export async function extractTabular(
 
   if (!matrix) {
     issues.push({
-      level: 'ERROR', field: null, sheet: chosen.sheetName, cell: null,
+      level: 'WARNING', field: null, sheet: chosen.sheetName, cell: null,
       message:
         layout === 'UNKNOWN'
-          ? 'Colour, size and quantity columns could not all be identified. Map them below and try again.'
-          : 'The columns were identified but no rows had a colour, a size and a quantity together.',
+          ? 'Colour, size and quantity columns could not all be identified. Map them below, '
+            + 'or import now and enter the quantities on the order.'
+          : 'The columns were identified but no rows had a colour, a size and a quantity together, '
+            + 'so no quantities were read.',
     });
   }
 
@@ -637,8 +640,9 @@ export async function extractTabular(
     // WIDE files legitimately have no size *column* — the sizes are headers.
     if (missing === ImportConcept.SIZE && layout === 'WIDE') continue;
     issues.push({
-      level: 'ERROR', field: missing, sheet: chosen.sheetName, cell: null,
-      message: `No column was identified as ${CONCEPT_META[missing].label}. Map it below before importing.`,
+      level: 'WARNING', field: missing, sheet: chosen.sheetName, cell: null,
+      message: `No column was identified as ${CONCEPT_META[missing].label}. `
+        + `Map it below, or import now and fill it in on the order.`,
     });
   }
 
