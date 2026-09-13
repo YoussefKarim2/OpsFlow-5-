@@ -44,21 +44,34 @@ export function signToken(userId: string, email: string): string {
  * Permissions are deliberately NOT baked into the token. If an admin revokes a
  * permission, it must take effect now, not when a 12-hour token expires.
  */
+/**
+ * The user id a session token names, or null.
+ *
+ * A file-download link is signed with the same secret and would otherwise
+ * verify perfectly here — handing whoever found that URL a full session. It
+ * carries `typ: 'file'` precisely so this function can refuse it: a credential
+ * meant to be pasted into an address bar must never be able to act as a login.
+ */
+export function verifySessionToken(token: string): string | null {
+  try {
+    const payload = jwt.verify(token, config.JWT_SECRET) as Partial<JwtPayload> & { typ?: string };
+    if (payload.typ === 'file') return null;
+    return typeof payload.sub === 'string' ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function authenticate(req: Request, _res: Response, next: NextFunction): Promise<void> {
   try {
     const header = req.headers.authorization;
     if (!header?.startsWith('Bearer ')) throw new UnauthorizedError();
 
-    const token = header.slice(7);
-    let payload: JwtPayload;
-    try {
-      payload = jwt.verify(token, config.JWT_SECRET) as JwtPayload;
-    } catch {
-      throw new UnauthorizedError('Session expired or invalid. Please sign in again.');
-    }
+    const userId = verifySessionToken(header.slice(7));
+    if (!userId) throw new UnauthorizedError('Session expired or invalid. Please sign in again.');
 
     const user = await prisma.user.findUnique({
-      where: { id: payload.sub },
+      where: { id: userId },
       include: { role: true },
     });
 

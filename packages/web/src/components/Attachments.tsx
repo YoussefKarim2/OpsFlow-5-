@@ -14,11 +14,11 @@
  * coordinator have to remember which of fifteen document types they chose.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Upload, FileText, Image as ImageIcon, ExternalLink, Trash2 } from 'lucide-react';
-import { fmtDate, type AttachmentDto } from '@opsflow/shared';
-import { api, openFile, fetchFileUrl, ApiError } from '../lib/api';
+import { fmtDate } from '@opsflow/shared';
+import { api, resolveFileUrl, ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { Card, EmptyState, Spinner, clsx, useToast } from './ui';
 
@@ -77,11 +77,6 @@ export function AttachmentsPanel({
     onError: (e) => toast.error(e),
   });
 
-  const open = useMutation({
-    mutationFn: (d: AttachmentDto) => openFile(d.downloadUrl, d.fileName),
-    onError: (e) => toast.error(e instanceof ApiError ? e.message : 'Could not open that file.'),
-  });
-
   const onFiles = (files: FileList | null) => {
     if (files?.[0]) upload.mutate(files[0]);
   };
@@ -112,25 +107,35 @@ export function AttachmentsPanel({
                 {isImage(d.mimeType)
                   ? <ImageIcon className="h-4 w-4 shrink-0 text-ink-400" />
                   : <FileText className="h-4 w-4 shrink-0 text-ink-400" />}
-                <button
-                  type="button"
-                  className="min-w-0 flex-1 truncate text-left text-sm font-medium text-accent-700 hover:underline"
-                  onClick={() => open.mutate(d)}
-                  title="Open this file"
-                >
-                  {d.fileName}
-                </button>
+                {d.available === false ? (
+                  <span className="min-w-0 flex-1 truncate text-sm text-ink-500" title="The contents of this file are no longer stored">
+                    {d.fileName} <span className="text-2xs text-amber-700">— contents no longer stored</span>
+                  </span>
+                ) : (
+                  <a
+                    href={resolveFileUrl(d.downloadUrl)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="min-w-0 flex-1 truncate text-left text-sm font-medium text-accent-700 hover:underline"
+                    title="Open this file"
+                  >
+                    {d.fileName}
+                  </a>
+                )}
                 <span className="shrink-0 text-2xs text-ink-500">
                   {d.version > 1 && `v${d.version} · `}{sizeOf(d.sizeBytes)} · {d.uploadedByName} · {fmtDate(d.createdAt)}
                 </span>
-                <button
-                  type="button"
-                  className="btn-ghost btn-sm shrink-0"
-                  onClick={() => open.mutate(d)}
-                  title="Open in a new tab"
-                >
-                  <ExternalLink className="h-3.5 w-3.5" />
-                </button>
+                {d.available !== false && (
+                  <a
+                    href={resolveFileUrl(d.downloadUrl)}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn-ghost btn-sm shrink-0"
+                    title="Open in a new tab"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                )}
                 {editable && (
                   <button
                     type="button"
@@ -181,35 +186,17 @@ export function AttachmentsPanel({
 }
 
 /**
- * An <img> for a file the API protects.
+ * An <img> for an attachment.
  *
- * A plain `src` cannot carry the bearer token, so every reference image in the
- * app rendered as a broken icon. This fetches the bytes the way the rest of the
- * app fetches anything and points the tag at the result, revoking the object
- * URL on unmount so a gallery of photographs does not leak them.
+ * Now just an <img>: the URL is signed and same-origin, so the browser loads it
+ * unaided. Kept as a component because every caller already uses it, and
+ * because the one thing worth centralising is what happens when the bytes are
+ * gone.
  */
 export function AuthedImage({
   downloadUrl, alt, className,
 }: { downloadUrl: string; alt: string; className?: string }) {
-  const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let url: string | null = null;
-    let cancelled = false;
-    fetchFileUrl(downloadUrl)
-      .then((u) => {
-        url = u;
-        if (cancelled) { if (u.startsWith('blob:')) URL.revokeObjectURL(u); return; }
-        setSrc(u);
-      })
-      .catch(() => { if (!cancelled) setFailed(true); });
-    return () => {
-      cancelled = true;
-      if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
-    };
-  }, [downloadUrl]);
-
   if (failed) {
     return (
       <div className={clsx(className, 'flex items-center justify-center bg-ink-50 text-2xs text-ink-400')}>
@@ -217,6 +204,13 @@ export function AuthedImage({
       </div>
     );
   }
-  if (!src) return <div className={clsx(className, 'animate-pulse bg-ink-100')} />;
-  return <img src={src} alt={alt} className={className} loading="lazy" />;
+  return (
+    <img
+      src={resolveFileUrl(downloadUrl)}
+      alt={alt}
+      className={className}
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
+  );
 }

@@ -10,7 +10,7 @@ import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Upload, ExternalLink, Trash2, FileText, Image as ImageIcon } from 'lucide-react';
 import { fmtDate } from '@opsflow/shared';
-import { api, type AttachmentDto, openFile } from '../../lib/api';
+import { api, type AttachmentDto, resolveFileUrl } from '../../lib/api';
 import { Card, Spinner, EmptyState, ConfirmDialog, Field, clsx, useToast } from '../../components/ui';
 import { AuthedImage } from '../../components/Attachments';
 
@@ -145,7 +145,7 @@ export function CustomerReferenceTab({ orderId }: { orderId: string }) {
               <button
                 key={d.id}
                 type="button"
-                onClick={() => void openFile(d.downloadUrl)}
+                onClick={() => window.open(resolveFileUrl(d.downloadUrl), '_blank', 'noopener')}
                 className="group overflow-hidden rounded border border-ink-200 bg-white text-left"
               >
                 <AuthedImage
@@ -201,9 +201,9 @@ export function CustomerReferenceTab({ orderId }: { orderId: string }) {
                   <td className="td text-xs">{fmtDate(d.createdAt)}</td>
                   <td className="td">
                     <div className="flex justify-end gap-1">
-                      <button type="button" onClick={() => void openFile(d.downloadUrl)} className="btn-ghost btn-sm">
+                      <a href={resolveFileUrl(d.downloadUrl)} target="_blank" rel="noreferrer" className="btn-ghost btn-sm">
                         Open <ExternalLink className="h-3 w-3" />
-                      </button>
+                      </a>
                       <button
                         className="btn-ghost btn-sm text-red-600 hover:bg-red-50"
                         onClick={() => setConfirmDelete(d)}

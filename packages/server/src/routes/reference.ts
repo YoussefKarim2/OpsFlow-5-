@@ -15,6 +15,7 @@ import { asyncHandler } from '../util/async-handler.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 import { ORDER_INCLUDE, buildOrderSummary, deriveOrder } from '../services/order-service.js';
 import { storage } from '../services/storage/index.js';
+import { signedFileUrl } from '../services/file-links.js';
 
 export const referenceRouter = Router();
 referenceRouter.use(authenticate);
@@ -168,6 +169,7 @@ referenceRouter.get('/users', requirePermission('user:manage'), asyncHandler(asy
 // ── Attachments ─────────────────────────────────────────────────────────────
 
 referenceRouter.get('/orders/:orderId/attachments', requirePermission('order:read'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
   const attachments = await prisma.attachment.findMany({
     where: { orderId: req.params.orderId },
     include: { uploadedBy: { select: { name: true } } },
@@ -178,33 +180,30 @@ referenceRouter.get('/orders/:orderId/attachments', requirePermission('order:rea
       id: a.id, fileName: a.fileName, documentType: a.documentType, mimeType: a.mimeType,
       sizeBytes: a.sizeBytes, version: a.version, stageKey: a.stageKey,
       uploadedByName: a.uploadedBy.name, createdAt: a.createdAt.toISOString(),
-      downloadUrl: await storage.url(a.storageKey),
+      /**
+       * A URL the browser can open on its own — no JavaScript, no bearer
+       * header, no blob. The S3 driver has always returned a presigned link;
+       * this gives the local and database drivers the same property.
+       */
+      downloadUrl: storage.name === 's3'
+        ? await storage.url(a.storageKey)
+        : signedFileUrl(a.storageKey, actor.id),
+      /**
+       * Whether the bytes are actually there.
+       *
+       * Files written to the container's own disk before storage moved into
+       * the database left their rows behind. Reporting that here lets the
+       * screen say so, instead of presenting a link that fails when clicked.
+       */
+      available: await storage.exists(a.storageKey),
     }))),
   });
 }));
 
-/**
- * Stream a locally-stored file.
- *
- * The key must correspond to a known attachment and the caller must hold
- * `order:read`. Previously any authenticated user could pass any storage key
- * and receive whatever was behind it, including import uploads that have no
- * attachment row at all — a signed-in user could read a file simply by knowing
- * or guessing its key.
- */
-referenceRouter.get('/files/:key', requirePermission('order:read'), asyncHandler(async (req, res) => {
-  const key = decodeURIComponent(req.params.key);
-  const attachment = await prisma.attachment.findFirst({ where: { storageKey: key } });
-  if (!attachment) throw new NotFoundError('File');
-
-  const buffer = await storage.get(key);
-  res.setHeader('Content-Type', attachment.mimeType);
-  // Quoting is not enough on its own — a filename containing a quote would
-  // break out of the header, so the raw quotes are stripped.
-  res.setHeader('Content-Disposition', `inline; filename="${attachment.fileName.replace(/["\\]/g, '')}"`);
-  res.setHeader('X-Content-Type-Options', 'nosniff');
-  res.send(buffer);
-}));
+// The file-streaming route moved to routes/files.ts, which is mounted before
+// the authenticated block so a plain link or an <img> can reach it with a
+// signed URL. Serving it from here meant it could only ever be fetched by
+// JavaScript holding a bearer token.
 
 // ── Reports — the brief's section 36 ────────────────────────────────────────
 

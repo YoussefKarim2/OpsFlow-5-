@@ -207,7 +207,14 @@ export interface AttachmentDto {
   stageKey: StageKey | null;
   uploadedByName: string;
   createdAt: string;
+  /** A link the browser can open directly — signed and short-lived. */
   downloadUrl: string;
+  /**
+   * Whether the bytes are still stored. False for rows whose file was written
+   * to a container's own disk before storage moved into the database: the
+   * record survived, the file did not.
+   */
+  available: boolean;
 }
 
 /** One row of the name-and-number table beside an instruction's prose. */
@@ -512,78 +519,10 @@ export interface Page<T> {
   totalPages: number;
 }
 
-/**
- * Fetch a file the API protects, and hand back a URL the browser can use.
- *
- * `<a href>` and `<img src>` cannot carry an Authorization header, and the file
- * route is authenticated — so every attachment link in the app was quietly
- * returning 401 and every reference image was a broken icon. The file has to be
- * fetched the way every other request is, then handed to the browser as an
- * object URL.
- *
- * An absolute URL is left alone: the S3 driver returns a presigned link that
- * already carries its own credentials in the query string, and re-fetching it
- * with a bearer token would be both pointless and wrong.
- */
-export async function fetchFileUrl(downloadUrl: string): Promise<string> {
+/** An attachment URL the browser can use directly, for `<img src>` and links. */
+export function resolveFileUrl(downloadUrl: string): string {
   if (/^https?:\/\//i.test(downloadUrl)) return downloadUrl;
-
-  const res = await fetch(downloadUrl.startsWith('/api') ? downloadUrl : `${BASE}${downloadUrl}`, {
-    headers: { Authorization: `Bearer ${getToken() ?? ''}` },
-  });
-  if (!res.ok) {
-    throw new ApiError(
-      res.status === 404
-        ? 'That file is no longer stored on the server.'
-        : 'Could not open that file.',
-      res.status, 'FILE_OPEN_FAILED',
-    );
-  }
-  return URL.createObjectURL(await res.blob());
-}
-
-/**
- * Open an attachment in a new tab.
- *
- * Two browser rules shape this, and both were breaking it:
- *
- *   The tab is opened *before* the fetch and then pointed at the result. A
- *   `window.open` that happens after an `await` is a pop-up as far as the
- *   browser is concerned and gets blocked; opening first and navigating second
- *   is the one ordering that survives.
- *
- *   The object URL is revoked on a delay, not immediately. Revoking it in the
- *   same tick as the navigation pulls the bytes out from under the tab that is
- *   still loading them, and the new tab renders blank.
- *
- * If the tab could not be opened at all — a blocker, or a browser that refuses
- * to render this type inline — the file is saved instead. Getting the document
- * is the point; which of the two ways it arrives is not.
- */
-export async function openFile(downloadUrl: string, fileName?: string): Promise<void> {
-  const tab = window.open('', '_blank');
-  let url: string;
-  try {
-    url = await fetchFileUrl(downloadUrl);
-  } catch (err) {
-    tab?.close();
-    throw err;
-  }
-
-  if (tab) {
-    tab.location.href = url;
-  } else {
-    const a = document.createElement('a');
-    a.href = url;
-    if (fileName) a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-  }
-
-  // Long enough for the tab to have taken its own reference, short enough that
-  // a morning of opening documents does not accumulate them.
-  if (url.startsWith('blob:')) window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  return downloadUrl.startsWith('/api') ? downloadUrl : `${BASE}${downloadUrl}`;
 }
 
 export const api = {

@@ -353,7 +353,16 @@ export interface AttachmentDto {
   stageKey: StageKey | null;
   uploadedByName: string;
   createdAt: string;
+  /** A link the browser can open directly — signed and short-lived. */
   downloadUrl: string;
+  /**
+   * Whether the bytes are still stored.
+   *
+   * False for rows whose file was written to a container's own disk before
+   * storage moved into the database: the record survived, the file did not.
+   * Reported so a screen can say so rather than offering a link that fails.
+   */
+  available: boolean;
 }
 
 /** Dashboard payload — one request populates every card and the attention list. */

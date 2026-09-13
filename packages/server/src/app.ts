@@ -13,6 +13,7 @@ import { requestContextMiddleware, setChangeFlusher } from './request-context.js
 import { authenticate, enforcePasswordChange } from './middleware/auth.js';
 
 import { authRouter } from './routes/auth.js';
+import { filesRouter } from './routes/files.js';
 import { adminRouter } from './routes/admin.js';
 import { ordersRouter } from './routes/orders.js';
 import { tasksRouter } from './routes/tasks.js';
@@ -124,6 +125,11 @@ export function createApp() {
   });
 
   app.use('/api/auth', authRouter);
+
+  // Before the authenticated block on purpose: this is the one route the
+  // browser reaches as a link or an <img>, where it cannot send a header. It
+  // authenticates itself — a bearer token, or the signed link in `?t=`.
+  app.use('/api/files', filesRouter);
 
   // Everything past here is authenticated, and every request carries an actor
   // in AsyncLocalStorage so the audit middleware knows who made each change.

@@ -35,6 +35,18 @@ export class NotFoundError extends AppError {
   constructor(resource = 'Resource') { super(`${resource} not found`, 404, 'NOT_FOUND'); }
 }
 
+/**
+ * The record is here; what it pointed at is not.
+ *
+ * Distinct from NotFoundError, whose message is always "<thing> not found" —
+ * true but misleading when the row loaded perfectly and only the bytes behind
+ * it are missing. That sends someone looking for a broken link instead of
+ * re-attaching a file.
+ */
+export class GoneError extends AppError {
+  constructor(message: string) { super(message, 410, 'CONTENT_GONE'); }
+}
+
 export class ConflictError extends AppError {
   constructor(message: string, details?: unknown) { super(message, 409, 'CONFLICT', details); }
 }
