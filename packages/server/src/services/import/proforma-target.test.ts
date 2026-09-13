@@ -106,3 +106,30 @@ describe('building a proforma from an extraction', () => {
     assert.ok(d.issues.some((i) => i.message === 'scanned document'));
   });
 });
+
+describe('reading a proforma out of a document', () => {
+  test('the header is read whichever key convention the reader used', async () => {
+    // The readers translate concepts into the order's field names before they
+    // return, and this module was still looking up the concept — so a proforma
+    // imported with its number, date and consignee blank however plainly the
+    // document stated them.
+    const draft = buildProformaDraft({
+      profileKey: null, confidence: 0, sheets: [], mappings: [],
+      fields: { poNumber: 'PI-2026-44', clientName: 'Meyba International', poDate: new Date('2026-05-01') },
+      matrices: [], bom: [], lays: [], externalColors: [], costing: {}, issues: [],
+    } as never);
+    assert.equal(draft.number, 'PI-2026-44');
+    assert.equal(draft.consignee, 'Meyba International');
+    assert.equal(draft.date, '2026-05-01', 'a date must be a day, not a JavaScript date string');
+  });
+
+  test('the concept keys still work, so neither convention can break it', async () => {
+    const draft = buildProformaDraft({
+      profileKey: null, confidence: 0, sheets: [], mappings: [],
+      fields: { PO_NUMBER: 'PI-7', CLIENT: 'Meyba' },
+      matrices: [], bom: [], lays: [], externalColors: [], costing: {}, issues: [],
+    } as never);
+    assert.equal(draft.number, 'PI-7');
+    assert.equal(draft.consignee, 'Meyba');
+  });
+});

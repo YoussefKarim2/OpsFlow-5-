@@ -37,6 +37,7 @@ import type { ExtractionResult, ExtractedMatrix } from './extractor.js';
 import { detectFileKind } from './file-kind.js';
 import { cellText, toNumber, toDate } from './extractor.js';
 import { safeDate, toIsoDayOrNull } from '@opsflow/shared';
+import { loadWorkbook } from './open-workbook.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sheet reading
@@ -529,7 +530,8 @@ export async function extractTabular(
     await wb.csv.read(Readable.from(buffer.toString('utf8')));
     if (wb.worksheets.length > 0 && !wb.worksheets[0]!.name) wb.worksheets[0]!.name = 'CSV';
   } else {
-    await wb.xlsx.load(buffer as unknown as ArrayBuffer);
+    // Same clear message as everywhere else a workbook is opened.
+    await loadWorkbook(wb, buffer);
   }
 
   const issues: ImportIssue[] = [];

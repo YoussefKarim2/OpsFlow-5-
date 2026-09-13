@@ -28,6 +28,7 @@ import {
   type ColumnAnalysis,
 } from '@opsflow/shared';
 import type { ImportIssue, ImportSheetInfo } from '@opsflow/shared';
+import { BadRequestError } from '../../errors.js';
 import type { ExtractionResult } from './extractor.js';
 import { toDate } from './extractor.js';
 import { detectSizeColumns } from './tabular-extractor.js';
@@ -92,17 +93,36 @@ export interface PdfPage {
 }
 
 /** Read the text layer, page by page, with positions. */
+/**
+ * Reading a PDF that turns out not to be one.
+ *
+ * pdf.js throws its own exception types for a truncated or damaged file, and
+ * those reached the error handler unrecognised — a 500 with a library stack
+ * trace in the response body, file paths and all. A half-downloaded PDF is a
+ * perfectly ordinary thing for someone to attach, and it deserves a sentence,
+ * not a crash.
+ */
 async function readPdf(buffer: Buffer): Promise<PdfPage[]> {
   // Imported lazily and by its legacy build: the default entry point expects a
   // browser, and the server has no DOM to give it.
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  const doc = await pdfjs.getDocument({
-    data: new Uint8Array(buffer),
-    // A purchase order needs none of these, and each is a way in for a hostile
-    // file rather than a feature.
-    isEvalSupported: false,
-    useSystemFonts: false,
-  }).promise;
+  let doc;
+  try {
+    doc = await pdfjs.getDocument({
+      data: new Uint8Array(buffer),
+      // A purchase order needs none of these, and each is a way in for a hostile
+      // file rather than a feature.
+      isEvalSupported: false,
+      useSystemFonts: false,
+    }).promise;
+  } catch {
+    // Deliberately not re-thrown: pdf.js's own exception types are unknown to
+    // the error handler and came back as a 500 carrying a stack trace.
+    throw new BadRequestError(
+      'This PDF could not be opened — the file looks incomplete or damaged. '
+      + 'Try downloading it again, or ask for it to be re-sent.',
+    );
+  }
 
   const pages: PdfPage[] = [];
   for (let n = 1; n <= doc.numPages; n++) {

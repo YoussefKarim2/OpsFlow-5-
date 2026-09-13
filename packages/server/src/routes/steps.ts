@@ -151,8 +151,17 @@ const upload = multer({
       ));
       return;
     }
+    // `application/octet-stream` means the browser did not recognise the file,
+    // not that the file is wrong — Safari and several Windows configurations
+    // send it for perfectly ordinary spreadsheets. Refusing it turned "attach
+    // this PO" into "re-save it and try again" for no reason the user could
+    // see. The extension is already checked above, and the magic-byte test in
+    // `assertContentMatchesName` checks the contents themselves, which is the
+    // claim worth verifying.
+    const unknownToTheBrowser = file.mimetype === 'application/octet-stream'
+      || file.mimetype === '';
     const expected = ALLOWED_UPLOADS[file.mimetype];
-    if (!expected || !expected.includes(ext)) {
+    if (!unknownToTheBrowser && (!expected || !expected.includes(ext))) {
       cb(new BadRequestError(
         `The file is named "${ext}" but arrived as "${file.mimetype}". Re-save it and try again.`,
       ));

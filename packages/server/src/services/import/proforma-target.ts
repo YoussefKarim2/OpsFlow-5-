@@ -14,7 +14,7 @@
  * on one is worse than a blank.
  */
 
-import { ImportConcept, type ImportIssue } from '@opsflow/shared';
+import { ImportConcept, CONCEPT_META, type ImportIssue } from '@opsflow/shared';
 import type { ExtractionResult } from './extractor.js';
 
 export interface ProformaDraftLine {
@@ -43,6 +43,11 @@ export interface ProformaDraft {
 
 const str = (v: unknown): string | null => {
   if (v == null) return null;
+  // A date reaches here as a Date, and String(date) is
+  // "Fri May 01 2026 03:00:00 GMT+0300 (…)" — which is what the invoice showed
+  // where it should have said 2026-05-01. The draft's date field is a day, so
+  // that is what it gets.
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10);
   const s = String(v).trim();
   return s === '' ? null : s;
 };
@@ -66,10 +71,28 @@ export function buildProformaDraft(extraction: ExtractionResult): ProformaDraft 
   const f = extraction.fields ?? {};
   const issues: ImportIssue[] = [];
 
-  const currency = str(f[ImportConcept.CURRENCY])?.toUpperCase().slice(0, 3) ?? 'USD';
-  const unitPrice = num(f[ImportConcept.UNIT_PRICE]);
+  /**
+   * Read a concept out of the extraction, by either name it might carry.
+   *
+   * The readers translate concepts into the order's own field names before they
+   * return — PO_NUMBER becomes `poNumber` — and this module was still looking
+   * up the concept. Every lookup missed, so a proforma imported with its
+   * number, date and consignee blank however plainly the document stated them.
+   * Both keys are tried so neither convention can break it again.
+   */
+  const pick = (concept: ImportConcept): string | null => {
+    const field = CONCEPT_META[concept]?.field;
+    return (field ? str(f[field]) : null) ?? str(f[concept]);
+  };
+  const pickNum = (concept: ImportConcept): number | null => {
+    const field = CONCEPT_META[concept]?.field;
+    return (field ? num(f[field]) : null) ?? num(f[concept]);
+  };
 
-  const style = str(f[ImportConcept.STYLE]) ?? str(f[ImportConcept.ORDER_NAME]);
+  const currency = pick(ImportConcept.CURRENCY)?.toUpperCase().slice(0, 3) ?? 'USD';
+  const unitPrice = pickNum(ImportConcept.UNIT_PRICE);
+
+  const style = pick(ImportConcept.STYLE) ?? pick(ImportConcept.ORDER_NAME);
 
   // The ORDER matrix is what the customer is being invoiced for; a CUT or
   // PACKED grid describes the factory's own progress and is not billable.
@@ -125,12 +148,12 @@ export function buildProformaDraft(extraction: ExtractionResult): ProformaDraft 
   for (const issue of extraction.issues ?? []) issues.push(issue);
 
   return {
-    number: str(f[ImportConcept.PO_NUMBER]),
-    date: str(f[ImportConcept.ORDER_DATE]),
-    consignee: str(f[ImportConcept.CLIENT]),
+    number: pick(ImportConcept.PO_NUMBER),
+    date: pick(ImportConcept.ORDER_DATE) ?? pick(ImportConcept.DELIVERY_DATE),
+    consignee: pick(ImportConcept.CLIENT),
     billingAddress: null,
     email: null,
-    shipmentTo: str(f[ImportConcept.DESTINATION]),
+    shipmentTo: pick(ImportConcept.DESTINATION),
     currency,
     terms: null,
     lines,

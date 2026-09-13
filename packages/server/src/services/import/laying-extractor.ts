@@ -23,6 +23,7 @@ import {
   type ColumnAnalysis, type ImportIssue,
 } from '@opsflow/shared';
 import { findHeaderCandidates, readTableAt, type SheetTable } from './tabular-extractor.js';
+import { openWorkbook } from './open-workbook.js';
 
 const LAYING_CONCEPTS = new Set<ImportConcept>([
   // MATERIAL as well as FABRIC: plenty of laying sheets head that column
@@ -114,8 +115,7 @@ export async function extractLayingMarking(
     savedMapping?: Record<string, ImportConcept>;
   } = {},
 ): Promise<LayingExtractionResult> {
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer as unknown as ArrayBuffer);
+  const wb = await openWorkbook(buffer);
 
   const issues: ImportIssue[] = [];
 

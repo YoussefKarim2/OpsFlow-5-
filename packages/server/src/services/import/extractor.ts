@@ -12,6 +12,7 @@ import type { ImportProfile, FieldSpec, MatrixSpec } from './profiles.js';
 import { detectProfile } from './profiles.js';
 import type { ImportIssue, ImportSheetInfo, ImportFieldMapping } from '@opsflow/shared';
 import { safeDate, toIsoDateOrNull, toIsoDayOrNull, isValidDate, parseSpreadsheetDate } from '@opsflow/shared';
+import { openWorkbook } from './open-workbook.js';
 
 export interface ExtractedMatrix {
   ledger: string;
@@ -400,8 +401,7 @@ function extractLays(sheet: ExcelJS.Worksheet, headerAnchor: string, terminator:
 // ── Main entry ──────────────────────────────────────────────────────────────
 
 export async function extractWorkbook(buffer: Buffer, forcedProfile?: ImportProfile): Promise<ExtractionResult> {
-  const wb = new ExcelJS.Workbook();
-  await wb.xlsx.load(buffer as unknown as ArrayBuffer);
+  const wb = await openWorkbook(buffer);
 
   const sheetNames = wb.worksheets.map((w) => w.name);
   const detected = forcedProfile
