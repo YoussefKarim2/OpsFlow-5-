@@ -41,13 +41,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # The client must be at least as new as the server, or pg_dump refuses.
-      - name: Install PostgreSQL 16 client
+      # The client must be at least as new as the server, or pg_dump refuses
+      # outright: "aborting because of server version mismatch". Railway's
+      # Postgres is 18, and this was pinned to 16 — which is why every run
+      # failed at the dump step.
+      #
+      # Rather than pin a number that goes stale the next time the database is
+      # upgraded, ask the server what it is and install that client. A backup
+      # that breaks silently on someone else's upgrade is the failure mode this
+      # whole workflow exists to avoid.
+      - name: Install a matching PostgreSQL client
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
           sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
           curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo gpg --dearmor -o /etc/apt/trusted.gpg.d/pgdg.gpg
           sudo apt-get update -qq
-          sudo apt-get install -y -qq postgresql-client-16
+
+          # The runner ships a psql new enough to ask the question, and asking
+          # beats guessing. Falls back to the newest client the repository has.
+          MAJOR="$(psql "$DATABASE_URL" -tAc 'SHOW server_version_num' 2>/dev/null | cut -c1-2 || true)"
+          if ! [ "$MAJOR" -ge 13 ] 2>/dev/null; then
+            MAJOR="$(apt-cache search --names-only '^postgresql-client-[0-9]+$' \
+              | grep -oE '[0-9]+' | sort -n | tail -1)"
+            echo "could not ask the server; using the newest client available: ${MAJOR}"
+          fi
+          echo "server major version: ${MAJOR}"
+          sudo apt-get install -y -qq "postgresql-client-${MAJOR}"
           pg_dump --version
 
       - name: Take the backup
