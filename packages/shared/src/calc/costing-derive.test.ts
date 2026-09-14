@@ -29,14 +29,25 @@ describe('deriving cost lines from the production sections', () => {
     assert.deepEqual(deriveCostLines(EMPTY), []);
   });
 
+  test('only what was issued is costed; the plan is carried for reference', () => {
+    // An actual costing may not report a plan as a fact. A row with nothing
+    // issued arrives blank, with its planned figure alongside.
+    const [line] = deriveCostLines({
+      ...EMPTY,
+      bom: [{ category: 'FABRIC', item: 'Jersey', issuedQty: 0, requiredQty: 500, unit: 'M', unitPriceUsd: 2 }],
+    });
+    assert.equal(line!.quantity, null, 'nothing issued is not a consumption');
+    assert.equal(line!.estimatedQty, 500, 'but the plan is there to measure against');
+  });
+
   test('each material is its own row, keeping consumption, unit and price', () => {
     // The sheet's UsedFabric block: one line per fabric, not one lump labelled
     // "Fabric". Consumption and unit price are columns, so they must survive.
     const lines = deriveCostLines({
       ...EMPTY,
       bom: [
-        { category: 'FABRIC', item: 'Jersey', quantity: 100, unit: 'M', unitPriceUsd: 2 },
-        { category: 'FABRIC', item: 'Rib', quantity: 50, unit: 'M', unitPriceUsd: 1 },
+        { category: 'FABRIC', item: 'Jersey', issuedQty: 100, requiredQty: 100, unit: 'M', unitPriceUsd: 2 },
+        { category: 'FABRIC', item: 'Rib', issuedQty: 50, requiredQty: 50, unit: 'M', unitPriceUsd: 1 },
       ],
     });
     assert.equal(lines.length, 2);
@@ -55,8 +66,8 @@ describe('deriving cost lines from the production sections', () => {
     const lines = deriveCostLines({
       ...EMPTY,
       bom: [
-        { category: 'FABRIC', item: 'Jersey', quantity: 100, unit: 'M', unitPriceUsd: 2 },
-        { category: 'FABRIC', item: 'Mesh', quantity: 20, unit: 'M', unitPriceUsd: null },
+        { category: 'FABRIC', item: 'Jersey', issuedQty: 100, requiredQty: 100, unit: 'M', unitPriceUsd: 2 },
+        { category: 'FABRIC', item: 'Mesh', issuedQty: 20, requiredQty: 20, unit: 'M', unitPriceUsd: null },
       ],
     });
     assert.equal(lines.length, 2);
@@ -68,7 +79,7 @@ describe('deriving cost lines from the production sections', () => {
   test('a missing quantity leaves the consumption blank, not zero', () => {
     const [line] = deriveCostLines({
       ...EMPTY,
-      bom: [{ category: 'LABEL', item: 'Neck label', quantity: null, unit: 'PCS', unitPriceUsd: 0.1 }],
+      bom: [{ category: 'LABEL', item: 'Neck label', issuedQty: null, requiredQty: null, unit: 'PCS', unitPriceUsd: 0.1 }],
     });
     assert.equal(line!.quantity, null);
     assert.equal(line!.group, 'ACCESSORY');
@@ -146,7 +157,7 @@ describe('deriving cost lines from the production sections', () => {
 
   test('every derived line says where it came from', () => {
     const lines = deriveCostLines({
-      bom: [{ category: 'FABRIC', item: 'Jersey', quantity: 10, unit: 'M', unitPriceUsd: 2 }],
+      bom: [{ category: 'FABRIC', item: 'Jersey', issuedQty: 10, requiredQty: 10, unit: 'M', unitPriceUsd: 2 }],
       external: [{ operationType: 'PRINTING', qty: 10, unitPriceUsd: 1 }],
       production: { machineDaysUsed: 2, dailyCostEgp: 970, dollarRate: 48.5 },
     });

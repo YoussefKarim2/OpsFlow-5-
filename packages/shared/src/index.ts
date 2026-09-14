@@ -16,6 +16,7 @@ export * from './calc/costing.js';
 export * from './calc/costing-derive.js';
 export * from './calc/costing-overrides.js';
 export * from './calc/costing-format.js';
+export * from './calc/costing-rows.js';
 export * from './calc/quality.js';
 export * from './calc/alerts.js';
 export * from './calc/inventory.js';

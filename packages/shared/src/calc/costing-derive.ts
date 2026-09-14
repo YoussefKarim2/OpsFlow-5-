@@ -32,8 +32,14 @@ import type { CostGroup } from './costing.js';
 export interface DerivableBomItem {
   category: string;
   item: string;
-  /** What was actually issued where that is known, else what is required. */
-  quantity: number | null;
+  /**
+   * What the warehouse actually issued. Null until something has been, because
+   * an actual costing may not report a plan as a fact — the estimate is carried
+   * separately and shown beside the field, for a person to measure against.
+   */
+  issuedQty: number | null;
+  /** What the bill of materials planned. Reference only; never costed. */
+  requiredQty: number | null;
   unit: string;
   unitPriceUsd: number | null;
 }
@@ -65,6 +71,8 @@ export interface DerivedLine {
   quantity: number | null;
   unit: string;
   unitPriceUsd: number | null;
+  /** What was planned, for the screen to show beside the actual. Not costed. */
+  estimatedQty?: number | null;
   /** `section:grouping` — what this was computed from. */
   sourceRef: string;
 }
@@ -115,9 +123,14 @@ export function deriveCostLines(input: DerivableInputs): DerivedLine[] {
     lines.push({
       group: bomGroupFor(b.category),
       label: b.item,
-      quantity: b.quantity,
+      // Only what was genuinely issued. A row with nothing issued arrives
+      // blank, with its planned figure alongside, and waits for the person who
+      // measured it — which is the difference between an actual costing and a
+      // second copy of the plan.
+      quantity: b.issuedQty != null && b.issuedQty > 0 ? b.issuedQty : null,
       unit: b.unit,
       unitPriceUsd: b.unitPriceUsd,
+      estimatedQty: b.requiredQty,
       sourceRef: `bom:${b.category}`,
     });
   }

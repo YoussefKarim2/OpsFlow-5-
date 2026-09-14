@@ -895,20 +895,16 @@ async function deriveFor(orderId: string) {
   ]);
 
   return deriveCostLines({
-    bom: bom.map((b) => {
-      // What was actually issued is the actual cost; before anything is issued
-      // the requirement is the best available estimate, and saying nothing at
-      // all until the first issue would leave the screen blank for most of an
-      // order's life.
-      const issued = Number(b.issuedQty.toString());
-      return {
-        category: b.category,
-        item: b.item,
-        quantity: issued > 0 ? issued : Number(b.requiredQty.toString()),
-        unit: b.unit,
-        unitPriceUsd: b.unitPriceUsd == null ? null : Number(b.unitPriceUsd.toString()),
-      };
-    }),
+    bom: bom.map((b) => ({
+      category: b.category,
+      item: b.item,
+      // The issued quantity is a fact; the required quantity is a plan. An
+      // actual costing may report the first and only display the second.
+      issuedQty: Number(b.issuedQty.toString()),
+      requiredQty: Number(b.requiredQty.toString()),
+      unit: b.unit,
+      unitPriceUsd: b.unitPriceUsd == null ? null : Number(b.unitPriceUsd.toString()),
+    })),
     external: external.map((e) => ({
       operationType: e.operationType,
       qty: e.qty,

@@ -256,6 +256,9 @@ export interface CostLineDto {
   quantity: number | null;
   unit: string;
   unitPriceUsd: number | null;
+  /** What the bill of materials planned, for the screen to show beside the
+   *  measured figure. Never costed — present on derived lines only. */
+  estimatedQty?: number | null;
   source?: 'DERIVED' | 'MANUAL';
   sourceRef?: string | null;
   note?: string | null;

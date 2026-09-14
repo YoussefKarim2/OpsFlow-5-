@@ -112,7 +112,37 @@ export interface CostingInput {
   embroideryCostUsd?: number | null;
 }
 
+/**
+ * The facts the costing is computed from, before anything is typed over them.
+ *
+ * Published so the screen can run this same function on every keystroke and
+ * show the whole chain updating, rather than waiting for a round trip and
+ * risking a second implementation of the arithmetic that drifts from this one.
+ */
+export interface CostingSource {
+  orderQty: number;
+  cutQty: number;
+  shippedQty: number | null;
+  firstDegreeQty: number | null;
+  secondDegreeQty: number | null;
+  sellPriceUsd: number | null;
+  externalOpCostUsd: number | null;
+  customer: string | null;
+  orderName: string | null;
+  itemType: string | null;
+  poNumber: string | null;
+  styleNumber: string | null;
+}
+
 export interface CostingResult {
+  /** The unoverridden facts, so the same computation can be run anywhere. */
+  source: CostingSource;
+  /**
+   * Why a figure could not be worked out, keyed by field. Present only for the
+   * ones that are null: "Waiting for the shipped quantity" is an answer a
+   * person can act on; `#DIV/0!` is not.
+   */
+  waiting: Partial<Record<string, string>>;
   /** Which cells are showing a typed figure instead of the calculated one. */
   overridden: OverrideKey[];
   /** What each overridden cell would say if the override were cleared. */
@@ -344,7 +374,75 @@ export function computeCosting(input: CostingInput): CostingResult {
   const shippedShare = shippedQty != null ? safePct(shippedQty, orderQty) : null;
   const diffPct = pick('diffPct', shippedShare == null ? null : shippedShare - 100);
 
+  /**
+   * What each missing figure is missing.
+   *
+   * Filled from the inputs rather than guessed from the output, so the message
+   * names the fact a person can go and record — and never appears next to a
+   * figure that did compute.
+   */
+  const waiting: Partial<Record<string, string>> = {};
+  const needs = (key: string, value: number | null, reason: string | null) => {
+    if (value == null && reason != null) waiting[key] = reason;
+  };
+
+  const noRate = dollarRate == null || dollarRate === 0 ? 'the dollar rate' : null;
+  const noMachines = machineCount == null || machineCount === 0 ? 'the factory machine count' : null;
+  const noDaily = dailyCostEgp == null ? "the factory's daily cost" : null;
+
+  needs('machineCostEgpPerDay', machineCostEgpPerDay,
+    noDaily && noMachines ? `Waiting for ${noDaily} and ${noMachines}`
+      : noDaily ? `Waiting for ${noDaily}`
+      : noMachines ? `Waiting for ${noMachines}` : null);
+  needs('workDays', workDays,
+    machineDaysUsed == null && noMachines ? 'Waiting for the machine-days used and the machine count'
+      : machineDaysUsed == null ? 'Waiting for the machine-days used'
+      : noMachines ? `Waiting for ${noMachines}` : null);
+  needs('productivityRate', productivityRate,
+    workDays == null ? 'Waiting for the work days' : 'Waiting for a cut quantity');
+  needs('cmCostUsd', cmCostUsd,
+    workDays == null ? 'Waiting for the work days'
+      : noDaily ? `Waiting for ${noDaily}`
+      : noRate ? `Waiting for ${noRate}` : null);
+  needs('fabricCostUsd', fabricCostUsd,
+    fabricLines.length === 0 ? 'No fabric on the bill of materials yet'
+      : 'Waiting for a unit price on the fabric rows');
+  needs('accessoryCostUsd', accessoryCostUsd,
+    accessoryLines.length === 0 ? 'No accessories on the bill of materials yet'
+      : 'Waiting for a unit price on the accessory rows');
+  needs('totalCostUsd', totalCostUsd, 'Waiting for a priced cost row');
+  needs('unitActualCostUsd', unitActualCostUsd,
+    totalCostUsd == null ? 'Waiting for the costs below'
+      : shippedQty == null || shippedQty === 0 ? 'Waiting for the shipped quantity' : null);
+  needs('profitPerUnitUsd', profitPerUnitUsd,
+    sellPriceUsd == null ? 'Waiting for the sell price'
+      : 'Waiting for the actual cost per unit');
+  needs('profitPct', profitPct,
+    profitPerUnitUsd == null ? 'Waiting for the profit'
+      : 'Waiting for the sell price');
+  needs('diffPct', diffPct,
+    shippedQty == null ? 'Waiting for the shipped quantity'
+      : orderQty === 0 ? 'Waiting for an order quantity' : null);
+  needs('targetPriceUsd', targetPriceUsd,
+    profitPerUnitUsd == null ? 'Waiting for the profit' : null);
+  needs('unitActualCostEgp', unitActualCostEgp,
+    unitActualCostUsd == null ? 'Waiting for the actual cost per unit'
+      : noRate ? `Waiting for ${noRate}` : null);
+  needs('sellPriceUsd', sellPriceUsd, 'Waiting for a price per piece on Order Details');
+  needs('shippedQty', shippedQty, 'Waiting for a shipment to be recorded');
+
   return {
+    source: {
+      orderQty: orderQtyIn, cutQty: cutQtyIn, shippedQty: shippedQtyIn,
+      firstDegreeQty: firstDegreeIn, secondDegreeQty: secondDegreeIn,
+      sellPriceUsd: sellPriceIn, externalOpCostUsd,
+      customer: input.customer ?? null,
+      orderName: input.orderName ?? null,
+      itemType: input.itemType ?? null,
+      poNumber: input.poNumber ?? null,
+      styleNumber: input.styleNumber ?? null,
+    },
+    waiting,
     overridden, calculated,
     identity: {
       customer: pickText('customer', input.customer ?? null),

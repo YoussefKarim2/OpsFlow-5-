@@ -29,8 +29,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Lock, Pencil, Plus, Printer, Save, Trash2 } from 'lucide-react';
 import {
+  computeCosting, rowCost, applyRowEdit, sanitiseOverrides,
   fmtMoney, fmtNumber, fmtPct, NOT_CALCULATED,
-  type OrderDetailDto, type OverrideKey,
+  type CostLineInput, type CostingResult, type OrderDetailDto,
+  type OverrideKey, type RowField,
 } from '@opsflow/shared';
 import { api, type CostLineDto, type CostingDto } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -61,6 +63,12 @@ interface RowDraft {
   quantity: string;
   unit: string;
   unitPrice: string;
+  /** Typed directly against an invoice total, rather than rate × quantity. */
+  cost: string;
+  /** Which of the three the system worked out. Never overwritten by the others. */
+  derivedField: RowField | null;
+  /** What the bill of materials planned. Shown, never costed. */
+  estimatedQty: number | null;
   /** Where it came from, when it came from somewhere. */
   sourceRef: string | null;
   /** True while it is still the derivation's row and nobody has touched it. */
@@ -100,6 +108,9 @@ function overridesFrom(record: CostingDto | null): Record<string, string> {
 
 function rowsFrom(record: CostingDto | null, derived: CostLineDto[]): RowDraft[] {
   const stored = record?.lines ?? [];
+  // The plan lives on the bill of materials, not on the costing, so it is
+  // matched back on by where the row came from rather than stored twice.
+  const planned = new Map(derived.map((d) => [`${d.sourceRef}|${d.label}`, d.estimatedQty ?? null]));
   // Before the first save there is nothing stored, so the table shows what the
   // production sections would contribute — the screen is demonstrably working
   // rather than empty, and saving is what commits those rows.
@@ -111,6 +122,9 @@ function rowsFrom(record: CostingDto | null, derived: CostLineDto[]): RowDraft[]
     quantity: numText(l.quantity),
     unit: l.unit,
     unitPrice: numText(l.unitPriceUsd),
+    cost: numText(rowCost({ quantity: l.quantity, unitPriceUsd: l.unitPriceUsd })),
+    derivedField: l.quantity != null && l.unitPriceUsd != null ? 'cost' : null,
+    estimatedQty: l.estimatedQty ?? planned.get(`${l.sourceRef}|${l.label}`) ?? null,
     sourceRef: l.sourceRef ?? null,
     derived: l.source !== 'MANUAL',
   }));
@@ -207,6 +221,39 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
     setStored(s); setOver(o); setRows(r); setHidden(h);
   };
 
+  /**
+   * The whole costing, recomputed from the draft on every keystroke.
+   *
+   * This is the same `computeCosting` the server runs on save, given the same
+   * inputs — the order's facts as the server published them, plus whatever is
+   * currently in the form. So the chain updates as it is typed, and the figure
+   * on screen cannot drift from the figure that gets stored, because there is
+   * only one implementation of the arithmetic.
+   */
+  const live: CostingResult = useMemo(() => computeCosting({
+    ...c.source,
+    hasRecord: c.hasRecord,
+    costingDate: stored.costingDate || null,
+    notes: stored.notes || null,
+    dollarRate: asNumber(stored.dollarRate),
+    dailyCostEgp: asNumber(stored.dailyCostEgp),
+    machineCount: asNumber(stored.machineCount),
+    machineDaysUsed: asNumber(stored.machineDaysUsed),
+    daysInLine: asNumber(stored.daysInLine),
+    lineMachineQty: asNumber(stored.lineMachineQty),
+    sublimationCostUsd: asNumber(stored.sublimationCostUsd),
+    embroideryCostUsd: asNumber(stored.embroideryCostUsd),
+    overrides: sanitiseOverrides(over),
+    lines: rows.map<CostLineInput>((r) => ({
+      group: r.group,
+      label: r.label,
+      quantity: asNumber(r.quantity),
+      unit: r.unit,
+      unitPriceUsd: asNumber(r.unitPrice),
+      sourceRef: r.sourceRef,
+    })),
+  }), [c.source, c.hasRecord, stored, over, rows]);
+
   const setField = (key: keyof Stored) => (v: string) => setStored((s) => ({ ...s, [key]: v }));
   const setOverride = (key: OverrideKey) => (v: string) =>
     setOver((o) => (v.trim() === '' ? drop(o, key) : { ...o, [key]: v }));
@@ -227,6 +274,7 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
       places={opts.places}
       hint={opts.hint}
       from={opts.from}
+      waiting={live.waiting[key]}
       onChange={setOverride(key)}
       onRevert={revert(key)}
     />
@@ -243,8 +291,34 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
     />
   );
 
+  /** A label or unit change: no arithmetic, just the row's description. */
   const editRow = (key: string, patch: Partial<RowDraft>) =>
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch, derived: false } : r)));
+
+  /**
+   * A consumption, price or cost change. Any one of the three can be typed and
+   * the other two follow; the row remembers which one the system supplied so
+   * that it, and never the person's own figure, is the one recomputed.
+   */
+  const editRowNumber = (key: string, field: RowField, text: string) =>
+    setRows((rs) => rs.map((r) => {
+      if (r.key !== key) return r;
+      const next = applyRowEdit(
+        { quantity: asNumber(r.quantity), unitPriceUsd: asNumber(r.unitPrice), derivedField: r.derivedField },
+        field,
+        asNumber(text),
+      );
+      // The edited field keeps exactly what was typed — reformatting a number
+      // somebody is halfway through is how "1." becomes unparseable.
+      return {
+        ...r,
+        derived: false,
+        derivedField: next.derivedField,
+        quantity: field === 'quantity' ? text : numText(next.quantity),
+        unitPrice: field === 'unitPrice' ? text : numText(next.unitPriceUsd),
+        cost: field === 'cost' ? text : numText(rowCost(next)),
+      };
+    }));
 
   const deleteRow = (row: RowDraft) => {
     setRows((rs) => rs.filter((r) => r.key !== row.key));
@@ -257,26 +331,21 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
     setRows((rs) => [...rs, {
       key: `new-${Date.now()}-${rs.length}`,
       group, label: '', quantity: '', unit: group === 'FABRIC' ? 'MET' : 'PCS',
-      unitPrice: '', sourceRef: null, derived: false,
+      unitPrice: '', cost: '', derivedField: null, estimatedQty: null,
+      sourceRef: null, derived: false,
     }]);
 
   const fabricRows = rows.filter((r) => r.group === 'FABRIC');
   const accessoryRows = rows.filter((r) => r.group === 'ACCESSORY');
   const otherRows = rows.filter((r) => r.group !== 'FABRIC' && r.group !== 'ACCESSORY');
 
-  /** Live arithmetic for a row being edited, so the table adds up as you type. */
-  const rowCost = (r: RowDraft): number | null => {
-    const q = asNumber(r.quantity), p = asNumber(r.unitPrice);
-    return q == null || p == null ? null : q * p;
-  };
-  const groupTotal = (rs: RowDraft[]): number | null => {
-    const costs = rs.map(rowCost).filter((v): v is number => v != null);
-    return costs.length === 0 ? null : costs.reduce((a, b) => a + b, 0);
-  };
+  /** What a row currently costs, from the same helper the engine uses. */
+  const costOf = (r: RowDraft): number | null =>
+    rowCost({ quantity: asNumber(r.quantity), unitPriceUsd: asNumber(r.unitPrice) });
 
-  const liveFabric = asNumber(over.fabricCostUsd ?? '') ?? groupTotal(fabricRows);
-  const liveAccessory = asNumber(over.accessoryCostUsd ?? '') ?? groupTotal(accessoryRows);
-  const total = asNumber(over.totalCostUsd ?? '') ?? c.totalCostUsd;
+  const liveFabric = live.groups.fabric.total;
+  const liveAccessory = live.groups.accessory.total;
+  const total = live.totalCostUsd;
 
   return (
     <div className="print-document space-y-4 p-5">
@@ -323,10 +392,10 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
 
       {save.isError && <ErrorNote error={save.error} />}
 
-      {c.overridden.length > 0 && (
+      {live.overridden.length > 0 && (
         <p className="no-print text-xs text-violet-700">
-          {c.overridden.length} figure{c.overridden.length === 1 ? '' : 's'} on this costing
-          {c.overridden.length === 1 ? ' was' : ' were'} typed in rather than calculated. Each says
+          {live.overridden.length} figure{live.overridden.length === 1 ? '' : 's'} on this costing
+          {live.overridden.length === 1 ? ' was' : ' were'} typed in rather than calculated. Each says
           so under its value, and can be put back while editing.
         </p>
       )}
@@ -339,41 +408,41 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
               label="Date" editing={editing} type="date"
               value={stored.costingDate} onChange={setField('costingDate')}
             />
-            {field('Customer', 'customer', order.client.name, 'text')}
-            {field('Order Name', 'orderName', order.orderName, 'text')}
-            {field('Item Type', 'itemType', order.itemType, 'text')}
-            {field('Po No', 'poNumber', order.poNumber, 'text')}
-            {field('Style No', 'styleNumber', order.styleNumber, 'text')}
+            {field('Customer', 'customer', live.source.customer, 'text', { from: 'the order' })}
+            {field('Order Name', 'orderName', live.source.orderName, 'text', { from: 'the order' })}
+            {field('Item Type', 'itemType', live.source.itemType, 'text', { from: 'the order' })}
+            {field('Po No', 'poNumber', live.source.poNumber, 'text', { from: 'the order' })}
+            {field('Style No', 'styleNumber', live.source.styleNumber, 'text', { from: 'the order' })}
           </div>
         </Card>
 
         <Card>
           <CardHeader title="The result" subtitle="Per piece, against what shipped." />
           <div className="grid gap-3 p-4 sm:grid-cols-2">
-            {field('Sell Price', 'sellPriceUsd', c.sellPriceUsd, 'money', { from: 'Order Details' })}
-            {field('Actual Cost/Unit', 'unitActualCostUsd', c.unitActualCostUsd, 'money', {
+            {field('Sell Price', 'sellPriceUsd', live.source.sellPriceUsd, 'money', { from: 'Order Details' })}
+            {field('Actual Cost/Unit', 'unitActualCostUsd', live.unitActualCostUsd, 'money', {
               hint: 'total cost ÷ shipped quantity',
             })}
-            {field('Profit', 'profitPerUnitUsd', c.profitPerUnitUsd, 'money', {
+            {field('Profit', 'profitPerUnitUsd', live.profitPerUnitUsd, 'money', {
               hint: 'sell price − unit cost',
             })}
-            {field('Pro. Percentage', 'profitPct', c.profitPct, 'percent', {
+            {field('Pro. Percentage', 'profitPct', live.profitPct, 'percent', {
               hint: 'profit ÷ sell price',
             })}
-            {field('Perfect price', 'targetPriceUsd', c.targetPriceUsd, 'money', {
-              hint: c.isProfitable === true && over.targetPriceUsd == null
+            {field('Perfect price', 'targetPriceUsd', live.targetPriceUsd, 'money', {
+              hint: live.isProfitable === true && over.targetPriceUsd == null
                 ? 'nothing to fix at this price'
                 : 'the price that would restore a 20% margin',
             })}
             <div className="flex items-end">
               <p className={clsx(
                 'w-full rounded-md px-2.5 py-1.5 text-center text-xs font-medium',
-                c.isProfitable === true && 'bg-emerald-50 text-emerald-800',
-                c.isProfitable === false && 'bg-red-50 text-red-700',
-                c.isProfitable == null && 'bg-ink-50 text-ink-500',
+                live.isProfitable === true && 'bg-emerald-50 text-emerald-800',
+                live.isProfitable === false && 'bg-red-50 text-red-700',
+                live.isProfitable == null && 'bg-ink-50 text-ink-500',
               )}>
-                {c.isProfitable === true ? 'In profit'
-                  : c.isProfitable === false ? 'At a loss'
+                {live.isProfitable === true ? 'In profit'
+                  : live.isProfitable === false ? 'At a loss'
                   : 'Not calculable yet'}
               </p>
             </div>
@@ -393,13 +462,13 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
           {plain('Line Machines Qty', 'lineMachineQty')}
           {plain('Days in line', 'daysInLine')}
           {plain('Machine Already Used', 'machineDaysUsed', 'machine-days')}
-          {field('Machine Cost', 'machineCostEgpPerDay', c.machineCostEgpPerDay, 'number', {
+          {field('Machine Cost', 'machineCostEgpPerDay', live.machineCostEgpPerDay, 'number', {
             places: 2, hint: 'daily cost ÷ machines, in EGP',
           })}
-          {field('Work Days', 'workDays', c.workDays, 'number', {
+          {field('Work Days', 'workDays', live.workDays, 'number', {
             places: 1, hint: 'machine-days ÷ machines',
           })}
-          {field('Productivity rate', 'productivityRate', c.productivityRate, 'number', {
+          {field('Productivity rate', 'productivityRate', live.productivityRate, 'number', {
             hint: 'pieces cut per work day',
           })}
         </div>
@@ -411,12 +480,12 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
           subtitle="Counted on the floor and read from their ledgers. Typing here does not change them."
         />
         <div className="grid gap-3 p-4 sm:grid-cols-3 lg:grid-cols-6">
-          {field('Order Qty', 'orderQty', c.orderQty, 'number', { from: 'order ledger' })}
-          {field('Cutted Qty', 'cutQty', c.cutQty, 'number', { from: 'cut ledger' })}
-          {field('Shipped Qty', 'shippedQty', c.shippedQty, 'number', { from: 'shipped ledger' })}
-          {field('1st Degree Qty', 'firstDegreeQty', c.firstDegreeQty, 'number', { from: 'out-line' })}
-          {field('2nd Degree Qty', 'secondDegreeQty', c.secondDegreeQty, 'number', { from: '2nd-degree' })}
-          {field('Diff. Percentage', 'diffPct', c.diffPct, 'percent', { hint: 'shipped vs ordered' })}
+          {field('Order Qty', 'orderQty', live.source.orderQty, 'number', { from: 'order ledger' })}
+          {field('Cutted Qty', 'cutQty', live.source.cutQty, 'number', { from: 'cut ledger' })}
+          {field('Shipped Qty', 'shippedQty', live.source.shippedQty, 'number', { from: 'shipped ledger' })}
+          {field('1st Degree Qty', 'firstDegreeQty', live.source.firstDegreeQty, 'number', { from: 'out-line' })}
+          {field('2nd Degree Qty', 'secondDegreeQty', live.source.secondDegreeQty, 'number', { from: '2nd-degree' })}
+          {field('Diff. Percentage', 'diffPct', live.diffPct, 'percent', { hint: 'shipped vs ordered' })}
         </div>
       </Card>
 
@@ -431,6 +500,7 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
               <tr>
                 <th className="th w-28">Section</th>
                 <th className="th">Item</th>
+                <th className="th w-24 text-right">Planned</th>
                 <th className="th w-28 text-right">Actual Cons.</th>
                 <th className="th w-20">Unit</th>
                 <th className="th w-28 text-right">Unit Price</th>
@@ -442,44 +512,46 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
             <tbody className="divide-y divide-ink-100">
               <RowBlock
                 caption="UsedFabric" rows={fabricRows} total={total} editing={editing}
-                onEdit={editRow} onDelete={deleteRow} onAdd={() => addRow('FABRIC')} rowCost={rowCost}
+                onEdit={editRow} onEditNumber={editRowNumber} onDelete={deleteRow}
+                onAdd={() => addRow('FABRIC')} rowCost={costOf}
                 emptyText="No fabric on the bill of materials yet"
               />
               <SubtotalRow
                 label="Fabric Costing" cost={liveFabric} total={total} editing={editing}
-                value={over.fabricCostUsd ?? ''} calculated={c.groups.fabric.total}
+                value={over.fabricCostUsd ?? ''} calculated={live.groups.fabric.total}
                 onChange={setOverride('fabricCostUsd')} onRevert={revert('fabricCostUsd')}
               />
 
               <RowBlock
                 caption="UsedAcc" rows={accessoryRows} total={total} editing={editing}
-                onEdit={editRow} onDelete={deleteRow} onAdd={() => addRow('ACCESSORY')} rowCost={rowCost}
+                onEdit={editRow} onEditNumber={editRowNumber} onDelete={deleteRow}
+                onAdd={() => addRow('ACCESSORY')} rowCost={costOf}
                 emptyText="No accessories on the bill of materials yet"
               />
               <SubtotalRow
                 label="Accesory Costing" cost={liveAccessory} total={total} editing={editing}
-                value={over.accessoryCostUsd ?? ''} calculated={c.groups.accessory.total}
+                value={over.accessoryCostUsd ?? ''} calculated={live.groups.accessory.total}
                 onChange={setOverride('accessoryCostUsd')} onRevert={revert('accessoryCostUsd')}
               />
 
               <OutsideRow
-                label="Sublimation" cost={c.sublimationCostUsd} total={total} editing={editing}
+                label="Sublimation" cost={live.sublimationCostUsd} total={total} editing={editing}
                 value={stored.sublimationCostUsd} onChange={setField('sublimationCostUsd')}
               />
               <OutsideRow
-                label="Embroidery" cost={c.embroideryCostUsd} total={total} editing={editing}
+                label="Embroidery" cost={live.embroideryCostUsd} total={total} editing={editing}
                 value={stored.embroideryCostUsd} onChange={setField('embroideryCostUsd')}
               />
               {otherRows.map((r) => (
                 <EditableRow
                   key={r.key} row={r} total={total} editing={editing}
-                  onEdit={editRow} onDelete={deleteRow} cost={rowCost(r)}
+                  onEdit={editRow} onEditNumber={editRowNumber} onDelete={deleteRow} cost={costOf(r)}
                 />
               ))}
               {editing && (
                 <tr className="no-print">
                   <td className="td" />
-                  <td className="td" colSpan={7}>
+                  <td className="td" colSpan={8}>
                     <button className="btn-ghost btn-sm text-2xs" onClick={() => addRow('EXTERNAL')}>
                       <Plus className="h-3 w-3" /> Add an outside-work or other cost
                     </button>
@@ -491,28 +563,29 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
               <tr className="bg-ink-50">
                 <td className="td font-semibold text-ink-900">C.M</td>
                 <td className="td text-ink-600">Production — work days × daily cost</td>
-                <td className="td tnum text-right">{fmtNumber(c.workDays, { places: 1 })}</td>
+                <td className="td" />
+                <td className="td tnum text-right">{fmtNumber(live.workDays, { places: 1 })}</td>
                 <td className="td">DAY</td>
                 <td className="td tnum text-right">
-                  {c.dailyCostEgp == null || c.dollarRate == null
+                  {live.dailyCostEgp == null || live.dollarRate == null
                     ? '—'
-                    : fmtMoney(c.dailyCostEgp / c.dollarRate, '$', 4)}
+                    : fmtMoney(live.dailyCostEgp / live.dollarRate, '$', 4)}
                 </td>
                 <td className="td text-right">
                   <CostCell
-                    editing={editing} value={over.cmCostUsd ?? ''} calculated={c.cmCostUsd}
+                    editing={editing} value={over.cmCostUsd ?? ''} calculated={live.cmCostUsd}
                     kind="money" onChange={setOverride('cmCostUsd')} onRevert={revert('cmCostUsd')}
                   />
                 </td>
-                <td className="td tnum text-right">{fmtPct(pctOf(c.cmCostUsd, total), 1)}</td>
+                <td className="td tnum text-right">{fmtPct(pctOf(live.cmCostUsd, total), 1)}</td>
                 {editing && <td className="td" />}
               </tr>
 
               <tr className="bg-ink-100">
-                <td className="td font-bold text-ink-900" colSpan={5}>Total</td>
+                <td className="td font-bold text-ink-900" colSpan={6}>Total</td>
                 <td className="td text-right">
                   <CostCell
-                    editing={editing} value={over.totalCostUsd ?? ''} calculated={c.totalCostUsd}
+                    editing={editing} value={over.totalCostUsd ?? ''} calculated={live.totalCostUsd}
                     kind="money" className="font-semibold"
                     onChange={setOverride('totalCostUsd')} onRevert={revert('totalCostUsd')}
                   />
@@ -543,7 +616,7 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
         </div>
       </Card>
 
-      <MissingNotes order={order} />
+      <MissingNotes live={live} />
     </div>
   );
 }
@@ -560,13 +633,14 @@ function pctOf(part: number | null, whole: number | null): number | null {
 }
 
 function RowBlock({
-  caption, rows, total, editing, onEdit, onDelete, onAdd, rowCost, emptyText,
+  caption, rows, total, editing, onEdit, onEditNumber, onDelete, onAdd, rowCost, emptyText,
 }: {
   caption: string;
   rows: RowDraft[];
   total: number | null;
   editing: boolean;
   onEdit: (key: string, patch: Partial<RowDraft>) => void;
+  onEditNumber: (key: string, field: RowField, text: string) => void;
   onDelete: (row: RowDraft) => void;
   onAdd: () => void;
   rowCost: (r: RowDraft) => number | null;
@@ -577,7 +651,7 @@ function RowBlock({
       {rows.length === 0 ? (
         <tr>
           <td className="td font-semibold text-ink-700">{caption}</td>
-          <td className="td text-xs italic text-ink-400" colSpan={editing ? 7 : 6}>{emptyText}</td>
+          <td className="td text-xs italic text-ink-400" colSpan={editing ? 8 : 7}>{emptyText}</td>
         </tr>
       ) : (
         rows.map((r, i) => (
@@ -585,14 +659,14 @@ function RowBlock({
             key={r.key}
             caption={i === 0 ? caption : ''}
             row={r} total={total} editing={editing}
-            onEdit={onEdit} onDelete={onDelete} cost={rowCost(r)}
+            onEdit={onEdit} onEditNumber={onEditNumber} onDelete={onDelete} cost={rowCost(r)}
           />
         ))
       )}
       {editing && (
         <tr className="no-print">
           <td className="td" />
-          <td className="td" colSpan={7}>
+          <td className="td" colSpan={8}>
             <button className="btn-ghost btn-sm text-2xs" onClick={onAdd}>
               <Plus className="h-3 w-3" /> Add a {caption === 'UsedFabric' ? 'fabric' : 'accessory'} row
             </button>
@@ -604,13 +678,14 @@ function RowBlock({
 }
 
 function EditableRow({
-  caption, row, total, editing, onEdit, onDelete, cost,
+  caption, row, total, editing, onEdit, onEditNumber, onDelete, cost,
 }: {
   caption?: string;
   row: RowDraft;
   total: number | null;
   editing: boolean;
   onEdit: (key: string, patch: Partial<RowDraft>) => void;
+  onEditNumber: (key: string, field: RowField, text: string) => void;
   onDelete: (row: RowDraft) => void;
   cost: number | null;
 }) {
@@ -627,11 +702,15 @@ function EditableRow({
           onChange={(v) => onEdit(row.key, { label: v })}
         />
       </td>
+      <td className="td tnum text-right text-2xs text-ink-400">
+        {row.estimatedQty == null ? '—' : fmtNumber(row.estimatedQty, { places: 2 })}
+      </td>
       <td className="td text-right">
         <NumberCell
           editing={editing} value={row.quantity}
+          derived={row.derivedField === 'quantity'}
           display={row.quantity === '' ? '—' : fmtNumber(Number(row.quantity), { places: 2 })}
-          onChange={(v) => onEdit(row.key, { quantity: v })}
+          onChange={(v) => onEditNumber(row.key, 'quantity', v)}
         />
       </td>
       <td className="td">
@@ -643,11 +722,19 @@ function EditableRow({
       <td className="td text-right">
         <NumberCell
           editing={editing} value={row.unitPrice}
+          derived={row.derivedField === 'unitPrice'}
           display={row.unitPrice === '' ? '—' : fmtMoney(Number(row.unitPrice), '$', 4)}
-          onChange={(v) => onEdit(row.key, { unitPrice: v })}
+          onChange={(v) => onEditNumber(row.key, 'unitPrice', v)}
         />
       </td>
-      <td className="td tnum text-right">{cost == null ? '—' : fmtMoney(cost)}</td>
+      <td className="td text-right">
+        <NumberCell
+          editing={editing} value={row.cost}
+          derived={row.derivedField === 'cost'}
+          display={cost == null ? '—' : fmtMoney(cost)}
+          onChange={(v) => onEditNumber(row.key, 'cost', v)}
+        />
+      </td>
       <td className="td tnum text-right">{fmtPct(pctOf(cost, total), 1)}</td>
       {editing && (
         <td className="td text-right">
@@ -692,7 +779,7 @@ function SubtotalRow({
 }) {
   return (
     <tr className="bg-ink-50">
-      <td className="td font-semibold text-ink-900" colSpan={5}>{label}</td>
+      <td className="td font-semibold text-ink-900" colSpan={6}>{label}</td>
       <td className="td text-right">
         <CostCell
           editing={editing} value={value} calculated={calculated} kind="money"
@@ -728,15 +815,15 @@ function OutsideRow({
           <span className="ml-2 text-2xs text-ink-400">from outside work</span>
         )}
       </td>
-      <td className="td" colSpan={2} />
+      <td className="td" colSpan={4} />
       <td className="td text-right">
         <NumberCell
           editing={editing} value={value}
-          display={value === '' ? '—' : fmtMoney(Number(value), '$', 2)}
+          display={cost == null ? '—' : fmtMoney(cost)}
+          placeholder={cost == null ? '' : String(cost)}
           onChange={onChange}
         />
       </td>
-      <td className="td tnum text-right">{cost == null ? '—' : fmtMoney(cost)}</td>
       <td className="td tnum text-right">{fmtPct(pctOf(cost, total), 1)}</td>
       {editing && <td className="td" />}
     </tr>
@@ -750,19 +837,14 @@ function OutsideRow({
  * the missing fact, and the screen that holds it, is the whole point of
  * replacing the workbook.
  */
-function MissingNotes({ order }: { order: OrderDetailDto }) {
-  const c = order.costing;
-  const overridden = new Set<OverrideKey>(c.overridden);
-  const missing: string[] = [];
-  if (c.shippedQty == null && !overridden.has('shippedQty')) {
-    missing.push('the shipped quantity (Packing & Shipping) — the unit cost, profit and difference percentage divide by it');
-  }
-  if (c.dailyCostEgp == null) missing.push("the factory's daily cost, above — C.M is work days × daily cost");
-  if (c.machineCount == null) missing.push('the factory machine count, above — machine cost and work days divide by it');
-  if (c.dollarRate == null) missing.push('the dollar rate, above — EGP figures convert through it');
-  if (c.sellPriceUsd == null && !overridden.has('sellPriceUsd')) {
-    missing.push('the price per piece (Order Details) — profit is the price less the unit cost');
-  }
+function MissingNotes({ live }: { live: CostingResult }) {
+  // Every "waiting for" the engine produced, once each, in the order the
+  // screen reads. The engine names them because it is the only thing that
+  // knows which input was missing.
+  const seen = new Set<string>();
+  const missing = ['sellPriceUsd', 'shippedQty', 'dollarRate', 'machineCostEgpPerDay', 'workDays', 'totalCostUsd']
+    .map((k) => live.waiting[k])
+    .filter((m): m is string => !!m && !seen.has(m) && (seen.add(m), true));
 
   if (missing.length === 0) return null;
   return (

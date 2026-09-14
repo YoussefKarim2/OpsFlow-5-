@@ -22,7 +22,7 @@ import { formatCell, isTypeableNumber, NOT_CALCULATED, type CellKind } from '@op
 import { clsx } from './ui';
 
 export function CostField({
-  label, editing, value, calculated, kind, places, onChange, onRevert, hint, from,
+  label, editing, value, calculated, kind, places, onChange, onRevert, hint, from, waiting,
 }: {
   label: string;
   editing: boolean;
@@ -37,8 +37,15 @@ export function CostField({
   hint?: string;
   /** Where the calculated figure comes from, named under the label. */
   from?: string;
+  /**
+   * What this figure is missing, when it could not be worked out. The engine
+   * names it, because it is the only thing that knows which input was absent —
+   * "Waiting for the shipped quantity" is something a person can act on.
+   */
+  waiting?: string;
 }) {
   const overridden = value.trim() !== '';
+  const unknown = !overridden && calculated == null;
   const shown = overridden
     ? formatCell(kind === 'text' ? value : Number(value), kind, places)
     : formatCell(calculated, kind, places);
@@ -59,7 +66,7 @@ export function CostField({
               className={clsx('input', kind !== 'text' && 'tnum text-right',
                 overridden && 'border-violet-400 bg-violet-50 pr-8 text-violet-900')}
               value={value !== '' ? value : calculated == null ? '' : String(calculated)}
-              placeholder={shown === NOT_CALCULATED ? NOT_CALCULATED : ''}
+              placeholder={unknown ? waiting ?? NOT_CALCULATED : ''}
               onChange={(e) => {
                 const next = e.target.value;
                 if (kind !== 'text' && !isTypeableNumber(next)) return;
@@ -79,12 +86,17 @@ export function CostField({
               </button>
             )}
           </div>
-          {hint && <p className="mt-1 text-2xs text-ink-500">{hint}</p>}
+          {waiting && unknown
+            ? <p className="mt-1 text-2xs text-amber-700">{waiting}</p>
+            : hint && <p className="mt-1 text-2xs text-ink-500">{hint}</p>}
         </>
       ) : (
         <>
-          <p className={clsx('text-sm', overridden ? 'font-medium text-violet-800' : 'text-ink-800')}>
-            {shown}
+          <p className={clsx(
+            'text-sm',
+            overridden ? 'font-medium text-violet-800' : unknown ? 'text-ink-400' : 'text-ink-800',
+          )}>
+            {unknown && waiting ? waiting : shown}
           </p>
           {overridden && (
             <p className="mt-0.5 text-2xs text-violet-600">
@@ -216,23 +228,39 @@ export function TextCell({
   );
 }
 
-/** A numeric field inside a table cell, stored in its own column. */
+/**
+ * A numeric field inside a table cell.
+ *
+ * `derived` marks the one of consumption / unit price / cost that the system
+ * worked out from the other two. It stays editable — typing in it makes it the
+ * person's figure and hands the derivation to one of its neighbours — but it
+ * is shown differently, so nobody has to wonder which number was theirs.
+ */
 export function NumberCell({
-  editing, value, onChange, placeholder, display,
+  editing, value, onChange, placeholder, display, derived,
 }: {
   editing: boolean; value: string; onChange: (v: string) => void;
-  placeholder?: string; display?: string;
+  placeholder?: string; display?: string; derived?: boolean;
 }) {
   if (!editing) {
-    return <span className="tnum text-ink-800">{display ?? (value === '' ? '—' : value)}</span>;
+    return (
+      <span
+        className={clsx('tnum', derived ? 'text-ink-500' : 'text-ink-800')}
+        title={derived ? 'Calculated from the other two figures on this row' : undefined}
+      >
+        {display ?? (value === '' ? '—' : value)}
+      </span>
+    );
   }
   return (
     <input
-      className="input tnum py-1 text-right text-xs"
+      className={clsx('input tnum py-1 text-right text-xs',
+        derived && 'border-dashed bg-ink-50 text-ink-600')}
       type="text"
       inputMode="decimal"
       value={value}
       placeholder={placeholder}
+      title={derived ? 'Calculated from the other two figures on this row — type here to set it yourself' : undefined}
       onChange={(e) => { if (isTypeableNumber(e.target.value)) onChange(e.target.value); }}
     />
   );
