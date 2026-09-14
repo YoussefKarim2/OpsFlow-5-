@@ -79,19 +79,35 @@ materialsRouter.get('/:orderId/bom', requirePermission('material:read'), asyncHa
   });
 }));
 
+/**
+ * A bill-of-material line as the editor actually sends it.
+ *
+ * Every optional field here used to be `z.string().optional()`, which accepts
+ * `undefined` and rejects `null` — and the screen sends `null`, because that is
+ * what the GET returns for an empty description, colour, supplier or price and
+ * the editor hands back the row it was given.
+ *
+ * So a BOM line with any empty field — which is nearly every line — failed
+ * validation with 422, and the editor had no error handler, so the Save button
+ * completed and nothing happened. Saving the bill of materials was broken for
+ * anyone who did not fill in all nine columns.
+ *
+ * `nullable()` throughout, and the writes below turn null into "leave it
+ * empty", which is what the user meant by leaving the box blank.
+ */
 const bomItemSchema = z.object({
   category: z.enum(CATEGORIES),
-  position: z.string().optional(),
-  item: z.string().min(1),
-  description: z.string().optional(),
-  colorId: z.string().optional(),
-  colorText: z.string().optional(),
-  consumptionPerPiece: z.number().nonnegative().optional(),
+  position: z.string().nullish(),
+  item: z.string().min(1).max(200),
+  description: z.string().max(2000).nullish(),
+  colorId: z.string().nullish(),
+  colorText: z.string().max(200).nullish(),
+  consumptionPerPiece: z.number().nonnegative().nullish(),
   requiredQty: z.number().nonnegative(),
-  unit: z.string().min(1),
-  unitPriceUsd: z.number().nonnegative().optional(),
-  supplier: z.string().optional(),
-  notes: z.string().optional(),
+  unit: z.string().min(1).max(40),
+  unitPriceUsd: z.number().nonnegative().max(999_999.9999).nullish(),
+  supplier: z.string().max(200).nullish(),
+  notes: z.string().max(2000).nullish(),
 });
 
 /** One size of one item: "Logo Badge / Medium / 150". */

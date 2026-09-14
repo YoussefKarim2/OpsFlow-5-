@@ -17,7 +17,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Rows3 } from 'lucide-react';
-import { api, type BomRowDto, type BomSizeDto } from '../lib/api';
+import { api, ApiError, type BomRowDto, type BomSizeDto } from '../lib/api';
 import { Num, ErrorNote, clsx } from './ui';
 
 /** The BOM categories the schema stores. The dropdown labels them properly. */
@@ -43,25 +43,40 @@ export function rowQty(r: BomRowDto): number {
 }
 
 export function BomEditor({
-  orderId, initial, itemTypes, onSaved,
+  orderId, initial, itemTypes, colors = [], units = [], sizeLabels = [], onSaved,
 }: {
   orderId: string;
   initial: BomRowDto[];
   /** `RefValue` rows of kind BOM_ITEM_TYPE, from /lookups. */
   itemTypes: string[];
+  /** The factory's colour list, for the colour column. */
+  colors?: string[];
+  /** Units of measure — Met., Pcs, Kg. — for the unit column. */
+  units?: string[];
+  /** The order's own sizes, for the per-size breakdown. */
+  sizeLabels?: string[];
   onSaved?: () => void;
 }) {
   const qc = useQueryClient();
   const [rows, setRows] = useState<BomRowDto[]>(initial);
   const [expanded, setExpanded] = useState<number | null>(null);
 
+  const [saveError, setSaveError] = useState<string | null>(null);
+
   const save = useMutation({
     mutationFn: () => api.materials.saveBom(orderId, rows.map((r) => ({ ...r, requiredQty: rowQty(r) }))),
     onSuccess: () => {
+      setSaveError(null);
       void qc.invalidateQueries({ queryKey: ['bom', orderId] });
       void qc.invalidateQueries({ queryKey: ['order', orderId] });
       onSaved?.();
     },
+    // Without this the mutation swallowed every failure: the button finished,
+    // the screen stayed where it was, and the bill of materials was not saved.
+    // A save that fails silently is worse than one that refuses loudly.
+    onError: (e) => setSaveError(
+      e instanceof ApiError ? e.message : 'Could not save the bill of materials.',
+    ),
   });
 
   const setRow = (i: number, patch: Partial<BomRowDto>) =>
@@ -93,6 +108,14 @@ export function BomEditor({
             {save.isPending ? 'Saving…' : 'Save'}
           </button>
         </div>
+
+        {/* The save used to fail in silence. Now it says so, next to the button
+            that did not do what it appeared to do. */}
+        {saveError && (
+          <p className="mt-2 rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            {saveError}
+          </p>
+        )}
       </div>
 
       {save.error ? <ErrorNote error={save.error} /> : null}
@@ -146,6 +169,8 @@ export function BomEditor({
                     <input
                       className="input border-transparent bg-transparent"
                       value={r.colorText ?? ''}
+                      list="bom-colors"
+                      placeholder="Choose or type…"
                       onChange={(e) => setRow(i, { colorText: e.target.value || null })}
                     />
                   </td>
@@ -167,6 +192,7 @@ export function BomEditor({
                     <input
                       className="input border-transparent bg-transparent"
                       value={r.unit}
+                      list="bom-units"
                       onChange={(e) => setRow(i, { unit: e.target.value })}
                     />
                   </td>
@@ -237,6 +263,7 @@ export function BomEditor({
                               <input
                                 className="input w-40"
                                 placeholder="Small, 40x30x20…"
+                                list="bom-size-labels"
                                 value={sz.sizeLabel}
                                 onChange={(e) => setSize(i, n, { sizeLabel: e.target.value })}
                               />
@@ -276,9 +303,25 @@ export function BomEditor({
         </table>
       </div>
 
-      {/* Suggestions, not a restriction: the field stays free text. */}
+      {/*
+        Suggestions, not restrictions.
+        Every one of these is a <datalist>: the field shows the factory's own
+        list to pick from, and still accepts a value nobody has listed yet — a
+        new colour, a unit this order happens to use, a carton size. A <select>
+        would be tidier and would make the first genuinely new material
+        unenterable, which is the wrong trade on a bill of materials.
+      */}
       <datalist id="bom-item-types">
         {itemTypes.map((t) => <option key={t} value={t} />)}
+      </datalist>
+      <datalist id="bom-colors">
+        {colors.map((c) => <option key={c} value={c} />)}
+      </datalist>
+      <datalist id="bom-units">
+        {units.map((v) => <option key={v} value={v} />)}
+      </datalist>
+      <datalist id="bom-size-labels">
+        {sizeLabels.map((v) => <option key={v} value={v} />)}
       </datalist>
     </div>
   );
