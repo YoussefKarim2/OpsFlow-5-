@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeCosting, type CostingInput, type CostLineInput } from './costing.js';
 import { fmtMoney, fmtPct, fmtNumber, NOT_CALCULATED } from './num.js';
+import { sanitiseOverrides } from './costing-overrides.js';
 
 /**
  * The Actual Costing sheet, cell by cell.
@@ -261,5 +262,107 @@ describe('actual costing — the money', () => {
     assert.equal(r.totalCostUsd, null);
     assert.equal(r.unitActualCostUsd, null);
     assert.equal(r.groups.fabric.lines.length, 0);
+  });
+});
+
+describe('actual costing — typing over a calculated cell', () => {
+  const priced: CostingInput = {
+    ...BASE,
+    shippedQty: 1000,
+    lines: [line('FABRIC', 'Rosetta', 1000, 'Met.', 2, 'bom:FABRIC')],
+  };
+
+  test('a typed figure wins, and says what it replaced', () => {
+    const r = computeCosting({ ...priced, overrides: { fabricCostUsd: 1500 } });
+    assert.equal(r.fabricCostUsd, 1500);
+    assert.ok(r.overridden.includes('fabricCostUsd'));
+    assert.equal(r.calculated.fabricCostUsd, 2000, 'the calculated figure is kept alongside');
+  });
+
+  test('an override cascades the way a spreadsheet does', () => {
+    const plain = computeCosting(priced);
+    const typed = computeCosting({ ...priced, overrides: { fabricCostUsd: 1500 } });
+    assert.ok(typed.totalCostUsd! < plain.totalCostUsd!, 'the total follows the section');
+    assert.ok(typed.unitActualCostUsd! < plain.unitActualCostUsd!, 'so does the unit cost');
+    assert.ok(typed.profitPerUnitUsd! > plain.profitPerUnitUsd!, 'and the profit');
+  });
+
+  test('overriding the total stops it following its parts', () => {
+    const r = computeCosting({ ...priced, overrides: { totalCostUsd: 5000 } });
+    assert.equal(r.totalCostUsd, 5000);
+    assert.equal(r.unitActualCostUsd, 5);
+    assert.equal(r.fabricCostUsd, 2000, 'the section it came from is untouched');
+  });
+
+  test('a quantity can be typed over, and everything counting it follows', () => {
+    const r = computeCosting({ ...priced, overrides: { shippedQty: 500 } });
+    assert.equal(r.shippedQty, 500);
+    assert.equal(r.unitActualCostUsd, r.totalCostUsd! / 500);
+    assert.ok(Math.abs((r.diffPct ?? 0) - ((500 / 1972) * 100 - 100)) < 1e-9);
+  });
+
+  test('a figure can be supplied where nothing could be calculated', () => {
+    // Nothing shipped, so the sheet has no unit cost — but an invoice might.
+    const r = computeCosting({ ...BASE, overrides: { unitActualCostUsd: 4 } });
+    assert.equal(r.unitActualCostUsd, 4);
+    assert.equal(r.calculated.unitActualCostUsd, null);
+    assert.equal(r.profitPerUnitUsd, 7.25 - 4);
+  });
+
+  test('clearing an override falls straight back to the live figure', () => {
+    const typed = computeCosting({ ...priced, overrides: { fabricCostUsd: 1500 } });
+    const cleared = computeCosting({ ...priced, overrides: {} });
+    assert.equal(cleared.fabricCostUsd, typed.calculated.fabricCostUsd);
+    assert.deepEqual(cleared.overridden, []);
+  });
+
+  test('the identity cells can be typed over without touching the order', () => {
+    const r = computeCosting({
+      ...priced, customer: 'Real Client', poNumber: 'PO-1',
+      overrides: { customer: 'As invoiced', poNumber: 'PO-1-REV-B' },
+    });
+    assert.equal(r.identity.customer, 'As invoiced');
+    assert.equal(r.calculated.customer, 'Real Client');
+    assert.equal(r.identity.poNumber, 'PO-1-REV-B');
+  });
+
+  test('an override never produces an unrenderable number', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const r = computeCosting({
+        ...priced,
+        overrides: sanitiseOverrides({ totalCostUsd: bad, shippedQty: bad }),
+      });
+      for (const [key, value] of Object.entries(r)) {
+        if (typeof value !== 'number') continue;
+        assert.ok(Number.isFinite(value), `${key} became ${value}`);
+      }
+    }
+  });
+});
+
+describe('actual costing — what may be stored as an override', () => {
+  test('unknown cells are dropped rather than kept forever', () => {
+    assert.deepEqual(sanitiseOverrides({ notACell: 5, totalCostUsd: 10 }), { totalCostUsd: 10 });
+  });
+
+  test('cleared cells are removed, not stored as empty', () => {
+    assert.deepEqual(sanitiseOverrides({ totalCostUsd: null, customer: '' }), {});
+  });
+
+  test('a number that could never render is refused', () => {
+    assert.deepEqual(sanitiseOverrides({ totalCostUsd: Number.NaN }), {});
+    assert.deepEqual(sanitiseOverrides({ totalCostUsd: Number.POSITIVE_INFINITY }), {});
+    assert.deepEqual(sanitiseOverrides({ totalCostUsd: 'not a number' }), {});
+  });
+
+  test('text is only accepted where the cell holds text', () => {
+    assert.deepEqual(sanitiseOverrides({ customer: '  Acme  ' }), { customer: 'Acme' });
+    assert.deepEqual(sanitiseOverrides({ totalCostUsd: '12.5' }), { totalCostUsd: 12.5 });
+  });
+
+  test('nonsense input is an empty set, not a crash', () => {
+    for (const junk of [null, undefined, 'string', 42, [], [1, 2]]) {
+      assert.deepEqual(sanitiseOverrides(junk), {});
+    }
   });
 });

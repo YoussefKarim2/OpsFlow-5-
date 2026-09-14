@@ -269,6 +269,10 @@ export interface CostingDto {
   machineDaysUsed: number | null;
   daysInLine: number | null;
   lineMachineQty: number | null;
+  /** Figures typed over the calculated cells, keyed by cell. */
+  overrides: Record<string, number | string | null>;
+  /** Derived rows removed from the sheet, by source reference. */
+  hiddenCostRefs: string[];
   sublimationCostUsd: number | null;
   embroideryCostUsd: number | null;
   externalOpCostUsd: number | null;

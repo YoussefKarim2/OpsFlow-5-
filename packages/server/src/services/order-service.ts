@@ -17,7 +17,7 @@ import {
   computeFunnel, computeColorProgress, computeCutVariance, computeStockDeduction,
   computeProductionAnalytics, computeBomSummary, computeCosting, computeQualityPassPct,
   computeMaterialPosition, computeStockPosition, computeConsumptionVariance,
-  computeMarkerPlan, evaluateAllGates,
+  computeMarkerPlan, evaluateAllGates, sanitiseOverrides,
   ledgerTotals, buildMatrix, daysBetween, sum, qtyAdd, qtySub,
   type QtyCell, type AxisRef, type TaskLike, type OrderDetailDto, type OrderSummaryDto,
   type TaskDto, type BomItemInput, type CostLineInput, type ProductionEntry, type Alert,
@@ -475,6 +475,14 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     hasRecord: cr != null,
     costingDate: cr?.costingDate?.toISOString() ?? null,
     notes: cr?.notes ?? null,
+    customer: order.client.name,
+    orderName: order.orderName,
+    itemType: order.itemType,
+    poNumber: order.poNumber,
+    styleNumber: order.styleNumber,
+    // Dropped through the same filter on the way in as on the way out, so a
+    // key that stopped being a cell cannot keep overriding one.
+    overrides: sanitiseOverrides(cr?.overrides),
     orderQty: totals[QtyLedger.ORDER] ?? 0,
     cutQty: totals[QtyLedger.CUT] ?? 0,
     shippedQty: shippedQty > 0 ? shippedQty : null,

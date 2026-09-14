@@ -17,7 +17,8 @@ import { Router } from 'express';
 import multer from 'multer';
 import ExcelJS from 'exceljs';
 import { z } from 'zod';
-import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines } from '@opsflow/shared';
+import { Prisma } from '@prisma/client';
+import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines, sanitiseOverrides } from '@opsflow/shared';
 import { detectFileKind, FILE_KIND_LABEL } from '../services/import/file-kind.js';
 import { extractFromPdf } from '../services/import/pdf-extractor.js';
 import { extractTabular } from '../services/import/tabular-extractor.js';
@@ -937,6 +938,8 @@ stepsRouter.get('/:id/costing', requirePermission('costing:read'), asyncHandler(
       machineDaysUsed: record.machineDaysUsed,
       daysInLine: record.daysInLine,
       lineMachineQty: record.lineMachineQty,
+      overrides: sanitiseOverrides(record.overrides),
+      hiddenCostRefs: record.hiddenCostRefs,
       // Stored since the model was written and never reachable from the API,
       // so the sheet's Sublimation and Embroidery rows had nowhere to read
       // from and nowhere to be typed.
@@ -961,10 +964,16 @@ stepsRouter.get('/:id/costing', requirePermission('costing:read'), asyncHandler(
 const costLineSchema = z.object({
   group: z.enum(['FABRIC', 'ACCESSORY', 'EXTERNAL', 'LABOUR', 'OTHER']),
   label: z.string().trim().min(1, 'Give the cost a name'),
-  quantity: z.number().nonnegative().optional().nullable(),
-  unit: z.string().trim().min(1).default('LOT'),
-  unitPriceUsd: z.number().optional().nullable(),
+  quantity: z.number().nonnegative().max(1e12).optional().nullable(),
+  unit: z.string().trim().min(1).max(40).default('LOT'),
+  unitPriceUsd: z.number().min(-1e12).max(1e12).optional().nullable(),
   note: z.string().trim().max(2000).optional().nullable(),
+  /**
+   * Set when this row is an edited copy of a derived one. The derived line it
+   * names is dropped, so editing a material's consumption on the costing sheet
+   * changes that row rather than adding a second one beside it.
+   */
+  sourceRef: z.string().trim().max(200).optional().nullable(),
 });
 
 const costingSchema = z.object({
@@ -989,12 +998,31 @@ const costingSchema = z.object({
   machineDaysUsed: z.number().int().nonnegative().max(1_000_000).optional().nullable(),
   daysInLine: z.number().int().nonnegative().max(10_000).optional().nullable(),
   lineMachineQty: z.number().int().nonnegative().max(100_000).optional().nullable(),
+  /**
+   * Figures typed over the calculated cells. Sent whole — the screen holds the
+   * complete set — so removing a key is how an override is cleared.
+   *
+   * Values are bounded and filtered to the known cells before storage: an
+   * unbounded number would overflow the numeric columns it feeds, and an
+   * unknown key would sit in the record forever overriding nothing.
+   */
+  overrides: z.record(z.union([
+    z.number().finite().min(-1e12).max(1e12),
+    z.string().max(200),
+    z.null(),
+  ])).optional(),
   sublimationCostUsd: z.number().nonnegative().max(99_999_999).optional().nullable(),
   embroideryCostUsd: z.number().nonnegative().max(99_999_999).optional().nullable(),
   externalOpCostUsd: z.number().nonnegative().max(99_999_999).optional().nullable(),
   notes: z.string().max(20_000).optional().nullable(),
-  /** Only the hand-entered ones. Derived lines are recomputed, never sent. */
-  manualLines: z.array(costLineSchema).default([]),
+  /**
+   * Every row the screen holds that is not being left to the derivation:
+   * hand-added costs, and derived rows somebody has edited. Sent whole, so a
+   * row dropped from the list is a row deleted.
+   */
+  manualLines: z.array(costLineSchema).max(500).default([]),
+  /** Derived rows removed from the sheet, by source reference. */
+  hiddenCostRefs: z.array(z.string().trim().max(200)).max(500).optional(),
 });
 
 stepsRouter.put('/:id/costing', requirePermission('costing:write'), asyncHandler(async (req, res) => {
@@ -1006,7 +1034,11 @@ stepsRouter.put('/:id/costing', requirePermission('costing:write'), asyncHandler
   // not "set it to nothing". Omitted from the update entirely, and left to the
   // column's own default on create.
   const fields = stripLines(body);
-  const { dollarRate, costingDate, ...rest } = fields as typeof fields & { dollarRate?: number };
+  const { dollarRate, costingDate, overrides, ...rest } =
+    fields as typeof fields & { dollarRate?: number };
+  const overrideField = overrides === undefined
+    ? {}
+    : { overrides: sanitiseOverrides(overrides) as Prisma.InputJsonValue };
   const usableRate = typeof dollarRate === 'number' && dollarRate > 0 ? dollarRate : undefined;
   // Present-and-empty clears the date; absent leaves it alone. A field the
   // form did not send must not be wiped by the form not sending it.
@@ -1016,13 +1048,28 @@ stepsRouter.put('/:id/costing', requirePermission('costing:write'), asyncHandler
 
   await prisma.costingRecord.upsert({
     where: { orderId },
-    create: { orderId, ...rest, ...dateField, ...(usableRate === undefined ? {} : { dollarRate: usableRate }) },
-    update: { ...rest, ...dateField, ...(usableRate === undefined ? {} : { dollarRate: usableRate }) },
+    create: {
+      orderId, ...rest, ...dateField, ...overrideField,
+      ...(usableRate === undefined ? {} : { dollarRate: usableRate }),
+    },
+    update: {
+      ...rest, ...dateField, ...overrideField,
+      ...(usableRate === undefined ? {} : { dollarRate: usableRate }),
+    },
   });
 
   // Recompute *after* the upsert: the labour derivation reads the dollar rate
   // and machine-days that this very request may have just changed.
-  const derived = await deriveFor(orderId);
+  //
+  // A derived row the coordinator has edited or deleted must not come back. An
+  // edited one arrives as a manual line carrying the same `sourceRef` and
+  // replaces it; a deleted one is named in `hiddenCostRefs`. Either way the
+  // underlying bill of materials is untouched — this is the costing sheet's
+  // view of it, not a rewrite of it.
+  const claimed = new Set(body.manualLines.map((m) => m.sourceRef).filter((r): r is string => !!r));
+  const hidden = new Set(body.hiddenCostRefs ?? []);
+  const derived = (await deriveFor(orderId))
+    .filter((d) => !claimed.has(d.sourceRef) && !hidden.has(d.sourceRef));
   const record = await prisma.costingRecord.findUniqueOrThrow({ where: { orderId }, select: { id: true } });
 
   await prisma.$transaction(async (tx) => {
@@ -1038,7 +1085,7 @@ stepsRouter.put('/:id/costing', requirePermission('costing:write'), asyncHandler
           costingId: record.id, group: m.group as never, label: m.label,
           quantity: m.quantity ?? null, unit: m.unit,
           unitPriceUsd: m.unitPriceUsd ?? null,
-          source: 'MANUAL' as never, sourceRef: null, note: m.note ?? null,
+          source: 'MANUAL' as never, sourceRef: m.sourceRef ?? null, note: m.note ?? null,
           position: derived.length + i,
         })),
       ],

@@ -11,6 +11,9 @@
  */
 
 import { safeDiv, safePct, sum } from './num.js';
+import {
+  numericOverride, textOverride, type CostingOverrides, type OverrideKey,
+} from './costing-overrides.js';
 
 export interface CostLineInput {
   /** 'FABRIC' | 'ACCESSORY' | 'EXTERNAL' | 'LABOUR' | 'OTHER' */
@@ -90,13 +93,35 @@ export interface CostingInput {
   costingDate?: string | null;
   /** The sheet's Notes row. */
   notes?: string | null;
+  /** The identity cells, as the order records them. Overridable for display. */
+  customer?: string | null;
+  orderName?: string | null;
+  itemType?: string | null;
+  poNumber?: string | null;
+  styleNumber?: string | null;
   lines: readonly CostLineInput[];
+  /**
+   * Figures typed straight over the calculated ones. They cascade: override
+   * the fabric total and the grand total, unit cost and profit move with it.
+   * The facts underneath — ledgers, bill of materials, order — are untouched,
+   * so clearing an override falls straight back to the live number.
+   */
+  overrides?: CostingOverrides;
   externalOpCostUsd?: number | null;
   sublimationCostUsd?: number | null;
   embroideryCostUsd?: number | null;
 }
 
 export interface CostingResult {
+  /** Which cells are showing a typed figure instead of the calculated one. */
+  overridden: OverrideKey[];
+  /** What each overridden cell would say if the override were cleared. */
+  calculated: Partial<Record<OverrideKey, number | string | null>>;
+  /** The identity cells, after any override. Display only. */
+  identity: {
+    customer: string | null; orderName: string | null; itemType: string | null;
+    poNumber: string | null; styleNumber: string | null;
+  };
   /** True when a costing record has been saved; false while the sheet is live
    *  off the order alone and nobody has entered the factory's figures yet. */
   hasRecord: boolean;
@@ -168,18 +193,53 @@ export interface CostingResult {
 
 export function computeCosting(input: CostingInput): CostingResult {
   const {
-    orderQty, cutQty, shippedQty, dollarRate, dailyCostEgp, machineCount,
-    machineDaysUsed, daysInLine, sellPriceUsd, lines,
-    lineMachineQty = null, firstDegreeQty = null, secondDegreeQty = null,
+    orderQty: orderQtyIn, cutQty: cutQtyIn, shippedQty: shippedQtyIn,
+    dollarRate, dailyCostEgp, machineCount, machineDaysUsed, daysInLine,
+    sellPriceUsd: sellPriceIn, lines,
+    lineMachineQty = null, firstDegreeQty: firstDegreeIn = null,
+    secondDegreeQty: secondDegreeIn = null, overrides,
     externalOpCostUsd = null, sublimationCostUsd = null, embroideryCostUsd = null,
   } = input;
 
+  /**
+   * A cell's value: the typed one when there is one, else the calculated one.
+   *
+   * Both are recorded as they are resolved, so the screen can show what the
+   * figure would be if the override were cleared. A number nobody can put back
+   * is a number nobody can trust.
+   */
+  const overridden: OverrideKey[] = [];
+  const calculated: Partial<Record<OverrideKey, number | string | null>> = {};
+  const pick = (key: OverrideKey, computed: number | null): number | null => {
+    const typed = numericOverride(overrides, key);
+    if (typed == null) return computed;
+    overridden.push(key);
+    calculated[key] = computed;
+    return typed;
+  };
+  const pickText = (key: OverrideKey, computed: string | null): string | null => {
+    const typed = textOverride(overrides, key);
+    if (typed == null) return computed;
+    overridden.push(key);
+    calculated[key] = computed;
+    return typed;
+  };
+
+  // --- Quantities --------------------------------------------------------
+  // Overridden first, because everything downstream counts them.
+  const orderQty = pick('orderQty', orderQtyIn) ?? 0;
+  const cutQty = pick('cutQty', cutQtyIn) ?? 0;
+  const shippedQty = pick('shippedQty', shippedQtyIn);
+  const firstDegreeQty = pick('firstDegreeQty', firstDegreeIn);
+  const secondDegreeQty = pick('secondDegreeQty', secondDegreeIn);
+  const sellPriceUsd = pick('sellPriceUsd', sellPriceIn);
+
   // --- Machine economics -------------------------------------------------
-  // Actual Costing!D16/D17/D18, unchanged: cost per machine-day, the factory
-  // days this order consumed, and pieces cut per factory day.
-  const machineCostEgpPerDay = safeDiv(dailyCostEgp, machineCount);
-  const workDays = safeDiv(machineDaysUsed, machineCount);
-  const productivityRate = safeDiv(cutQty, workDays);
+  // Actual Costing!D16/D17/D18: cost per machine-day, the factory days this
+  // order consumed, and pieces cut per factory day.
+  const machineCostEgpPerDay = pick('machineCostEgpPerDay', safeDiv(dailyCostEgp, machineCount));
+  const workDays = pick('workDays', safeDiv(machineDaysUsed, machineCount));
+  const productivityRate = pick('productivityRate', safeDiv(cutQty, workDays));
 
   // --- Line costs --------------------------------------------------------
   const priced: Array<CostLineInput & { cost: number | null }> = lines.map((l) => ({
@@ -217,8 +277,8 @@ export function computeCosting(input: CostingInput): CostingResult {
   const accessoryLines = byGroup('ACCESSORY');
   const otherLines = byGroup('OTHER');
 
-  const fabricCostUsd = totalOf(fabricLines);
-  const accessoryCostUsd = totalOf(accessoryLines);
+  const fabricCostUsd = pick('fabricCostUsd', totalOf(fabricLines));
+  const accessoryCostUsd = pick('accessoryCostUsd', totalOf(accessoryLines));
   const otherCostUsd = totalOf(otherLines);
 
   const resolvedSublimation = sublimationCostUsd ?? totalOf(sublimationLines);
@@ -231,60 +291,75 @@ export function computeCosting(input: CostingInput): CostingResult {
   // CM: the sheet's `=D17*D13` — factory days × daily running cost, in EGP,
   // converted at the rate stored with the costing.
   const cmCostEgp = workDays != null && dailyCostEgp != null ? workDays * dailyCostEgp : null;
-  const cmCostUsd = safeDiv(cmCostEgp, dollarRate);
+  const cmCostUsd = pick('cmCostUsd', safeDiv(cmCostEgp, dollarRate));
 
   const costParts = [fabricCostUsd, accessoryCostUsd, externalCostUsd, cmCostUsd, otherCostUsd];
-  const totalCostUsd = costParts.every((p) => p == null) ? null : sum(costParts);
+  const totalCostUsd = pick('totalCostUsd', costParts.every((p) => p == null) ? null : sum(costParts));
 
   const withPct = (l: CostLineInput & { cost: number | null }): CostLineResult => ({
     ...l, pctOfTotal: safePct(l.cost, totalCostUsd),
   });
   const linesOut: CostLineResult[] = priced.map(withPct);
 
-  const section = (group: readonly (CostLineInput & { cost: number | null })[]): CostingSection => {
-    const total = totalOf(group);
-    return { lines: group.map(withPct), total, pctOfTotal: safePct(total, totalCostUsd) };
-  };
+  const section = (
+    group: readonly (CostLineInput & { cost: number | null })[],
+    total: number | null,
+  ): CostingSection => ({
+    lines: group.map(withPct), total, pctOfTotal: safePct(total, totalCostUsd),
+  });
 
   const groups: CostingGroups = {
-    fabric: section(fabricLines),
-    accessory: section(accessoryLines),
-    external: section(otherExternalLines),
-    other: section(otherLines),
+    fabric: section(fabricLines, fabricCostUsd),
+    accessory: section(accessoryLines, accessoryCostUsd),
+    external: section(otherExternalLines, otherExternalCostUsd),
+    other: section(otherLines, otherCostUsd),
   };
 
   // --- Per unit ----------------------------------------------------------
   // The sheet divides by shipped qty and blows up when it is blank. We divide
   // by shipped qty when known, and fall back to nothing — not to cut qty —
   // because a unit cost against an assumed denominator is worse than none.
-  const unitActualCostUsd = safeDiv(totalCostUsd, shippedQty);
+  const unitActualCostUsd = pick('unitActualCostUsd', safeDiv(totalCostUsd, shippedQty));
   const unitActualCostEgp =
     unitActualCostUsd != null && dollarRate != null ? unitActualCostUsd * dollarRate : null;
 
-  const profitPerUnitUsd =
-    sellPriceUsd != null && unitActualCostUsd != null ? sellPriceUsd - unitActualCostUsd : null;
-  const profitPct = safePct(profitPerUnitUsd, sellPriceUsd);
+  const profitPerUnitUsd = pick(
+    'profitPerUnitUsd',
+    sellPriceUsd != null && unitActualCostUsd != null ? sellPriceUsd - unitActualCostUsd : null,
+  );
+  const profitPct = pick('profitPct', safePct(profitPerUnitUsd, sellPriceUsd));
   const totalProfitUsd =
     profitPerUnitUsd != null && shippedQty != null ? profitPerUnitUsd * shippedQty : null;
 
   const isProfitable = profitPerUnitUsd == null ? null : profitPerUnitUsd > 0;
-  const targetPriceUsd =
+  const targetPriceUsd = pick(
+    'targetPriceUsd',
     profitPerUnitUsd != null && profitPerUnitUsd <= 0 && unitActualCostUsd != null
       ? unitActualCostUsd * 1.2
-      : null;
+      : null,
+  );
 
   // The sheet's Diff. Percentage is `=(L11/J11)-100%`: signed distance from the
   // order, not the fraction of it. Shipping 900 of 1,000 reads −10%.
   const shippedShare = shippedQty != null ? safePct(shippedQty, orderQty) : null;
+  const diffPct = pick('diffPct', shippedShare == null ? null : shippedShare - 100);
 
   return {
+    overridden, calculated,
+    identity: {
+      customer: pickText('customer', input.customer ?? null),
+      orderName: pickText('orderName', input.orderName ?? null),
+      itemType: pickText('itemType', input.itemType ?? null),
+      poNumber: pickText('poNumber', input.poNumber ?? null),
+      styleNumber: pickText('styleNumber', input.styleNumber ?? null),
+    },
     hasRecord: input.hasRecord ?? true,
     costingDate: input.costingDate ?? null,
     dollarRate, dailyCostEgp, machineCount, machineDaysUsed,
     notes: input.notes ?? null,
     orderQty, cutQty, shippedQty,
     firstDegreeQty, secondDegreeQty,
-    diffPct: shippedShare == null ? null : shippedShare - 100,
+    diffPct,
     shippedVsOrderedPct: shippedShare,
     machineCostEgpPerDay, workDays, productivityRate,
     lineMachineQty, daysInLine,

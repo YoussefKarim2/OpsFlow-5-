@@ -1107,6 +1107,16 @@ model CostingRecord {
   /// the other, and nothing else in the application records it.
   lineMachineQty         Int?
   productionLineMachines Json?
+  /// Figures typed straight over the calculated cells of the costing sheet,
+  /// keyed by cell. Kept apart from the facts they override — the ledgers, the
+  /// bill of materials and the order are never rewritten by a costing edit —
+  /// so clearing one falls back to the live number. The key list lives in
+  /// @opsflow/shared and anything outside it is dropped on write.
+  overrides              Json?
+  /// Derived costing rows the coordinator has removed from this sheet, by
+  /// their `sourceRef`. Without it a row deleted here would be recreated by
+  /// the next recomputation, which would read as the delete not having worked.
+  hiddenCostRefs         String[]   @default([])
   sublimationCostUsd     Decimal?   @db.Decimal(14, 4)
   embroideryCostUsd      Decimal?   @db.Decimal(14, 4)
   externalOpCostUsd      Decimal?   @db.Decimal(14, 4)

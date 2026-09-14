@@ -12,31 +12,40 @@
  * is typed; this is read. The customer, the style, the order and shipped
  * quantities, the materials and their prices all come from the sections that
  * already record them, so the costing is the cost of what actually happened
- * rather than a second set of figures somebody retyped. Only the factory's own
- * inputs — the dollar rate, the daily cost, the machine counts — are typed
- * here, because nothing else in the application knows them.
+ * rather than a second set of figures somebody retyped.
  *
- * And the five `#DIV/0!` cells the live workbook shows today never appear.
- * Every division goes through `safeDiv` in @opsflow/shared and renders as
+ * But every cell can still be written by hand, calculated ones included — a
+ * coordinator reconciling against an invoice has to be able to put the
+ * invoice's number in the cell. Typing here never rewrites the facts
+ * underneath: the ledgers, the bill of materials and the order stay exactly as
+ * production recorded them, the typed figure is stored separately, the cell is
+ * marked as overridden and carries the calculated value, and one click puts it
+ * back. Overrides cascade the way a spreadsheet does.
+ *
+ * The five `#DIV/0!` cells the live workbook shows today never appear. Every
+ * division goes through `safeDiv` in @opsflow/shared and renders as
  * "Not calculated", with a note saying which fact is missing.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Printer, RotateCcw, Save } from 'lucide-react';
+import { Plus, Printer, RotateCcw, Save, Trash2 } from 'lucide-react';
 import {
   fmtDate, fmtMoney, fmtNumber, fmtPct, NOT_CALCULATED,
-  type CostLineResult, type OrderDetailDto,
+  type OrderDetailDto, type OverrideKey,
 } from '@opsflow/shared';
 import { api, type CostLineDto, type CostingDto } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { SheetCell } from './SheetCell';
 import { ErrorNote, clsx } from './ui';
 
 /** The six columns of the costing table, as the sheet prints them. */
 const COLUMNS = ['Item', 'Actual Cons.', 'Unit', 'Unite Price', 'Cost', 'Percentage'] as const;
 
-/** The factory's own numbers — the only cells on this sheet a person types. */
-interface Draft {
+type Group = CostLineDto['group'];
+
+/** The figures stored in their own columns, as opposed to typed over a formula. */
+interface Stored {
   costingDate: string;
   dollarRate: string;
   dailyCostEgp: string;
@@ -49,9 +58,23 @@ interface Draft {
   notes: string;
 }
 
+/** One row of the costing table, while it is being edited. */
+interface RowDraft {
+  key: string;
+  group: Group;
+  label: string;
+  quantity: string;
+  unit: string;
+  unitPrice: string;
+  /** Where it came from, when it came from somewhere. */
+  sourceRef: string | null;
+  /** True while it is still the derivation's row and nobody has touched it. */
+  derived: boolean;
+}
+
 const numText = (v: number | null | undefined): string => (v == null ? '' : String(v));
 
-function draftFrom(record: CostingDto | null): Draft {
+function storedFrom(record: CostingDto | null): Stored {
   return {
     costingDate: record?.costingDate?.slice(0, 10) ?? '',
     dollarRate: numText(record?.dollarRate),
@@ -64,6 +87,32 @@ function draftFrom(record: CostingDto | null): Draft {
     embroideryCostUsd: numText(record?.embroideryCostUsd),
     notes: record?.notes ?? '',
   };
+}
+
+function overridesFrom(record: CostingDto | null): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(record?.overrides ?? {})) {
+    if (v != null) out[k] = String(v);
+  }
+  return out;
+}
+
+function rowsFrom(record: CostingDto | null, derived: CostLineDto[]): RowDraft[] {
+  const stored = record?.lines ?? [];
+  // Before the first save there is nothing stored, so the table shows what the
+  // production sections would contribute — the screen is demonstrably working
+  // rather than empty, and saving is what commits those rows.
+  const source = stored.length > 0 ? stored : derived.map((d) => ({ ...d, source: 'DERIVED' as const }));
+  return source.map((l, i) => ({
+    key: l.id ?? `${l.sourceRef ?? 'row'}-${i}`,
+    group: l.group,
+    label: l.label,
+    quantity: numText(l.quantity),
+    unit: l.unit,
+    unitPrice: numText(l.unitPriceUsd),
+    sourceRef: l.sourceRef ?? null,
+    derived: l.source !== 'MANUAL',
+  }));
 }
 
 /** Empty means "nobody has said", which is not the same as zero. */
@@ -87,8 +136,13 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
   });
 
   const record = costing.data?.data ?? null;
-  const [draft, setDraft] = useState<Draft>(() => draftFrom(record));
-  const [baseline, setBaseline] = useState<Draft>(() => draftFrom(record));
+  const derivedLines = useMemo(() => costing.data?.derived ?? [], [costing.data]);
+
+  const [stored, setStored] = useState<Stored>(() => storedFrom(record));
+  const [over, setOver] = useState<Record<string, string>>(() => overridesFrom(record));
+  const [rows, setRows] = useState<RowDraft[]>(() => rowsFrom(record, derivedLines));
+  const [hidden, setHidden] = useState<string[]>(() => record?.hiddenCostRefs ?? []);
+  const [baseline, setBaseline] = useState('');
 
   // Re-seed when the server's copy actually changes — including when the user
   // switches to a different order, which replaces the data without remounting.
@@ -96,66 +150,117 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
   // Keyed on the values rather than the object: the query refetches in the
   // background and hands back a new object every time, which would throw away
   // whatever the coordinator was in the middle of typing.
-  const serverState = `${order.id}|${JSON.stringify(draftFrom(record))}`;
+  const serverState = JSON.stringify([
+    order.id, storedFrom(record), overridesFrom(record),
+    rowsFrom(record, derivedLines), record?.hiddenCostRefs ?? [],
+  ]);
   useEffect(() => {
-    const next = draftFrom(record);
-    setDraft(next);
-    setBaseline(next);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const [, s, o, r, h] = JSON.parse(serverState) as
+      [string, Stored, Record<string, string>, RowDraft[], string[]];
+    setStored(s); setOver(o); setRows(r); setHidden(h);
+    setBaseline(JSON.stringify([s, o, r, h]));
   }, [serverState]);
 
-  const dirty = useMemo(
-    () => (Object.keys(draft) as Array<keyof Draft>).some((k) => draft[k] !== baseline[k]),
-    [draft, baseline],
-  );
+  const current = JSON.stringify([stored, over, rows, hidden]);
+  const dirty = baseline !== '' && current !== baseline;
 
   const save = useMutation({
     mutationFn: () => api.steps.saveCosting(order.id, {
-      costingDate: draft.costingDate || null,
-      dollarRate: asNumber(draft.dollarRate) ?? undefined,
-      dailyCostEgp: asNumber(draft.dailyCostEgp),
-      machineCount: asNumber(draft.machineCount),
-      lineMachineQty: asNumber(draft.lineMachineQty),
-      daysInLine: asNumber(draft.daysInLine),
-      machineDaysUsed: asNumber(draft.machineDaysUsed),
-      sublimationCostUsd: asNumber(draft.sublimationCostUsd),
-      embroideryCostUsd: asNumber(draft.embroideryCostUsd),
-      notes: draft.notes || null,
-      // Derived lines are recomputed server-side on every save; only the
-      // hand-entered ones are sent back, or they would be lost.
-      manualLines: (record?.lines ?? [])
-        .filter((l) => l.source === 'MANUAL')
-        .map((l) => ({
-          group: l.group, label: l.label, quantity: l.quantity,
-          unit: l.unit, unitPriceUsd: l.unitPriceUsd, note: l.note ?? null,
+      costingDate: stored.costingDate || null,
+      dollarRate: asNumber(stored.dollarRate) ?? undefined,
+      dailyCostEgp: asNumber(stored.dailyCostEgp),
+      machineCount: asNumber(stored.machineCount),
+      lineMachineQty: asNumber(stored.lineMachineQty),
+      daysInLine: asNumber(stored.daysInLine),
+      machineDaysUsed: asNumber(stored.machineDaysUsed),
+      sublimationCostUsd: asNumber(stored.sublimationCostUsd),
+      embroideryCostUsd: asNumber(stored.embroideryCostUsd),
+      notes: stored.notes || null,
+      overrides: over,
+      hiddenCostRefs: hidden,
+      // Rows the derivation should stop producing: everything somebody has
+      // touched or added. A row still marked derived is left to it, so it goes
+      // on following the bill of materials.
+      manualLines: rows
+        .filter((r) => !r.derived && r.label.trim() !== '')
+        .map((r) => ({
+          group: r.group,
+          label: r.label.trim(),
+          quantity: asNumber(r.quantity),
+          unit: r.unit.trim() || 'LOT',
+          unitPriceUsd: asNumber(r.unitPrice),
+          sourceRef: r.sourceRef,
         })),
     }),
     onSuccess: () => {
-      setBaseline(draft);
       void qc.invalidateQueries({ queryKey: ['costing', order.id] });
       void qc.invalidateQueries({ queryKey: ['order', order.id] });
     },
   });
 
-  const set = (key: keyof Draft) => (value: string) => setDraft((d) => ({ ...d, [key]: value }));
+  const setField = (key: keyof Stored) => (v: string) => setStored((s) => ({ ...s, [key]: v }));
+  const setOverride = (key: OverrideKey) => (v: string) =>
+    setOver((o) => (v.trim() === '' ? drop(o, key) : { ...o, [key]: v }));
+  const revert = (key: OverrideKey) => () => setOver((o) => drop(o, key));
 
-  // Before the first save the table shows what the production sections would
-  // contribute, so the screen is demonstrably working rather than blank.
-  const stored = c.lines;
-  const fallback: CostLineResult[] = (costing.data?.derived ?? []).map((l: CostLineDto) => ({
-    group: l.group, label: l.label, quantity: l.quantity, unit: l.unit,
-    unitPriceUsd: l.unitPriceUsd, sourceRef: l.sourceRef ?? null,
-    cost: l.quantity != null && l.unitPriceUsd != null ? l.quantity * l.unitPriceUsd : null,
-    pctOfTotal: null,
-  }));
-  const showingProposed = stored.length === 0 && fallback.length > 0;
+  /** A cell that overrides a calculated figure. */
+  const cell = (
+    key: OverrideKey, calculated: number | string | null,
+    kind: 'money' | 'percent' | 'number' | 'text',
+    opts: {
+      places?: number; className?: string; align?: 'right' | 'center';
+      colSpan?: number; label?: string;
+    } = {},
+  ) => (
+    <SheetCell
+      value={over[key] ?? ''}
+      calculated={calculated}
+      kind={kind}
+      places={opts.places}
+      editable={editable}
+      align={opts.align ?? (kind === 'text' ? 'center' : 'right')}
+      className={clsx(opts.className, over[key] != null && 'bg-violet-50')}
+      colSpan={opts.colSpan}
+      label={opts.label}
+      onChange={setOverride(key)}
+      onRevert={revert(key)}
+    />
+  );
 
-  const fabric = showingProposed ? fallback.filter((l) => l.group === 'FABRIC') : c.groups.fabric.lines;
-  const accessory = showingProposed ? fallback.filter((l) => l.group === 'ACCESSORY') : c.groups.accessory.lines;
-  const otherExternal = showingProposed
-    ? fallback.filter((l) => l.group === 'EXTERNAL')
-    : c.groups.external.lines;
-  const otherLines = showingProposed ? fallback.filter((l) => l.group === 'OTHER') : c.groups.other.lines;
+  const editRow = (key: string, patch: Partial<RowDraft>) =>
+    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch, derived: false } : r)));
+
+  const deleteRow = (row: RowDraft) => {
+    setRows((rs) => rs.filter((r) => r.key !== row.key));
+    // A derived row would be recreated by the next recomputation unless the
+    // costing remembers it was removed.
+    if (row.sourceRef) setHidden((h) => (h.includes(row.sourceRef!) ? h : [...h, row.sourceRef!]));
+  };
+
+  const addRow = (group: Group) =>
+    setRows((rs) => [...rs, {
+      key: `new-${Date.now()}-${rs.length}`,
+      group, label: '', quantity: '', unit: group === 'FABRIC' ? 'MET' : 'PCS',
+      unitPrice: '', sourceRef: null, derived: false,
+    }]);
+
+  const fabricRows = rows.filter((r) => r.group === 'FABRIC');
+  const accessoryRows = rows.filter((r) => r.group === 'ACCESSORY');
+  const otherRows = rows.filter((r) => r.group !== 'FABRIC' && r.group !== 'ACCESSORY');
+
+  /** Live arithmetic for a row being edited, so the sheet adds up as you type. */
+  const rowCost = (r: RowDraft): number | null => {
+    const q = asNumber(r.quantity), p = asNumber(r.unitPrice);
+    return q == null || p == null ? null : q * p;
+  };
+  const groupTotal = (rs: RowDraft[]): number | null => {
+    const costs = rs.map(rowCost).filter((v): v is number => v != null);
+    return costs.length === 0 ? null : costs.reduce((a, b) => a + b, 0);
+  };
+
+  const liveFabric = groupTotal(fabricRows);
+  const liveAccessory = groupTotal(accessoryRows);
+  const displayTotal = asNumber(over.totalCostUsd ?? '') ?? c.totalCostUsd;
 
   return (
     <div className="space-y-3 p-5">
@@ -170,7 +275,11 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
               <button
                 className="btn-ghost btn-sm"
                 disabled={!dirty || save.isPending}
-                onClick={() => setDraft(baseline)}
+                onClick={() => {
+                  const [s, o, r, h] = JSON.parse(baseline) as
+                    [Stored, Record<string, string>, RowDraft[], string[]];
+                  setStored(s); setOver(o); setRows(r); setHidden(h);
+                }}
               >
                 <RotateCcw className="h-3.5 w-3.5" /> Discard
               </button>
@@ -187,11 +296,19 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
       </div>
 
       {save.isError && <ErrorNote error={save.error} />}
+      {c.overridden.length > 0 && (
+        <p className="no-print text-2xs text-violet-700">
+          {c.overridden.length} cell{c.overridden.length === 1 ? '' : 's'} on this sheet
+          {c.overridden.length === 1 ? ' is' : ' are'} showing a typed figure instead of the
+          calculated one. They are outlined; hover one to see what it would say, or use its
+          revert arrow to put it back.
+        </p>
+      )}
 
       <MissingNotes order={order} />
 
       <div className="print-document overflow-x-auto border border-ink-400 bg-white">
-        <table className="xl min-w-[62rem]">
+        <table className="xl min-w-[64rem]">
           <colgroup>
             <col className="w-[13%]" /><col className="w-[20%]" />
             <col className="w-[13%]" /><col className="w-[14%]" />
@@ -200,92 +317,102 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
           </colgroup>
 
           <tbody>
-            {/* ── Title ─────────────────────────────────────────────────── */}
-            <tr>
-              <td className="xl-banner" colSpan={7}>Actual Costing_Coordinator</td>
-            </tr>
+            <tr><td className="xl-banner" colSpan={7}>Actual Costing_Coordinator</td></tr>
 
             {/* ── Header: identity · machines · money ───────────────────── */}
-            <HeaderRow
-              left={['Date', c.costingDate ? fmtDate(c.costingDate) : fmtDate(order.poDate)]}
-              mid={['Dollar Rate', editable
-                ? <Cell value={draft.dollarRate} onChange={set('dollarRate')} placeholder="EGP/$" step="0.0001" />
-                : <ReadOnly text={fmtNumber(c.dollarRate, { places: 2 })} />]}
-              right={['Daily Cost', editable
-                ? <Cell value={draft.dailyCostEgp} onChange={set('dailyCostEgp')} placeholder="EGP/day" step="0.01" />
-                : <ReadOnly text={fmtNumber(c.dailyCostEgp, { places: 2 })} />]}
-            />
-            <HeaderRow
-              left={['Customer', order.client.name]}
-              mid={['All F. Machines', editable
-                ? <Cell value={draft.machineCount} onChange={set('machineCount')} step="1" />
-                : <ReadOnly text={fmtNumber(c.machineCount)} />]}
-              right={['Sell Price', <Calc key="sp" text={fmtMoney(c.sellPriceUsd)} />]}
-            />
-            <HeaderRow
-              left={['Order Name', order.orderName]}
-              mid={['Machine Cost', <Calc key="mc" text={
-                c.machineCostEgpPerDay == null ? NOT_CALCULATED : `${fmtNumber(c.machineCostEgpPerDay, { places: 2 })} EGP`
-              } />]}
-              right={['Actual Cost/Unit', <Calc key="acu" text={fmtMoney(c.unitActualCostUsd)} />]}
-            />
-            <HeaderRow
-              left={['Item Type', order.itemType]}
-              mid={['Line Machines Qty', editable
-                ? <Cell value={draft.lineMachineQty} onChange={set('lineMachineQty')} step="1" />
-                : <ReadOnly text={fmtNumber(c.lineMachineQty)} />]}
-              right={['Profit', <Result key="pf" text={fmtMoney(c.profitPerUnitUsd)} tone={c.isProfitable} />]}
-            />
-            <HeaderRow
-              left={['Po No', order.poNumber]}
-              mid={['Days in line', editable
-                ? <Cell value={draft.daysInLine} onChange={set('daysInLine')} step="1" />
-                : <ReadOnly text={fmtNumber(c.daysInLine)} />]}
-              right={['Pro. Percentage', <Result key="pp" text={fmtPct(c.profitPct, 1)} tone={c.isProfitable} />]}
-            />
-            <HeaderRow
-              left={['Style No', order.styleNumber]}
-              mid={['Machine Already Used', editable
-                ? <Cell value={draft.machineDaysUsed} onChange={set('machineDaysUsed')} step="1" />
-                : <ReadOnly text={fmtNumber(c.machineDaysUsed)} />]}
-              right={['Perfect price', <Result key="tp" text={
-                // The sheet's `=IF(profit<=0, cost×1.2, "Perfect")`: a price
-                // that would restore a 20% margin, or the word when there is
-                // nothing to fix.
-                c.targetPriceUsd != null ? fmtMoney(c.targetPriceUsd)
-                  : c.isProfitable === true ? 'Perfect'
-                  : NOT_CALCULATED
-              } tone={c.isProfitable} />]}
-            />
+            <tr>
+              <td className="xl-label">Date</td>
+              <td className="xl-input p-0">
+                {editable ? (
+                  <input
+                    type="date"
+                    className="w-full border-0 bg-transparent px-2 py-1 text-center text-xs
+                               focus:bg-white focus:outline-none focus:ring-1 focus:ring-inset focus:ring-accent-500"
+                    value={stored.costingDate}
+                    onChange={(e) => setField('costingDate')(e.target.value)}
+                  />
+                ) : (
+                  <span className="block px-2 py-1 text-center">
+                    {fmtDate(c.costingDate ?? order.poDate)}
+                  </span>
+                )}
+              </td>
+              <td className="xl-label">Dollar Rate</td>
+              <Stored2 value={stored.dollarRate} onChange={setField('dollarRate')} editable={editable} placeholder="EGP/$" />
+              <td className="xl-label">Daily Cost</td>
+              <Stored2 value={stored.dailyCostEgp} onChange={setField('dailyCostEgp')} editable={editable} placeholder="EGP/day" colSpan={2} />
+            </tr>
+            <tr>
+              <td className="xl-label">Customer</td>
+              {cell('customer', order.client.name, 'text')}
+              <td className="xl-label">All F. Machines</td>
+              <Stored2 value={stored.machineCount} onChange={setField('machineCount')} editable={editable} />
+              <td className="xl-label">Sell Price</td>
+              {cell('sellPriceUsd', c.sellPriceUsd, 'money', { colSpan: 2 })}
+            </tr>
+            <tr>
+              <td className="xl-label">Order Name</td>
+              {cell('orderName', order.orderName, 'text')}
+              <td className="xl-label">Machine Cost</td>
+              {cell('machineCostEgpPerDay', c.machineCostEgpPerDay, 'number', { places: 2 })}
+              <td className="xl-label">Actual Cost/Unit</td>
+              {cell('unitActualCostUsd', c.unitActualCostUsd, 'money', { colSpan: 2 })}
+            </tr>
+            <tr>
+              <td className="xl-label">Item Type</td>
+              {cell('itemType', order.itemType, 'text')}
+              <td className="xl-label">Line Machines Qty</td>
+              <Stored2 value={stored.lineMachineQty} onChange={setField('lineMachineQty')} editable={editable} />
+              <td className="xl-label">Profit</td>
+              {cell('profitPerUnitUsd', c.profitPerUnitUsd, 'money', {
+                className: clsx('bg-amber-100', c.isProfitable === false && 'text-red-700'),
+              })}
+              <td className="xl-calc text-2xs text-ink-500">
+                {c.isProfitable === true ? 'in profit' : c.isProfitable === false ? 'at a loss' : ''}
+              </td>
+            </tr>
+            <tr>
+              <td className="xl-label">Po No</td>
+              {cell('poNumber', order.poNumber, 'text')}
+              <td className="xl-label">Days in line</td>
+              <Stored2 value={stored.daysInLine} onChange={setField('daysInLine')} editable={editable} />
+              <td className="xl-label">Pro. Percentage</td>
+              {cell('profitPct', c.profitPct, 'percent', { className: 'bg-amber-100', colSpan: 2 })}
+            </tr>
+            <tr>
+              <td className="xl-label">Style No</td>
+              {cell('styleNumber', order.styleNumber, 'text')}
+              <td className="xl-label">Machine Already Used</td>
+              <Stored2 value={stored.machineDaysUsed} onChange={setField('machineDaysUsed')} editable={editable} />
+              <td className="xl-label">Perfect price</td>
+              {c.targetPriceUsd == null && over.targetPriceUsd == null && c.isProfitable === true ? (
+                <td className="xl-result" colSpan={2}>Perfect</td>
+              ) : (
+                cell('targetPriceUsd', c.targetPriceUsd, 'money', { className: 'bg-amber-100', colSpan: 2 })
+              )}
+            </tr>
 
             <tr><td className="h-1.5 border-0 bg-ink-50 p-0" colSpan={7} /></tr>
 
             {/* ── Production quantities ─────────────────────────────────── */}
             <tr>
               <td className="xl-label">Order Qty</td>
-              <td className="xl-qty">{fmtNumber(c.orderQty)}</td>
+              {cell('orderQty', c.orderQty, 'number', { className: 'bg-orange-100' })}
               <td className="xl-label">Shipped Qty</td>
-              <td className="xl-qty">{c.shippedQty == null ? '—' : fmtNumber(c.shippedQty)}</td>
+              {cell('shippedQty', c.shippedQty, 'number', { className: 'bg-orange-100' })}
               <td className="xl-label">Diff. Percentage</td>
-              <td className="xl-result">{c.diffPct == null ? NOT_CALCULATED : fmtPct(c.diffPct, 1)}</td>
-              <td className="xl-calc">
-                <span className="float-left font-semibold text-ink-800">Work Days</span>
-                {fmtNumber(c.workDays, { places: 1 })}
-              </td>
+              {cell('diffPct', c.diffPct, 'percent', { className: 'bg-amber-100' })}
+              {cell('workDays', c.workDays, 'number', { places: 1, className: 'bg-white', label: 'Work Days' })}
             </tr>
             <tr>
               <td className="xl-label">Cutted Qty</td>
-              <td className="xl-qty">{fmtNumber(c.cutQty)}</td>
+              {cell('cutQty', c.cutQty, 'number', { className: 'bg-orange-100' })}
               <td className="xl-label">1st Degree Qty</td>
-              <td className="xl-qty">{c.firstDegreeQty == null ? '—' : fmtNumber(c.firstDegreeQty)}</td>
+              {cell('firstDegreeQty', c.firstDegreeQty, 'number', { className: 'bg-orange-100' })}
               <td className="xl-label">2nd Degree Qty</td>
-              <td className="xl-qty">{c.secondDegreeQty == null ? '—' : fmtNumber(c.secondDegreeQty)}</td>
-              <td className="xl-calc">
-                <span className="float-left font-semibold text-ink-800">Productivity rate</span>
-                {fmtNumber(c.productivityRate)}
-              </td>
+              {cell('secondDegreeQty', c.secondDegreeQty, 'number', { className: 'bg-orange-100' })}
+              {cell('productivityRate', c.productivityRate, 'number', { className: 'bg-white', label: 'Productivity' })}
             </tr>
-
             {/* ── Costing table ────────────────────────────────────────── */}
             <tr>
               {COLUMNS.map((h, i) => (
@@ -293,53 +420,77 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
               ))}
             </tr>
 
-            <Section
+            <RowBlock
               caption="UsedFabric"
-              lines={fabric}
-              emptyText="No fabric on the bill of materials yet"
+              rows={fabricRows}
+              total={displayTotal}
+              editable={editable}
+              onEdit={editRow}
+              onDelete={deleteRow}
+              onAdd={() => addRow('FABRIC')}
+              rowCost={rowCost}
             />
             <SubtotalRow
               label="Fabric Costing"
-              cost={showingProposed ? null : c.groups.fabric.total}
-              pct={showingProposed ? null : c.groups.fabric.pctOfTotal}
+              cost={liveFabric}
+              total={displayTotal}
+              overrideValue={over.fabricCostUsd ?? ''}
+              calculated={c.groups.fabric.total}
+              editable={editable}
+              onChange={setOverride('fabricCostUsd')}
+              onRevert={revert('fabricCostUsd')}
             />
 
-            <Section
+            <RowBlock
               caption="UsedAcc"
-              lines={accessory}
-              emptyText="No accessories on the bill of materials yet"
+              rows={accessoryRows}
+              total={displayTotal}
+              editable={editable}
+              onEdit={editRow}
+              onDelete={deleteRow}
+              onAdd={() => addRow('ACCESSORY')}
+              rowCost={rowCost}
             />
             <SubtotalRow
               label="Accesory Costing"
-              cost={showingProposed ? null : c.groups.accessory.total}
-              pct={showingProposed ? null : c.groups.accessory.pctOfTotal}
+              cost={liveAccessory}
+              total={displayTotal}
+              overrideValue={over.accessoryCostUsd ?? ''}
+              calculated={c.groups.accessory.total}
+              editable={editable}
+              onChange={setOverride('accessoryCostUsd')}
+              onRevert={revert('accessoryCostUsd')}
             />
 
             {/* Outside work. The sheet prints two fixed rows; OpsFlow records
                 whatever operations an order actually sent out, so anything
                 beyond those two is listed rather than folded away. */}
             <ExternalRow
-              label="Sublimation"
-              cost={c.sublimationCostUsd}
-              total={c.totalCostUsd}
-              editable={editable}
-              draftValue={draft.sublimationCostUsd}
-              onChange={set('sublimationCostUsd')}
+              label="Sublimation" cost={c.sublimationCostUsd} total={displayTotal}
+              editable={editable} value={stored.sublimationCostUsd}
+              onChange={setField('sublimationCostUsd')}
             />
             <ExternalRow
-              label="Embroidery"
-              cost={c.embroideryCostUsd}
-              total={c.totalCostUsd}
-              editable={editable}
-              draftValue={draft.embroideryCostUsd}
-              onChange={set('embroideryCostUsd')}
+              label="Embroidery" cost={c.embroideryCostUsd} total={displayTotal}
+              editable={editable} value={stored.embroideryCostUsd}
+              onChange={setField('embroideryCostUsd')}
             />
-            {otherExternal.map((l, i) => (
-              <LineRow key={`ext-${i}`} line={l} total={showingProposed ? null : c.totalCostUsd} />
+            {otherRows.map((r) => (
+              <EditableRow
+                key={r.key} row={r} total={displayTotal} editable={editable}
+                onEdit={editRow} onDelete={deleteRow} cost={rowCost(r)}
+              />
             ))}
-            {otherLines.map((l, i) => (
-              <LineRow key={`oth-${i}`} line={l} total={showingProposed ? null : c.totalCostUsd} />
-            ))}
+            {editable && (
+              <tr className="no-print">
+                <td className="xl-section" />
+                <td colSpan={6} className="p-1">
+                  <button className="btn-ghost btn-sm text-2xs" onClick={() => addRow('EXTERNAL')}>
+                    <Plus className="h-3 w-3" /> Add an outside-work or other cost
+                  </button>
+                </td>
+              </tr>
+            )}
 
             {/* C.M — the workbook's `=work days × daily cost`, converted. */}
             <tr className="xl-subtotal">
@@ -351,15 +502,15 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
                   ? NOT_CALCULATED
                   : fmtMoney(c.dailyCostEgp / c.dollarRate, '$', 4)}
               </td>
-              <td className="tnum text-right">{fmtMoney(c.cmCostUsd)}</td>
-              <td className="tnum text-right">{fmtPct(pctOf(c.cmCostUsd, c.totalCostUsd), 1)}</td>
+              {cell('cmCostUsd', c.cmCostUsd, 'money', { className: 'bg-ink-100' })}
+              <td className="tnum text-right">{fmtPct(pctOf(c.cmCostUsd, displayTotal), 1)}</td>
             </tr>
 
             <tr className="xl-total">
               <td colSpan={4}>Total</td>
               <td />
-              <td className="tnum text-right">{fmtMoney(c.totalCostUsd)}</td>
-              <td className="tnum text-right">{c.totalCostUsd == null ? NOT_CALCULATED : '100.0%'}</td>
+              {cell('totalCostUsd', c.totalCostUsd, 'money', { className: 'bg-ink-200 font-bold' })}
+              <td className="tnum text-right">{displayTotal == null ? NOT_CALCULATED : '100.0%'}</td>
             </tr>
 
             {/* ── Notes ────────────────────────────────────────────────── */}
@@ -371,8 +522,8 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
                     className="w-full resize-y border-0 bg-transparent px-2 py-1 text-xs text-ink-900
                                focus:bg-white focus:outline-none focus:ring-1 focus:ring-inset focus:ring-accent-500"
                     rows={2}
-                    value={draft.notes}
-                    onChange={(e) => setDraft((d) => ({ ...d, notes: e.target.value }))}
+                    value={stored.notes}
+                    onChange={(e) => setField('notes')(e.target.value)}
                     placeholder="Anything about this costing that the numbers do not say."
                   />
                 ) : (
@@ -383,15 +534,13 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
           </tbody>
         </table>
       </div>
-
-      {showingProposed && (
-        <p className="no-print text-2xs text-ink-500">
-          These material rows are what the bill of materials and the outside work currently support.
-          They are stored against the costing the first time it is saved.
-        </p>
-      )}
     </div>
   );
+}
+
+function drop(map: Record<string, string>, key: string): Record<string, string> {
+  const { [key]: _gone, ...rest } = map;
+  return rest;
 }
 
 /** cost ÷ total as a percentage, never a division by zero. */
@@ -400,37 +549,19 @@ function pctOf(part: number | null, whole: number | null): number | null {
   return (part / whole) * 100;
 }
 
-function HeaderRow({
-  left, mid, right,
+/** A cell backed by its own stored column rather than by an override. */
+function Stored2({
+  value, onChange, editable, placeholder, colSpan,
 }: {
-  left: [string, React.ReactNode];
-  mid: [string, React.ReactNode];
-  right: [string, React.ReactNode];
+  value: string; onChange: (v: string) => void; editable: boolean;
+  placeholder?: string; colSpan?: number;
 }) {
+  if (!editable) return <td className="xl-calc" colSpan={colSpan}>{value === '' ? '—' : value}</td>;
   return (
-    <tr>
-      <td className="xl-label">{left[0]}</td>
-      <td className="xl-calc text-center">{left[1] || '—'}</td>
-      <td className="xl-label">{mid[0]}</td>
-      {typeof mid[1] === 'string' ? <td className="xl-calc">{mid[1]}</td> : mid[1]}
-      <td className="xl-label">{right[0]}</td>
-      {typeof right[1] === 'string' ? <td className="xl-calc" colSpan={2}>{right[1]}</td> : right[1]}
-    </tr>
-  );
-}
-
-/** A cell the coordinator types into. */
-function Cell({
-  value, onChange, placeholder, step,
-}: {
-  value: string; onChange: (v: string) => void; placeholder?: string; step?: string;
-}) {
-  return (
-    <td className="xl-input">
+    <td className="xl-input" colSpan={colSpan}>
       <input
         type="number"
-        min={0}
-        step={step ?? 'any'}
+        step="any"
         value={value}
         placeholder={placeholder}
         onChange={(e) => onChange(e.target.value)}
@@ -439,87 +570,163 @@ function Cell({
   );
 }
 
-function ReadOnly({ text }: { text: string }) {
-  return <td className="xl-calc">{text}</td>;
-}
-
-function Calc({ text }: { text: string }) {
-  return <td className="xl-calc" colSpan={2}>{text}</td>;
-}
-
-function Result({ text, tone }: { text: string; tone: boolean | null }) {
-  return (
-    <td
-      className={clsx(
-        'xl-result',
-        tone === true && 'text-emerald-800',
-        tone === false && 'text-red-700',
-      )}
-      colSpan={2}
-    >
-      {text}
-    </td>
-  );
-}
-
-/** A block of material rows with the sheet's row-spanning caption on the left. */
-function Section({
-  caption, lines, emptyText,
+function RowBlock({
+  caption, rows, total, editable, onEdit, onDelete, onAdd, rowCost,
 }: {
-  caption: string; lines: readonly CostLineResult[]; emptyText: string;
+  caption: string;
+  rows: RowDraft[];
+  total: number | null;
+  editable: boolean;
+  onEdit: (key: string, patch: Partial<RowDraft>) => void;
+  onDelete: (row: RowDraft) => void;
+  onAdd: () => void;
+  rowCost: (r: RowDraft) => number | null;
 }) {
-  if (lines.length === 0) {
-    return (
-      <tr>
-        <td className="xl-section">{caption}</td>
-        <td className="px-2 py-1 text-2xs italic text-ink-400" colSpan={6}>{emptyText}</td>
-      </tr>
-    );
-  }
   return (
     <>
-      {lines.map((l, i) => (
-        <tr key={`${caption}-${i}`}>
-          {i === 0 && <td className="xl-section" rowSpan={lines.length}>{caption}</td>}
-          <td className="truncate text-ink-800" title={l.label}>{l.label}</td>
-          <td className="tnum text-right">{fmtNumber(l.quantity, { places: 2, fallback: '—' })}</td>
-          <td className="text-center text-ink-600">{l.unit || '—'}</td>
-          <td className="tnum text-right">
-            {l.unitPriceUsd == null ? '—' : fmtMoney(l.unitPriceUsd, '$', 4)}
-          </td>
-          <td className="tnum text-right">{l.cost == null ? '—' : fmtMoney(l.cost)}</td>
-          <td className="tnum text-right">
-            {l.pctOfTotal == null ? '—' : fmtPct(l.pctOfTotal, 1)}
+      {rows.length === 0 ? (
+        <tr>
+          <td className="xl-section">{caption}</td>
+          <td className="px-2 py-1 text-2xs italic text-ink-400" colSpan={6}>
+            Nothing on the bill of materials yet — add a row below, or record it there.
           </td>
         </tr>
-      ))}
+      ) : (
+        rows.map((r, i) => (
+          <EditableRow
+            key={r.key}
+            caption={i === 0 ? caption : undefined}
+            captionSpan={i === 0 ? rows.length : undefined}
+            spanned={i > 0}
+            row={r}
+            total={total}
+            editable={editable}
+            onEdit={onEdit}
+            onDelete={onDelete}
+            cost={rowCost(r)}
+          />
+        ))
+      )}
+      {editable && (
+        <tr className="no-print">
+          <td className="xl-section" />
+          <td colSpan={6} className="p-1">
+            <button className="btn-ghost btn-sm text-2xs" onClick={onAdd}>
+              <Plus className="h-3 w-3" /> Add a {caption === 'UsedFabric' ? 'fabric' : 'accessory'} row
+            </button>
+          </td>
+        </tr>
+      )}
     </>
   );
 }
 
-/** The "Fabric Costing" / "Accesory Costing" rows the sheet prints. */
-function SubtotalRow({ label, cost, pct }: { label: string; cost: number | null; pct: number | null }) {
+function EditableRow({
+  caption, captionSpan, spanned, row, total, editable, onEdit, onDelete, cost,
+}: {
+  caption?: string;
+  captionSpan?: number;
+  /** True when the caption column is already covered by a rowSpan above. */
+  spanned?: boolean;
+  row: RowDraft;
+  total: number | null;
+  editable: boolean;
+  onEdit: (key: string, patch: Partial<RowDraft>) => void;
+  onDelete: (row: RowDraft) => void;
+  cost: number | null;
+}) {
+  const cls = 'w-full border-0 bg-transparent px-2 py-1 text-xs text-ink-900 focus:bg-white '
+    + 'focus:outline-none focus:ring-1 focus:ring-inset focus:ring-accent-500';
+  const origin = row.sourceRef
+    ? row.derived ? `From ${explain(row.sourceRef)}` : `Edited — was from ${explain(row.sourceRef)}`
+    : 'Added by hand';
+
   return (
-    <tr className="xl-subtotal">
-      <td colSpan={5}>{label}</td>
-      <td className="tnum text-right">{cost == null ? NOT_CALCULATED : fmtMoney(cost)}</td>
-      <td className="tnum text-right">{pct == null ? '—' : fmtPct(pct, 1)}</td>
+    <tr className={clsx(!row.derived && row.sourceRef && 'bg-violet-50/40')}>
+      {caption !== undefined && <td className="xl-section" rowSpan={captionSpan}>{caption}</td>}
+      {caption === undefined && !spanned && <td className="xl-section" />}
+      <td className="p-0" title={origin}>
+        {editable
+          ? <input className={cls} value={row.label} placeholder="Item"
+                   onChange={(e) => onEdit(row.key, { label: e.target.value })} />
+          : <span className="block px-2 py-1">{row.label}</span>}
+      </td>
+      <td className="p-0">
+        {editable
+          ? <input className={clsx(cls, 'tnum text-right')} type="number" step="any" value={row.quantity}
+                   onChange={(e) => onEdit(row.key, { quantity: e.target.value })} />
+          : <span className="tnum block px-2 py-1 text-right">{row.quantity || '—'}</span>}
+      </td>
+      <td className="p-0">
+        {editable
+          ? <input className={clsx(cls, 'text-center')} value={row.unit}
+                   onChange={(e) => onEdit(row.key, { unit: e.target.value })} />
+          : <span className="block px-2 py-1 text-center">{row.unit}</span>}
+      </td>
+      <td className="p-0">
+        {editable
+          ? <input className={clsx(cls, 'tnum text-right')} type="number" step="any" value={row.unitPrice}
+                   onChange={(e) => onEdit(row.key, { unitPrice: e.target.value })} />
+          : <span className="tnum block px-2 py-1 text-right">{row.unitPrice || '—'}</span>}
+      </td>
+      <td className="tnum text-right">{cost == null ? '—' : fmtMoney(cost)}</td>
+      <td className="tnum relative text-right">
+        {fmtPct(pctOf(cost, total), 1)}
+        {editable && (
+          <button
+            type="button"
+            className="no-print absolute right-0.5 top-1/2 -translate-y-1/2 rounded p-0.5
+                       text-ink-400 hover:bg-red-50 hover:text-red-600"
+            title="Remove this row from the costing"
+            aria-label={`Remove ${row.label || 'this row'}`}
+            onClick={() => onDelete(row)}
+          >
+            <Trash2 className="h-3 w-3" />
+          </button>
+        )}
+      </td>
     </tr>
   );
 }
 
-function LineRow({ line, total }: { line: CostLineResult; total: number | null }) {
+/** "bom:FABRIC" → "the bill of materials · fabric". */
+function explain(ref: string): string {
+  const [section, detail] = ref.split(':');
+  const name = section === 'bom' ? 'the bill of materials'
+    : section === 'external' ? 'outside work'
+    : section === 'production' ? 'the production follow-up'
+    : section;
+  const tail = (detail ?? '').replace(/[_-]+/g, ' ').toLowerCase();
+  return tail ? `${name} · ${tail}` : name;
+}
+
+/** The "Fabric Costing" / "Accesory Costing" rows the sheet prints. */
+function SubtotalRow({
+  label, cost, total, overrideValue, calculated, editable, onChange, onRevert,
+}: {
+  label: string;
+  cost: number | null;
+  total: number | null;
+  overrideValue: string;
+  calculated: number | null;
+  editable: boolean;
+  onChange: (v: string) => void;
+  onRevert: () => void;
+}) {
+  const shown = overrideValue.trim() !== '' ? Number(overrideValue) : cost;
   return (
-    <tr>
-      <td className="xl-section" />
-      <td className="truncate text-ink-800" title={line.label}>{line.label}</td>
-      <td className="tnum text-right">{fmtNumber(line.quantity, { places: 2, fallback: '—' })}</td>
-      <td className="text-center text-ink-600">{line.unit || '—'}</td>
-      <td className="tnum text-right">
-        {line.unitPriceUsd == null ? '—' : fmtMoney(line.unitPriceUsd, '$', 4)}
-      </td>
-      <td className="tnum text-right">{line.cost == null ? '—' : fmtMoney(line.cost)}</td>
-      <td className="tnum text-right">{fmtPct(pctOf(line.cost, total), 1)}</td>
+    <tr className="xl-subtotal">
+      <td colSpan={5}>{label}</td>
+      <SheetCell
+        value={overrideValue}
+        calculated={calculated}
+        kind="money"
+        editable={editable}
+        className="bg-ink-100 font-semibold"
+        onChange={onChange}
+        onRevert={onRevert}
+      />
+      <td className="tnum text-right">{fmtPct(pctOf(shown, total), 1)}</td>
     </tr>
   );
 }
@@ -533,29 +740,22 @@ function LineRow({ line, total }: { line: CostLineResult; total: number | null }
  * sublimation twice is the kind of error a costing sheet exists to prevent.
  */
 function ExternalRow({
-  label, cost, total, editable, draftValue, onChange,
+  label, cost, total, editable, value, onChange,
 }: {
-  label: string;
-  cost: number | null;
-  total: number | null;
-  editable: boolean;
-  draftValue: string;
-  onChange: (v: string) => void;
+  label: string; cost: number | null; total: number | null;
+  editable: boolean; value: string; onChange: (v: string) => void;
 }) {
   return (
     <tr>
       <td className="xl-section" />
       <td className="font-medium text-ink-800">{label}</td>
       <td colSpan={2} className="text-center text-2xs text-ink-400">
-        {draftValue.trim() === '' && cost != null ? 'from outside work' : ''}
+        {value.trim() === '' && cost != null ? 'from outside work' : ''}
       </td>
       {editable ? (
         <td className="xl-input">
           <input
-            type="number"
-            min={0}
-            step="0.01"
-            value={draftValue}
+            type="number" min={0} step="0.01" value={value}
             placeholder={cost == null ? '' : String(cost)}
             onChange={(e) => onChange(e.target.value)}
           />
@@ -575,7 +775,7 @@ function Legend() {
       <Swatch className="bg-orange-100" label="Counted in production" />
       <Swatch className="bg-amber-100" label="Calculated result" />
       <Swatch className="bg-sky-50" label="Typed here" />
-      <Swatch className="bg-white" label="Read from the order" />
+      <Swatch className="bg-violet-50 ring-1 ring-inset ring-violet-400" label="Overridden — hover to see the calculated figure" />
     </div>
   );
 }
@@ -598,9 +798,12 @@ function Swatch({ className, label }: { className: string; label: string }) {
  */
 function MissingNotes({ order }: { order: OrderDetailDto }) {
   const c = order.costing;
+  const overridden = new Set<OverrideKey>(c.overridden);
   const missing: string[] = [];
-  if (c.shippedQty == null) missing.push('the shipped quantity (recorded on Packing & Shipping) — the unit cost, profit and difference percentage divide by it');
-  if (c.dailyCostEgp == null) missing.push("the factory's daily cost, typed on this sheet — the C.M cost is work days × daily cost");
+  if (c.shippedQty == null && !overridden.has('shippedQty')) {
+    missing.push('the shipped quantity (recorded on Packing & Shipping) — the unit cost, profit and difference percentage divide by it');
+  }
+  if (c.dailyCostEgp == null) missing.push("the factory's daily cost, typed on this sheet — C.M is work days × daily cost");
   if (c.machineCount == null) missing.push('the factory machine count, typed on this sheet — machine cost and work days divide by it');
   if (c.dollarRate == null) missing.push('the dollar rate, typed on this sheet — EGP figures convert through it');
   if (c.sellPriceUsd == null) missing.push('the price per piece (Order Details) — profit is the price less the unit cost');
@@ -609,7 +812,8 @@ function MissingNotes({ order }: { order: OrderDetailDto }) {
   return (
     <div className="no-print rounded-md border border-blue-200 bg-blue-50 px-4 py-3">
       <p className="text-xs font-medium text-blue-900">
-        Some cells read "{NOT_CALCULATED}" because these are not recorded yet:
+        Some cells read "{NOT_CALCULATED}" because these are not recorded yet — you can type
+        straight into any of them instead:
       </p>
       <ul className="mt-1 list-disc space-y-0.5 pl-5 text-2xs leading-relaxed text-blue-800">
         {missing.map((m) => <li key={m}>{m}</li>)}
