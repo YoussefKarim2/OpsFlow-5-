@@ -5,6 +5,7 @@ import { startEmailWorker, stopEmailWorker } from './services/email/email-queue.
 import { startAlertWorker, stopAlertWorker } from './services/alerts/alert-worker.js';
 import { startBackupWorker, stopBackupWorker } from './services/backup/backup-worker.js';
 import { installProcessGuards } from './process-guards.js';
+import { reconcileAllStockLedgers } from './services/stock-sync.js';
 
 async function main(): Promise<void> {
   await prisma.$connect();
@@ -20,6 +21,16 @@ async function main(): Promise<void> {
     startEmailWorker();
     startAlertWorker();
     startBackupWorker();
+
+    // Finished stock recorded before the Stock step and the quantity ledger
+    // were connected never reached the cut order. Settling those orders is a
+    // one-off that costs nothing once done, and it runs after the server is
+    // already listening so it cannot delay a health check.
+    void reconcileAllStockLedgers()
+      .then(({ scanned, corrected }) => {
+        if (corrected > 0) console.log(`  stock    → reconciled ${corrected} of ${scanned} orders with recorded stock`);
+      })
+      .catch((err) => console.error('[stock] reconcile failed:', err));
   });
 
   let shuttingDown = false;

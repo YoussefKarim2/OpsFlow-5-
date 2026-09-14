@@ -66,6 +66,11 @@ export function QuantityTab({
       setError(null);
       void qc.invalidateQueries({ queryKey: ['matrix', order.id] });
       void qc.invalidateQueries({ queryKey: ['order', order.id] });
+      // Stock entered here is the same stock the Stock step lists, and either
+      // one moves the cut order, so neither screen is left showing the old
+      // figure.
+      void qc.invalidateQueries({ queryKey: ['order-stock', order.id] });
+      void qc.invalidateQueries({ queryKey: ['order-steps', order.id] });
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not save.'),
   });

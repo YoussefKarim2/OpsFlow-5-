@@ -41,14 +41,16 @@ export function StockTab({ order }: { order: OrderDetailDto }) {
   });
 
   const { data: axes } = useQuery({
-    queryKey: ['order-matrix', orderId],
+    queryKey: ['matrix', orderId],
     queryFn: () => api.orders.matrix(orderId),
   });
 
   const refresh = () => {
     qc.invalidateQueries({ queryKey: ['order-stock', orderId] });
-    // Stock changes the cut order, so the whole derived order changes with it.
+    // Stock changes the cut order, so the whole derived order changes with it
+    // — including the quantity matrix, where the cut grid is read.
     qc.invalidateQueries({ queryKey: ['order', orderId] });
+    qc.invalidateQueries({ queryKey: ['matrix', orderId] });
     qc.invalidateQueries({ queryKey: ['order-steps', orderId] });
   };
 

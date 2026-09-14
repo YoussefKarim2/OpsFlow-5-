@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { QtyLedger } from '@opsflow/shared';
-import { CUT_ORDER_INPUT_LEDGERS } from './orders.js';
+import { CUT_ORDER_INPUT_LEDGERS } from '../services/cut-order.js';
 
 /**
  * The cut order is a stored snapshot of a calculation. It was generated once,

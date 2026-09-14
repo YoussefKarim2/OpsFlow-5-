@@ -14,8 +14,10 @@ import { asyncHandler } from '../util/async-handler.js';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 import {
   getOrderDetail, listOrders, refreshOrderCache, ORDER_INCLUDE,
-  buildOrderSummary, toTaskDto, deriveOrder, type FullOrder,
+  buildOrderSummary, toTaskDto, deriveOrder,
 } from '../services/order-service.js';
+import { CUT_ORDER_INPUT_LEDGERS, refreshCutOrder, writeCutOrder } from '../services/cut-order.js';
+import { applyLedgerToStockRecords } from '../services/stock-sync.js';
 import { materialiseWorkflow } from '../services/workflow-service.js';
 import { logActivity } from '../services/activity-service.js';
 import { announceChange } from '../services/change-service.js';
@@ -378,66 +380,6 @@ const setQtySchema = z.object({
   })),
 });
 
-/**
- * The ledgers the cut order is calculated from. Writing any of these leaves a
- * stored cut order out of date, so it is recalculated.
- *
- * CUT itself is deliberately absent: it is the output, it is read-only in the
- * app, and refreshing it in response to its own write would be a rewrite
- * chasing a rewrite.
- */
-export const CUT_ORDER_INPUT_LEDGERS: readonly string[] = [QtyLedger.ORDER, QtyLedger.STOCK];
-
-/**
- * Recalculate the CUT ledger from the order, its finished stock and its
- * allowance, and store the result. Returns the new cut total.
- *
- * The cut order is entirely derived — it is editable nowhere in the app — so a
- * rewrite here destroys nothing anybody typed.
- */
-async function writeCutOrder(order: FullOrder): Promise<{ total: number; before: number }> {
-  const d = deriveOrder(order);
-  const cutPct = Number(order.cutPercentage.toString());
-  const cutCells: QtyCell[] = computeCutMatrix(d.cells, d.colors, d.sizes, cutPct);
-
-  await prisma.$transaction(async (tx) => {
-    await tx.stageQuantity.deleteMany({ where: { orderId: order.id, ledger: 'CUT' } });
-    if (cutCells.length > 0) {
-      await tx.stageQuantity.createMany({
-        data: cutCells.map((c) => ({
-          orderId: order.id, orderColorId: c.colorId, orderSizeId: c.sizeId, ledger: 'CUT' as const, qty: c.qty,
-        })),
-      });
-    }
-  });
-
-  return { total: cutCells.reduce((a, c) => a + c.qty, 0), before: d.totals[QtyLedger.CUT] ?? 0 };
-}
-
-/**
- * Refresh a cut order that already exists, after one of its inputs moved.
- *
- * Recording finished stock and then finding the cut order unchanged is the
- * complaint this exists to answer: the figure had been calculated once and
- * stored, and nothing recalculated it.
- *
- * Only touches an order that has a cut order already. Generating one the first
- * time is a deliberate act — the Cut Order step has a button for it — and
- * conjuring one because somebody recorded stock would make that step look
- * finished before anyone had been near it. Returns null when there was nothing
- * to refresh.
- */
-async function refreshCutOrder(orderId: string): Promise<number | null> {
-  const existing = await prisma.stageQuantity.count({ where: { orderId, ledger: 'CUT' } });
-  if (existing === 0) return null;
-
-  const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
-  if (!order) return null;
-
-  const { total } = await writeCutOrder(order);
-  return total;
-}
-
 ordersRouter.put('/:id/matrix', requirePermission('order:edit'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   const { ledger, cells } = setQtySchema.parse(req.body);
@@ -471,6 +413,12 @@ ordersRouter.put('/:id/matrix', requirePermission('order:edit'), asyncHandler(as
   // the allowance. Change any of those and the stored figure is out of date, so
   // it is rebuilt here rather than waiting for someone to press the button
   // again — which is how stock came to be recorded and subtracted from nothing.
+  // Finished stock is recorded in two places — this grid and the Stock step —
+  // and they are the same fact, so whichever was used updates the other.
+  if (ledger === QtyLedger.STOCK) {
+    await applyLedgerToStockRecords(order.id);
+  }
+
   let refreshedCut: number | null = null;
   if (CUT_ORDER_INPUT_LEDGERS.includes(ledger)) {
     refreshedCut = await refreshCutOrder(order.id);

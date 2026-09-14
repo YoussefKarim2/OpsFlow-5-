@@ -36,6 +36,9 @@ import { storage } from '../services/storage/index.js';
 import { logActivity } from '../services/activity-service.js';
 import { sanitiseHtml } from '../util/sanitise-html.js';
 import { getOrderSteps, setStepStatus, markStepStarted } from '../services/step-service.js';
+import { refreshCutOrder } from '../services/cut-order.js';
+import { refreshOrderCache } from '../services/order-service.js';
+import { applyStockRecordsToLedger, orderAxisNames, resolveStockCell } from '../services/stock-sync.js';
 
 export const stepsRouter = Router();
 
@@ -505,20 +508,42 @@ stepsRouter.post('/:id/stock', requirePermission('order:edit'), asyncHandler(asy
     where: { orderId, colorName: body.colorName, sizeName: body.sizeName },
   });
 
+  // A colour or size that is not on this order names no cell of the matrix, so
+  // the stock could never be subtracted from anything. Refusing it here is the
+  // difference between a mistake somebody can see and a number that silently
+  // does nothing — which is exactly how recorded stock came to have no effect.
+  const cell = await resolveStockCell(orderId, body.colorName, body.sizeName);
+  if (!cell) {
+    const axes = await orderAxisNames(orderId);
+    throw new ValidationError(
+      `${body.colorName} / ${body.sizeName} is not a colour and size on this order, `
+      + `so its stock cannot come off the cut order. `
+      + `Colours: ${axes.colors.join(', ') || 'none yet'}. Sizes: ${axes.sizes.join(', ') || 'none yet'}.`,
+    );
+  }
+
   const row = existing
     ? await prisma.stockRecord.update({ where: { id: existing.id }, data: { ...body, recordedAt: new Date() } })
     : await prisma.stockRecord.create({ data: { orderId, ...body } });
+
+  // The row is what a storeman records; the ledger is what the cut order is
+  // calculated from. They are the same fact, so they are written together.
+  await applyStockRecordsToLedger(orderId);
+  const cutTotal = await refreshCutOrder(orderId);
+  await refreshOrderCache(orderId);
 
   await logActivity({
     orderId, actorId: user.id, actorName: user.name,
     action: 'stock.record',
     summary:
-      `Recorded ${body.availableQty} finished pieces in stock for ${body.colorName} / ${body.sizeName}` +
-      ` — the cut order will be reduced by them`,
+      `Recorded ${body.availableQty} finished pieces in stock for ${body.colorName} / ${body.sizeName}`
+      + (cutTotal !== null
+        ? ` — cut order now ${cutTotal.toLocaleString()} pieces`
+        : ` — they will come off the cut order when it is generated`),
     entityType: 'StockRecord', entityId: row.id,
   });
 
-  res.status(existing ? 200 : 201).json({ data: row });
+  res.status(existing ? 200 : 201).json({ data: row, cutQty: cutTotal });
 }));
 
 stepsRouter.delete('/:id/stock/:recordId', requirePermission('order:edit'), asyncHandler(async (req, res) => {
@@ -526,6 +551,13 @@ stepsRouter.delete('/:id/stock/:recordId', requirePermission('order:edit'), asyn
   const existing = await prisma.stockRecord.findFirst({ where: { id: req.params.recordId, orderId } });
   if (!existing) throw new NotFoundError('Stock record');
   await prisma.stockRecord.delete({ where: { id: existing.id } });
+
+  // Removing the row puts those pieces back into the cut order, which is what
+  // the confirmation dialog told the user would happen.
+  await applyStockRecordsToLedger(orderId);
+  await refreshCutOrder(orderId);
+  await refreshOrderCache(orderId);
+
   res.status(204).end();
 }));
 
