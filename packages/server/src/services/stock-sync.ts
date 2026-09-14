@@ -230,7 +230,13 @@ export async function reconcileAllStockLedgers(): Promise<{ scanned: number; cor
   let corrected = 0;
   for (const { orderId } of withStock) {
     try {
-      const { changed } = await applyStockRecordsToLedger(orderId);
+      const { changed, unmatched } = await applyStockRecordsToLedger(orderId);
+      if (unmatched.length > 0) {
+        // Recorded against a colour or size the order does not have, so it can
+        // never come off the cut order. New rows like this are refused; these
+        // predate that, and saying so beats leaving them invisible.
+        console.warn(`[stock] order ${orderId}: ${unmatched.join('; ')} match no cell of this order`);
+      }
       if (!changed) continue;
       corrected += 1;
       await refreshCutOrder(orderId);
