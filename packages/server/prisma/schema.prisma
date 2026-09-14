@@ -1102,6 +1102,10 @@ model CostingRecord {
   machineCount           Int?
   machineDaysUsed        Int?
   daysInLine             Int?
+  /// Machines on this order's line. The costing sheet takes it as its own
+  /// input alongside the factory-wide machine count: neither is derivable from
+  /// the other, and nothing else in the application records it.
+  lineMachineQty         Int?
   productionLineMachines Json?
   sublimationCostUsd     Decimal?   @db.Decimal(14, 4)
   embroideryCostUsd      Decimal?   @db.Decimal(14, 4)

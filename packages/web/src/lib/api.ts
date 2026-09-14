@@ -262,11 +262,16 @@ export interface CostLineDto {
 }
 
 export interface CostingDto {
+  costingDate: string | null;
   dollarRate: number;
   dailyCostEgp: number | null;
   machineCount: number | null;
   machineDaysUsed: number | null;
   daysInLine: number | null;
+  lineMachineQty: number | null;
+  sublimationCostUsd: number | null;
+  embroideryCostUsd: number | null;
+  externalOpCostUsd: number | null;
   notes: string | null;
   lines: CostLineDto[];
 }

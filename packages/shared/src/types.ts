@@ -146,7 +146,12 @@ export interface OrderDetailDto {
   readyStages: StageKey[];
   /** Expected against actual consumption, per material with a known rate. */
   consumption: ConsumptionVariance[];
-  costing: CostingResult | null;
+  /**
+   * Always present. `hasRecord` says whether anybody has entered the factory's
+   * own figures yet; everything derivable from the order itself is filled in
+   * either way.
+   */
+  costing: CostingResult;
   qualityPassPct: number | null;
 
   counts: {

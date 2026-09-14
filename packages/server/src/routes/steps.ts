@@ -930,11 +930,19 @@ stepsRouter.get('/:id/costing', requirePermission('costing:read'), asyncHandler(
 
   res.json({
     data: record && {
+      costingDate: record.costingDate?.toISOString() ?? null,
       dollarRate: Number(record.dollarRate.toString()),
       dailyCostEgp: record.dailyCostEgp == null ? null : Number(record.dailyCostEgp.toString()),
       machineCount: record.machineCount,
       machineDaysUsed: record.machineDaysUsed,
       daysInLine: record.daysInLine,
+      lineMachineQty: record.lineMachineQty,
+      // Stored since the model was written and never reachable from the API,
+      // so the sheet's Sublimation and Embroidery rows had nowhere to read
+      // from and nowhere to be typed.
+      sublimationCostUsd: record.sublimationCostUsd == null ? null : Number(record.sublimationCostUsd.toString()),
+      embroideryCostUsd: record.embroideryCostUsd == null ? null : Number(record.embroideryCostUsd.toString()),
+      externalOpCostUsd: record.externalOpCostUsd == null ? null : Number(record.externalOpCostUsd.toString()),
       notes: record.notes,
       lines: record.lines.map((l) => ({
         id: l.id, group: l.group, label: l.label,
@@ -975,10 +983,15 @@ const costingSchema = z.object({
    * with the blank.
    */
   dollarRate: z.number().nonnegative().optional(),
-  dailyCostEgp: z.number().nonnegative().optional().nullable(),
-  machineCount: z.number().int().nonnegative().optional().nullable(),
-  machineDaysUsed: z.number().int().nonnegative().optional().nullable(),
-  daysInLine: z.number().int().nonnegative().optional().nullable(),
+  costingDate: z.string().optional().nullable(),
+  dailyCostEgp: z.number().nonnegative().max(99_999_999).optional().nullable(),
+  machineCount: z.number().int().nonnegative().max(100_000).optional().nullable(),
+  machineDaysUsed: z.number().int().nonnegative().max(1_000_000).optional().nullable(),
+  daysInLine: z.number().int().nonnegative().max(10_000).optional().nullable(),
+  lineMachineQty: z.number().int().nonnegative().max(100_000).optional().nullable(),
+  sublimationCostUsd: z.number().nonnegative().max(99_999_999).optional().nullable(),
+  embroideryCostUsd: z.number().nonnegative().max(99_999_999).optional().nullable(),
+  externalOpCostUsd: z.number().nonnegative().max(99_999_999).optional().nullable(),
   notes: z.string().max(20_000).optional().nullable(),
   /** Only the hand-entered ones. Derived lines are recomputed, never sent. */
   manualLines: z.array(costLineSchema).default([]),
@@ -993,13 +1006,18 @@ stepsRouter.put('/:id/costing', requirePermission('costing:write'), asyncHandler
   // not "set it to nothing". Omitted from the update entirely, and left to the
   // column's own default on create.
   const fields = stripLines(body);
-  const { dollarRate, ...rest } = fields as typeof fields & { dollarRate?: number };
+  const { dollarRate, costingDate, ...rest } = fields as typeof fields & { dollarRate?: number };
   const usableRate = typeof dollarRate === 'number' && dollarRate > 0 ? dollarRate : undefined;
+  // Present-and-empty clears the date; absent leaves it alone. A field the
+  // form did not send must not be wiped by the form not sending it.
+  const dateField = costingDate === undefined
+    ? {}
+    : { costingDate: costingDate ? new Date(costingDate) : null };
 
   await prisma.costingRecord.upsert({
     where: { orderId },
-    create: { orderId, ...rest, ...(usableRate === undefined ? {} : { dollarRate: usableRate }) },
-    update: { ...rest, ...(usableRate === undefined ? {} : { dollarRate: usableRate }) },
+    create: { orderId, ...rest, ...dateField, ...(usableRate === undefined ? {} : { dollarRate: usableRate }) },
+    update: { ...rest, ...dateField, ...(usableRate === undefined ? {} : { dollarRate: usableRate }) },
   });
 
   // Recompute *after* the upsert: the labour derivation reads the dollar rate

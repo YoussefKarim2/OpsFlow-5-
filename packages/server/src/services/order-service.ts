@@ -284,7 +284,7 @@ export interface DerivedOrder {
   /** The lay plan, when there are markers. Null when nobody has planned one. */
   markerPlan: ReturnType<typeof computeMarkerPlan> | null;
   consumption: ConsumptionVariance[];
-  costing: ReturnType<typeof computeCosting> | null;
+  costing: ReturnType<typeof computeCosting>;
   daysRemaining: number | null;
 }
 
@@ -465,29 +465,44 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     progressPct,
   });
 
-  const costing = order.costing
-    ? computeCosting({
-        orderQty: totals[QtyLedger.ORDER] ?? 0,
-        cutQty: totals[QtyLedger.CUT] ?? 0,
-        shippedQty: shippedQty > 0 ? shippedQty : null,
-        dollarRate: Number(order.costing.dollarRate.toString()),
-        dailyCostEgp: dec(order.costing.dailyCostEgp),
-        machineCount: order.costing.machineCount,
-        machineDaysUsed: order.costing.machineDaysUsed,
-        daysInLine: order.costing.daysInLine,
-        sellPriceUsd: dec(order.pricePerPieceUsd),
-        externalOpCostUsd: dec(order.costing.externalOpCostUsd),
-        sublimationCostUsd: dec(order.costing.sublimationCostUsd),
-        embroideryCostUsd: dec(order.costing.embroideryCostUsd),
-        lines: order.costing.lines.map<CostLineInput>((l) => ({
-          group: l.group,
-          label: l.label,
-          quantity: dec(l.quantity),
-          unit: l.unit,
-          unitPriceUsd: dec(l.unitPriceUsd),
-        })),
-      })
-    : null;
+  // Computed whether or not a costing record exists. The sheet is a view of
+  // the order — its quantities, its price, its bill of materials — and most of
+  // it is knowable the day the order is created. Waiting for somebody to press
+  // "start the costing" would leave a screen of blanks in front of facts the
+  // application already holds.
+  const cr = order.costing;
+  const costing = computeCosting({
+    hasRecord: cr != null,
+    costingDate: cr?.costingDate?.toISOString() ?? null,
+    notes: cr?.notes ?? null,
+    orderQty: totals[QtyLedger.ORDER] ?? 0,
+    cutQty: totals[QtyLedger.CUT] ?? 0,
+    shippedQty: shippedQty > 0 ? shippedQty : null,
+    dollarRate: cr == null ? null : Number(cr.dollarRate.toString()),
+    dailyCostEgp: dec(cr?.dailyCostEgp),
+    machineCount: cr?.machineCount ?? null,
+    machineDaysUsed: cr?.machineDaysUsed ?? null,
+    daysInLine: cr?.daysInLine ?? null,
+    lineMachineQty: cr?.lineMachineQty ?? null,
+    // The sheet's 1st and 2nd Degree columns. OpsFlow already records both
+    // facts: out-line is what passed end-line inspection, and second degree is
+    // what was graded B. Neither is a subtraction — they are counted on the
+    // floor — so neither is invented here.
+    firstDegreeQty: totals[QtyLedger.OUT_LINE] ?? null,
+    secondDegreeQty: totals[QtyLedger.SECOND_DEGREE] ?? null,
+    sellPriceUsd: dec(order.pricePerPieceUsd),
+    externalOpCostUsd: dec(cr?.externalOpCostUsd),
+    sublimationCostUsd: dec(cr?.sublimationCostUsd),
+    embroideryCostUsd: dec(cr?.embroideryCostUsd),
+    lines: (cr?.lines ?? []).map<CostLineInput>((l) => ({
+      group: l.group,
+      label: l.label,
+      quantity: dec(l.quantity),
+      unit: l.unit,
+      unitPriceUsd: dec(l.unitPriceUsd),
+      sourceRef: l.sourceRef,
+    })),
+  });
 
   return {
     cells, colors, sizes, totals, stages, progressPct,

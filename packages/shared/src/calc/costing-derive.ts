@@ -96,35 +96,36 @@ export function bomGroupFor(category: string): CostGroup {
 export function deriveCostLines(input: DerivableInputs): DerivedLine[] {
   const lines: DerivedLine[] = [];
 
-  // ── Materials, grouped by BOM category ──────────────────────────────────
-  const byCategory = new Map<string, DerivableBomItem[]>();
-  for (const b of input.bom) {
-    const list = byCategory.get(b.category) ?? [];
-    list.push(b);
-    byCategory.set(b.category, list);
-  }
+  // ── Materials, one row each ─────────────────────────────────────────────
+  //
+  // The costing sheet lists materials individually — item, actual consumption,
+  // unit, unit price, cost — under UsedFabric and UsedAcc, and prints the
+  // section subtotal beneath. Collapsing a category into a single lump would
+  // lose the consumption and the unit price, which are three of the sheet's
+  // six columns, so each BOM row becomes a line of its own.
+  //
+  // A row with no price still appears, with its cost blank. That is what the
+  // sheet does, and it is how a coordinator sees which material is still
+  // waiting on a price rather than wondering why the fabric total looks light.
+  const bom = [...input.bom].sort((a, b) =>
+    a.category === b.category ? a.item.localeCompare(b.item) : a.category.localeCompare(b.category),
+  );
 
-  for (const [category, items] of [...byCategory].sort(([a], [b]) => a.localeCompare(b))) {
-    const priced = items.filter((i) => i.quantity != null && i.unitPriceUsd != null);
-    if (priced.length === 0 || priced.length !== items.length) continue;
-
-    const cost = sum(priced.map((i) => i.quantity! * i.unitPriceUsd!));
-    if (cost == null) continue;
-
+  for (const b of bom) {
     lines.push({
-      group: bomGroupFor(category),
-      label: `${humanise(category)} (${items.length} item${items.length === 1 ? '' : 's'})`,
-      // One line, one unit price: the quantity is the money and the unit is a
-      // lump, because summing metres and pieces into a single quantity would be
-      // arithmetic on incompatible things.
-      quantity: 1,
-      unit: 'LOT',
-      unitPriceUsd: cost,
-      sourceRef: `bom:${category}`,
+      group: bomGroupFor(b.category),
+      label: b.item,
+      quantity: b.quantity,
+      unit: b.unit,
+      unitPriceUsd: b.unitPriceUsd,
+      sourceRef: `bom:${b.category}`,
     });
   }
 
-  // ── Outside work, grouped by operation ──────────────────────────────────
+  // ── Outside work, one row per operation ─────────────────────────────────
+  //
+  // Grouped by operation rather than listed per row: the sheet has a line for
+  // sublimation and a line for embroidery, not one per consignment sent out.
   const byOp = new Map<string, DerivableExternalOp[]>();
   for (const e of input.external) {
     const list = byOp.get(e.operationType) ?? [];
@@ -134,17 +135,26 @@ export function deriveCostLines(input: DerivableInputs): DerivedLine[] {
 
   for (const [op, ops] of [...byOp].sort(([a], [b]) => a.localeCompare(b))) {
     const priced = ops.filter((o) => o.qty != null && o.unitPriceUsd != null);
-    if (priced.length === 0 || priced.length !== ops.length) continue;
+    // A partial sum reads as a complete one, so a mixed group says nothing.
+    if (priced.length === 0 || priced.length !== ops.length) {
+      lines.push({
+        group: 'EXTERNAL', label: humanise(op),
+        quantity: sumOrNull(ops.map((o) => o.qty)), unit: 'PCS',
+        unitPriceUsd: null, sourceRef: `external:${op}`,
+      });
+      continue;
+    }
 
+    const qty = sum(priced.map((o) => o.qty!));
     const cost = sum(priced.map((o) => o.qty! * o.unitPriceUsd!));
-    if (cost == null) continue;
-
     lines.push({
       group: 'EXTERNAL',
       label: humanise(op),
-      quantity: 1,
-      unit: 'LOT',
-      unitPriceUsd: cost,
+      quantity: qty,
+      unit: 'PCS',
+      // The blended rate across consignments, so quantity × price is the cost
+      // even when two batches went out at different prices.
+      unitPriceUsd: qty > 0 ? cost / qty : null,
       sourceRef: `external:${op}`,
     });
   }
@@ -167,6 +177,11 @@ export function deriveCostLines(input: DerivableInputs): DerivedLine[] {
   }
 
   return lines;
+}
+
+/** Sum that stays null when nothing was recorded at all. */
+function sumOrNull(values: readonly (number | null)[]): number | null {
+  return values.every((v) => v == null) ? null : sum(values);
 }
 
 /** `POLY_BAG` → `Poly bag`. The sheet's vocabulary, not the database's. */
