@@ -35,6 +35,23 @@ describe('a request the server cannot parse', () => {
     assert.equal(body.code, 'MALFORMED_JSON');
   });
 
+  /**
+   * Express decodes route parameters with `decodeURIComponent`, which throws on
+   * a truncated escape — a link cut short in an email, or a hand-edited
+   * address. That is the caller's URL, not the server failing.
+   */
+  test('a URL the router cannot decode is the caller\'s fault, not a 500', async () => {
+    for (const path of ['/api/orders/%E0%A4%A', '/api/orders/%', '/api/orders/%zz']) {
+      const res = await fetch(`${base}${path}`);
+      assert.ok(res.status < 500, `${path} returned ${res.status}`);
+      if (res.status === 400) {
+        const body = await res.json() as { code?: string; error?: string };
+        assert.equal(body.code, 'MALFORMED_URL');
+        assert.doesNotMatch(body.error ?? '', /URIError|decodeURIComponent|at /);
+      }
+    }
+  });
+
   test('an empty body is refused the same way', async () => {
     const res = await fetch(`${base}/api/auth/login`, {
       method: 'POST',

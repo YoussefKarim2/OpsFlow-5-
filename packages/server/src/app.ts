@@ -229,6 +229,23 @@ function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFun
     return;
   }
 
+  /**
+   * A URL the router could not decode.
+   *
+   * Express decodes route parameters with `decodeURIComponent`, which throws
+   * on a truncated escape like `%E0%A4%A` — a link cut short in an email, or a
+   * hand-edited address. That is the caller's URL, not our failure, but it
+   * matched none of the shapes below and came back as a 500 telling them the
+   * server had broken.
+   */
+  if (err instanceof URIError) {
+    res.status(400).json({
+      error: 'That web address is not valid. Check the link and try again.',
+      code: 'MALFORMED_URL',
+    });
+    return;
+  }
+
   if (err instanceof ZodError) {
     res.status(422).json({
       error: 'Some fields are invalid.',
