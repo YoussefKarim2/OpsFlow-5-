@@ -295,7 +295,7 @@ export function OrderWorkspacePage() {
           {tab === 'materials'    && <MaterialsTab order={order} />}
           {tab === 'bom'          && <BomTab order={order} />}
           {tab === 'instructions' && <InstructionsTab orderId={order.id} />}
-          {(tab === 'external' || tab === 'approvals') && <ExternalTab order={order} focus={tab} />}
+          {(tab === 'external' || tab === 'approvals') && <ExternalTab order={order} focus={tab} onJump={setTab} />}
           {tab === 'production'   && <ProductionTab order={order} />}
           {tab === 'quality'      && <QualityTab order={order} />}
           {(tab === 'packing' || tab === 'shipping') && <PackingTab order={order} focus={tab} />}

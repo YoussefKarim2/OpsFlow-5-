@@ -11,13 +11,14 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ExternalWorkEditor, type ExternalOpRow } from '../../components/ExternalWorkEditor';
 import { Lock, Send, CheckCircle2, XCircle, Clock, Plus } from 'lucide-react';
-import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
+import { fmtDate, QtyLedger, type OrderDetailDto } from '@opsflow/shared';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import {
   Card, CardHeader, Modal, Field, Num, FreeText, Spinner, EmptyState, clsx,
 } from '../../components/ui';
 import { AttachmentsPanel } from '../../components/Attachments';
+import { CutOrderGrid } from '../../components/CutOrderGrid';
 
 interface Op {
   id: string; externalFactoryName: string | null; externalReference: string | null;
@@ -53,7 +54,13 @@ const APPROVAL_TONE: Record<string, string> = {
   CHANGES_REQUESTED: 'bg-orange-50 text-orange-700 ring-orange-600/20',
 };
 
-export function ExternalTab({ order }: { order: OrderDetailDto; focus?: "external" | "approvals" }) {
+export function ExternalTab({ order, onJump }: {
+  order: OrderDetailDto;
+  focus?: 'external' | 'approvals';
+  /** Same signature the workspace hands the other tabs, so the empty cut-order
+   *  state can send the user to the step that generates it. */
+  onJump?: (tab: string, ledger?: string | null) => void;
+}) {
   const qc = useQueryClient();
   const { can } = useAuth();
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -103,6 +110,9 @@ export function ExternalTab({ order }: { order: OrderDetailDto; focus?: "externa
     onError: (e) => setHeadErr(e instanceof ApiError ? e.message : 'Could not save.'),
   });
   const ops = useQuery({ queryKey: ['external-ops', order.id], queryFn: () => api.external.operations(order.id) });
+  // Shares the Quantity tab's cache key, so opening one warms the other and the
+  // two screens can never show different cut quantities.
+  const matrixQuery = useQuery({ queryKey: ['matrix', order.id], queryFn: () => api.orders.matrix(order.id) });
   const lookups = useQuery({ queryKey: ['lookups'], queryFn: api.reference.lookups });
   const approvals = useQuery({ queryKey: ['approvals', order.id], queryFn: () => api.external.approvals(order.id) });
 
@@ -292,6 +302,15 @@ export function ExternalTab({ order }: { order: OrderDetailDto; focus?: "externa
           </dl>
         </div>
       </Card>
+
+      {/* The cut order, right under what is being sent out — so a printing
+          quantity can be read against the quantity there is to print on,
+          without opening another tab and remembering a number. */}
+      <CutOrderGrid
+        data={matrixQuery.data}
+        isLoading={matrixQuery.isLoading}
+        onOpenCutOrder={() => onJump?.('quantity', QtyLedger.CUT)}
+      />
 
       {blocked.length > 0 && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3">
