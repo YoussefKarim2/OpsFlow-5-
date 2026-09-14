@@ -6,7 +6,7 @@ import {
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import {
-  relationId, requiredRelationId, optionalDate, optionalNumber, shortText, longText,
+  relationId, requiredRelationId, optionalDate, optionalNumber, shortText, longText, money,
 } from '../util/form-input.js';
 import { storage } from '../services/storage/index.js';
 import { authenticate, requirePermission, requireSuperAdmin, currentUser } from '../middleware/auth.js';
@@ -103,7 +103,7 @@ const createSchema = z.object({
   fabricDeliveryToSupplier: z.string().optional().nullable(),
   supplierDeliveryDate: z.string().optional().nullable(),
   shippingMethod: shortText(),
-  pricePerPieceUsd: optionalNumber(z.number().nonnegative()),
+  pricePerPieceUsd: money(),
   cutPercentage: optionalNumber(z.number()).default(0.05),
   accessoryPercentage: optionalNumber(z.number()).default(0.05),
   poDate: optionalDate,

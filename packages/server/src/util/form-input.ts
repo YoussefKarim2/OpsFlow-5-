@@ -73,8 +73,38 @@ export const optionalNumber = (schema: z.ZodNumber) =>
  *
  * Generous on purpose: addresses and notes are genuinely long.
  */
+/**
+ * Characters Postgres cannot store in a text column.
+ *
+ * A NUL byte is the one that matters: it is invisible, it arrives in pasted
+ * text from spreadsheets and PDFs, and Postgres rejects it outright
+ * (`22021 character_not_in_repertoire`) — which surfaced as a 500 telling the
+ * user the server had broken over a character they cannot see and could not
+ * remove. Stripping is kinder than refusing: it carries no meaning in a name
+ * or a note, and nothing is lost by dropping it.
+ */
+const stripUnstorable = (v: unknown): unknown =>
+  typeof v === 'string' ? v.replace(/\u0000/g, '') : v;
+
 export const shortText = (max = 200) =>
-  z.preprocess((v) => (v === '' ? undefined : v), z.string().max(max).optional());
+  z.preprocess(
+    (v) => { const t = stripUnstorable(v); return t === '' ? undefined : t; },
+    z.string().max(max).optional(),
+  );
 
 export const longText = (max = 20_000) =>
-  z.preprocess((v) => (v === '' ? undefined : v), z.string().max(max).optional());
+  z.preprocess(
+    (v) => { const t = stripUnstorable(v); return t === '' ? undefined : t; },
+    z.string().max(max).optional(),
+  );
+
+/**
+ * A money value that fits the column it is going into.
+ *
+ * `pricePerPieceUsd` is `Decimal(10,4)`, so its largest value is 999,999.9999.
+ * Anything above it made Postgres raise `22003 numeric_value_out_of_range`,
+ * which reached the user as a 500. A price with too many digits is a typo, and
+ * it should be refused by name rather than crash the request.
+ */
+export const money = (maxValue = 999_999.9999) =>
+  optionalNumber(z.number().nonnegative().max(maxValue));

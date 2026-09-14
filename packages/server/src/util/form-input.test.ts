@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { z } from 'zod';
 import {
-  relationId, requiredRelationId, optionalDate, optionalNumber, shortText, longText,
+  relationId, requiredRelationId, optionalDate, optionalNumber, shortText, longText, money,
 } from './form-input.js';
 
 /**
@@ -114,5 +114,42 @@ describe('free text with a ceiling', () => {
   test('but not unbounded', () => {
     const schema = z.object({ notes: longText() });
     assert.throws(() => schema.parse({ notes: 'x'.repeat(100_000) }));
+  });
+});
+
+describe('values the database itself would refuse', () => {
+  test('a price with too many digits is refused by name, not by a 500', () => {
+    // pricePerPieceUsd is Decimal(10,4): 999,999.9999 is the ceiling. Above it
+    // Postgres raises 22003 and the user was told the server had broken.
+    const schema = z.object({ price: money() });
+    assert.equal(schema.parse({ price: 999_999.9999 }).price, 999_999.9999);
+    assert.throws(() => schema.parse({ price: 1e15 }));
+    assert.throws(() => schema.parse({ price: 1e308 }));
+  });
+
+  test('an ordinary price still passes', () => {
+    const schema = z.object({ price: money() });
+    assert.equal(schema.parse({ price: 5.75 }).price, 5.75);
+    assert.equal(schema.parse({ price: 0 }).price, 0);
+  });
+
+  test('a pasted NUL byte is stripped rather than refused', () => {
+    // Invisible, arrives from spreadsheets and PDFs, and Postgres rejects it
+    // outright (22021). The user cannot see it, so they cannot remove it.
+    const schema = z.object({ name: shortText() });
+    const withNul = 'abc' + String.fromCharCode(0) + 'def';
+    assert.equal(schema.parse({ name: withNul }).name, 'abcdef');
+  });
+
+  test('stripping a NUL does not disturb ordinary text', () => {
+    const schema = z.object({ name: shortText() });
+    for (const v of ['Florida T Shirt', 'قميص قطن', 'Order 🧵', 'He said "hi"']) {
+      assert.equal(schema.parse({ name: v }).name, v);
+    }
+  });
+
+  test('a string that is only a NUL becomes "not answered"', () => {
+    const schema = z.object({ name: shortText() });
+    assert.equal(schema.parse({ name: String.fromCharCode(0) }).name, undefined);
   });
 });

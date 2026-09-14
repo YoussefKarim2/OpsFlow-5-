@@ -257,6 +257,31 @@ function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFun
     }
   }
 
+  /**
+   * Postgres refusing the *value*, not the query.
+   *
+   * Prisma reports these as PrismaClientUnknownRequestError, which matched none
+   * of the shapes above, so a number with too many digits or a pasted NUL byte
+   * came back as "Something went wrong on our side". Both are the caller's
+   * input, and both are fixable by the caller once they are told which.
+   *
+   * Matched on the SQLSTATE inside the message because Prisma does not surface
+   * it as a field on this error class.
+   */
+  if (err instanceof Error && /ConnectorError/.test(err.message)) {
+    const sqlstate = /code: "(\d{5})"/.exec(err.message)?.[1];
+    const known: Record<string, string> = {
+      '22003': 'That number is too large for this field. Check for an extra digit.',
+      '22021': 'That text contains a character the database cannot store. Remove any pasted formatting and try again.',
+      '22001': 'That text is longer than this field allows.',
+      '22007': 'That date could not be understood.',
+    };
+    if (sqlstate && known[sqlstate]) {
+      res.status(422).json({ error: known[sqlstate], code: 'VALUE_REJECTED' });
+      return;
+    }
+  }
+
   console.error('Unhandled error:', err);
   res.status(500).json({
     error: isProd ? 'Something went wrong on our side.' : String(err instanceof Error ? err.stack : err),
