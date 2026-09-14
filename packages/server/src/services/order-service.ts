@@ -14,7 +14,8 @@ import {
   QtyLedger, StageKey, STAGE_META, DEPARTMENT_LABEL, ORDER_STATUS_LABEL,
   computeStageProgress, computeOrderProgress, currentStage, deriveOrderStatus,
   deriveHealth, deriveNextAction, evaluateAlerts, countBySeverity,
-  computeFunnel, computeColorProgress, computeCutVariance, computeStockDeduction, resolveShippedQty,
+  computeFunnel, computeColorProgress, computeCutVariance, computeStockDeduction,
+  resolveShippedQty, furthestShipmentStatus, recordedCutQty,
   computeProductionAnalytics, computeBomSummary, computeCosting, computeQualityPassPct,
   computeMaterialPosition, computeStockPosition, computeConsumptionVariance,
   computeMarkerPlan, evaluateAllGates, sanitiseOverrides,
@@ -74,11 +75,11 @@ const ORDER_INCLUDE = {
   approvals: { include: { requestedBy: true, _count: { select: { attachments: true } } } },
   productionRecords: { orderBy: { date: 'asc' } },
   qualityAudits: { include: { defects: true } },
-  packingLists: { include: { cartons: true } },
-  shipments: true,
+  packingLists: { include: { cartons: true }, orderBy: { createdAt: 'asc' } },
+  shipments: { orderBy: { createdAt: 'asc' } },
   costing: { include: { lines: { orderBy: { position: 'asc' } } } },
   markers: { orderBy: { position: 'asc' } },
-  cuttingRecords: true,
+  cuttingRecords: { orderBy: { createdAt: 'asc' } },
   fabricRecords: true,
   _count: { select: { attachments: true } },
 } satisfies Prisma.OrderInclude;
@@ -331,12 +332,14 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     (a) => a.status === 'PENDING' && a.blocking,
   );
   const latestPackingList = order.packingLists.at(-1) ?? null;
-  const latestShipment = order.shipments.at(-1) ?? null;
 
   const status = deriveOrderStatus({
     cancelled: order.cancelled,
     hasOpenQualityFailure: openQualityFailure,
-    shipmentStatus: latestShipment?.status ?? null,
+    // The furthest any consignment has reached, not whichever row came back
+    // last: an order with one shipment gone and another being prepared has
+    // shipped, and the answer must not depend on row order.
+    shipmentStatus: furthestShipmentStatus(order.shipments),
     orderQty: totals[QtyLedger.ORDER] ?? 0,
     producedQty,
     packedQty,
@@ -617,7 +620,10 @@ export async function getOrderDetail(orderId: string, today = new Date()): Promi
     colorProgress: computeColorProgress(d.cells, d.colors),
     cutVariance: computeCutVariance(
       d.cells, cutPct,
-      order.cuttingRecords.at(-1)?.actualCutQty ?? null,
+      // The cutting records are an additive log, so the actual cut is their
+      // sum. Taking the last row silently discarded every other lay, and a
+      // Laying & Marking import writes rows with no quantity at all.
+      recordedCutQty(order.cuttingRecords),
     ),
     stockDeduction: computeStockDeduction(d.cells, cutPct),
     production: d.production,

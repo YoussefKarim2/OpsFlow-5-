@@ -344,6 +344,46 @@ export interface ShipmentLike {
 /** Only these have actually left the building. Booked is not shipped. */
 const HAS_SHIPPED = new Set(['SHIPPED', 'DELIVERED']);
 
+/** How far along a consignment is. Higher is further. */
+const SHIPMENT_RANK: Record<string, number> = {
+  NOT_READY: 0, READY: 1, BOOKED: 2, SHIPPED: 3, DELIVERED: 4,
+};
+
+/**
+ * How far this order has got with shipping.
+ *
+ * The furthest any of its consignments has reached, not the most recently
+ * entered one. An order with a shipment already gone and a second still being
+ * prepared has shipped; reading whichever row came back last would report it as
+ * not ready, and would flip depending on how the database happened to return
+ * the rows.
+ */
+export function furthestShipmentStatus<T extends string>(
+  shipments: readonly { status: T }[],
+): T | null {
+  let best: T | null = null;
+  for (const s of shipments) {
+    if (best === null || (SHIPMENT_RANK[s.status] ?? -1) > (SHIPMENT_RANK[best] ?? -1)) best = s.status;
+  }
+  return best;
+}
+
+/**
+ * Pieces actually cut, as recorded on the cutting log.
+ *
+ * The records are an additive log — one per lay, and a Laying & Marking import
+ * adds a row for the date and the cutter without a quantity at all. So the
+ * order's actual cut is the sum of the quantities that were recorded, not
+ * whichever row the database happened to return last. Null when none carries a
+ * quantity, which leaves the CUT ledger as the answer, exactly as before.
+ */
+export function recordedCutQty(
+  records: readonly { actualCutQty?: number | null }[],
+): number | null {
+  const recorded = records.map((r) => r.actualCutQty).filter((q): q is number => q != null);
+  return recorded.length === 0 ? null : sum(recorded);
+}
+
 /**
  * How many pieces have shipped.
  *
