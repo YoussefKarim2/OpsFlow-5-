@@ -55,39 +55,6 @@
   }
   .td { @apply whitespace-nowrap px-3 py-2.5 text-sm text-ink-700; }
 
-  /* ─────────────────────────────────────────────────────────────────────
-   * Worksheet cells.
-   *
-   * The Actual Costing screen is a costing sheet, not a dashboard: the people
-   * who use it have read this exact grid in Excel for years, and the column
-   * order, the borders and the shaded cells are how they find a number. These
-   * classes are that grid — every cell bordered, nothing rounded, numbers
-   * tabular and right-aligned so columns of money line up.
-   * ───────────────────────────────────────────────────────────────────── */
-  .xl { @apply w-full border-collapse text-xs; }
-  .xl th, .xl td { @apply border border-ink-400 px-2 py-1 align-middle; }
-  /* The sheet's black banner rows. */
-  .xl-banner { @apply bg-ink-900 text-center text-2xs font-bold uppercase tracking-wider text-white; }
-  /* A printed caption: the label half of a label/value pair. */
-  .xl-label { @apply whitespace-nowrap bg-white font-semibold text-ink-800; }
-  /* A value the application worked out or read from elsewhere. Read-only. */
-  .xl-calc { @apply tnum bg-white text-right text-ink-900; }
-  /* A calculated result the sheet highlights — profit, percentages, price. */
-  .xl-result { @apply tnum bg-amber-100 text-right font-semibold text-ink-900; }
-  /* A production quantity counted on the floor. */
-  .xl-qty { @apply tnum bg-orange-100 text-right font-semibold text-ink-900; }
-  /* A cell somebody types into. */
-  .xl-input { @apply tnum bg-sky-50 p-0 text-right; }
-  .xl-input input {
-    @apply w-full border-0 bg-transparent px-2 py-1 text-right text-xs text-ink-900
-           focus:bg-white focus:outline-none focus:ring-1 focus:ring-inset focus:ring-accent-500;
-  }
-  /* A section subtotal row. */
-  .xl-subtotal { @apply bg-ink-100 font-semibold text-ink-900; }
-  .xl-total { @apply bg-ink-200 font-bold text-ink-900; }
-  /* The row-spanning section captions down the left edge. */
-  .xl-section { @apply bg-white text-center text-2xs font-bold uppercase tracking-wide text-ink-700; }
-
   /* Free text from the workbook may be Arabic; dir is set per element in JS. */
   .rtl-aware[dir='rtl'] { @apply text-right; }
 
