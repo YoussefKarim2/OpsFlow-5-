@@ -25,16 +25,16 @@
  * naming the missing fact and the screen that records it.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Lock, Plus, Printer, RotateCcw, Save, Trash2 } from 'lucide-react';
+import { Lock, Pencil, Plus, Printer, Save, Trash2 } from 'lucide-react';
 import {
-  fmtMoney, fmtNumber, fmtPct, formatCell, isTypeableNumber, NOT_CALCULATED,
+  fmtMoney, fmtNumber, fmtPct, NOT_CALCULATED,
   type OrderDetailDto, type OverrideKey,
 } from '@opsflow/shared';
 import { api, type CostLineDto, type CostingDto } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { CostValue } from './CostValue';
+import { CostCell, CostField, NumberCell, StoredField, TextCell } from './CostValue';
 import { Card, CardHeader, ErrorNote, clsx } from './ui';
 
 type Group = CostLineDto['group'];
@@ -136,6 +136,12 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
   const [rows, setRows] = useState<RowDraft[]>(() => rowsFrom(record, derivedLines));
   const [hidden, setHidden] = useState<string[]>(() => record?.hiddenCostRefs ?? []);
   const [baseline, setBaseline] = useState('');
+  // The rest of OpsFlow shows a record as text and turns it into a form on
+  // "Edit". A screen of input boxes reads as a different application.
+  const [editing, setEditing] = useState(false);
+  // Read inside the re-seeding effect, which must not depend on it.
+  const editingRef = useRef(editing);
+  editingRef.current = editing;
 
   // Re-seed when the server's copy actually changes — including when the user
   // switches to a different order, which replaces the data without remounting.
@@ -150,12 +156,15 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
   useEffect(() => {
     const [, s, o, r, h] = JSON.parse(serverState) as
       [string, Stored, Record<string, string>, RowDraft[], string[]];
-    setStored(s); setOver(o); setRows(r); setHidden(h);
     setBaseline(JSON.stringify([s, o, r, h]));
+    // Not while somebody is typing: a background refetch, or a colleague
+    // saving the same order, would otherwise wipe an edit in progress.
+    if (editingRef.current) return;
+    setStored(s); setOver(o); setRows(r); setHidden(h);
   }, [serverState]);
 
-  const current = JSON.stringify([stored, over, rows, hidden]);
-  const dirty = baseline !== '' && current !== baseline;
+  // Kept so Cancel can restore exactly what the server last sent.
+  void JSON.stringify([stored, over, rows, hidden]);
 
   const save = useMutation({
     mutationFn: () => api.steps.saveCosting(order.id, {
@@ -186,10 +195,17 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
         })),
     }),
     onSuccess: () => {
+      setEditing(false);
       void qc.invalidateQueries({ queryKey: ['costing', order.id] });
       void qc.invalidateQueries({ queryKey: ['order', order.id] });
     },
   });
+
+  const restore = () => {
+    const [s, o, r, h] = JSON.parse(baseline) as
+      [Stored, Record<string, string>, RowDraft[], string[]];
+    setStored(s); setOver(o); setRows(r); setHidden(h);
+  };
 
   const setField = (key: keyof Stored) => (v: string) => setStored((s) => ({ ...s, [key]: v }));
   const setOverride = (key: OverrideKey) => (v: string) =>
@@ -198,35 +214,32 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
 
   /** A field that may be typed over the calculated figure. */
   const field = (
-    key: OverrideKey, calculated: number | string | null,
-    kind: 'money' | 'percent' | 'number' | 'text', places?: number,
+    label: string, key: OverrideKey, calculated: number | string | null,
+    kind: 'money' | 'percent' | 'number' | 'text',
+    opts: { places?: number; hint?: string; from?: string } = {},
   ) => (
-    <CostValue
+    <CostField
+      label={label}
+      editing={editing}
       value={over[key] ?? ''}
       calculated={calculated}
       kind={kind}
-      places={places}
-      editable={editable}
-      align={kind === 'text' ? 'left' : 'right'}
+      places={opts.places}
+      hint={opts.hint}
+      from={opts.from}
       onChange={setOverride(key)}
       onRevert={revert(key)}
     />
   );
 
   /** A field backed by its own stored column. */
-  const plain = (key: keyof Stored, placeholder?: string) => (
-    <input
-      className="input tnum text-right"
-      type="text"
-      inputMode="decimal"
+  const plain = (label: string, key: keyof Stored, hint?: string) => (
+    <StoredField
+      label={label}
+      editing={editing}
       value={stored[key]}
-      placeholder={placeholder}
-      disabled={!editable}
-      onChange={(e) => {
-        const v = e.target.value;
-        if (!isTypeableNumber(v)) return;
-        setField(key)(v);
-      }}
+      hint={hint}
+      onChange={setField(key)}
     />
   );
 
@@ -278,116 +291,80 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
         </div>
       )}
 
-      <Card>
-        <CardHeader
-          title="Actual costing"
-          subtitle="Every figure can be typed over. Nothing typed here changes the order, the ledgers or the bill of materials."
-          action={
-            <div className="flex items-center gap-2">
-              <button className="btn-secondary btn-sm no-print" onClick={() => window.print()}>
-                <Printer className="h-3.5 w-3.5" /> Print
-              </button>
-              {editable && (
-                <>
-                  <button
-                    className="btn-ghost btn-sm no-print"
-                    disabled={!dirty || save.isPending}
-                    onClick={() => {
-                      const [s, o, r, h] = JSON.parse(baseline) as
-                        [Stored, Record<string, string>, RowDraft[], string[]];
-                      setStored(s); setOver(o); setRows(r); setHidden(h);
-                    }}
-                  >
-                    <RotateCcw className="h-3.5 w-3.5" /> Discard
-                  </button>
-                  <button
-                    className="btn-primary btn-sm no-print"
-                    disabled={!dirty || save.isPending}
-                    onClick={() => save.mutate()}
-                  >
-                    <Save className="h-3.5 w-3.5" /> {save.isPending ? 'Saving…' : 'Save changes'}
-                  </button>
-                </>
-              )}
-            </div>
-          }
-        />
-        {save.isError && <div className="p-4 pb-0"><ErrorNote error={save.error} /></div>}
-        {c.overridden.length > 0 && (
-          <p className="border-b border-ink-100 bg-violet-50 px-4 py-2 text-2xs text-violet-800">
-            {c.overridden.length} field{c.overridden.length === 1 ? '' : 's'}
-            {c.overridden.length === 1 ? ' is' : ' are'} showing a typed figure rather than the
-            calculated one. They are outlined; each has a revert arrow that puts the calculated
-            figure back.
-          </p>
+      {/* The toolbar every other section puts here: read the record, press
+          Edit to change it, Save or Cancel. */}
+      <div className="no-print flex justify-end gap-2">
+        <button className="btn-secondary btn-sm" onClick={() => window.print()}>
+          <Printer className="h-3.5 w-3.5" /> Print
+        </button>
+        {editable && !editing && (
+          <button className="btn-secondary btn-sm" onClick={() => setEditing(true)}>
+            <Pencil className="h-3.5 w-3.5" /> Edit costing
+          </button>
         )}
+        {editable && editing && (
+          <>
+            <button
+              className="btn-secondary btn-sm"
+              onClick={() => { restore(); setEditing(false); }}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn-primary btn-sm"
+              disabled={save.isPending}
+              onClick={() => save.mutate()}
+            >
+              <Save className="h-3.5 w-3.5" /> {save.isPending ? 'Saving…' : 'Save changes'}
+            </button>
+          </>
+        )}
+      </div>
 
-        <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
-          <Labelled label="Date">
-            <input
-              type="date"
-              className="input"
-              value={stored.costingDate}
-              disabled={!editable}
-              onChange={(e) => setField('costingDate')(e.target.value)}
-            />
-          </Labelled>
-          <Labelled label="Customer" from="the order">{field('customer', order.client.name, 'text')}</Labelled>
-          <Labelled label="Order Name" from="the order">{field('orderName', order.orderName, 'text')}</Labelled>
-          <Labelled label="Item Type" from="the order">{field('itemType', order.itemType, 'text')}</Labelled>
-          <Labelled label="Po No" from="the order">{field('poNumber', order.poNumber, 'text')}</Labelled>
-          <Labelled label="Style No" from="the order">{field('styleNumber', order.styleNumber, 'text')}</Labelled>
-        </div>
-      </Card>
+      {save.isError && <ErrorNote error={save.error} />}
+
+      {c.overridden.length > 0 && (
+        <p className="no-print text-xs text-violet-700">
+          {c.overridden.length} figure{c.overridden.length === 1 ? '' : 's'} on this costing
+          {c.overridden.length === 1 ? ' was' : ' were'} typed in rather than calculated. Each says
+          so under its value, and can be put back while editing.
+        </p>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
-          <CardHeader
-            title="Machines and time"
-            subtitle="The factory's own figures. Nothing else in OpsFlow records them."
-          />
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2">
-            <Labelled label="Dollar Rate" hint="EGP per $">{plain('dollarRate', '48.5')}</Labelled>
-            <Labelled label="Daily Cost" hint="EGP per day">{plain('dailyCostEgp')}</Labelled>
-            <Labelled label="All F. Machines">{plain('machineCount')}</Labelled>
-            <Labelled label="Line Machines Qty">{plain('lineMachineQty')}</Labelled>
-            <Labelled label="Days in line">{plain('daysInLine')}</Labelled>
-            <Labelled label="Machine Already Used" hint="machine-days">{plain('machineDaysUsed')}</Labelled>
-            <Labelled label="Machine Cost" hint="daily cost ÷ machines, EGP">
-              {field('machineCostEgpPerDay', c.machineCostEgpPerDay, 'number', 2)}
-            </Labelled>
-            <Labelled label="Work Days" hint="machine-days ÷ machines">
-              {field('workDays', c.workDays, 'number', 1)}
-            </Labelled>
-            <Labelled label="Productivity rate" hint="pieces cut per work day">
-              {field('productivityRate', c.productivityRate, 'number')}
-            </Labelled>
+          <CardHeader title="The order" subtitle="Read from the order record." />
+          <div className="grid gap-3 p-4 sm:grid-cols-2">
+            <StoredField
+              label="Date" editing={editing} type="date"
+              value={stored.costingDate} onChange={setField('costingDate')}
+            />
+            {field('Customer', 'customer', order.client.name, 'text')}
+            {field('Order Name', 'orderName', order.orderName, 'text')}
+            {field('Item Type', 'itemType', order.itemType, 'text')}
+            {field('Po No', 'poNumber', order.poNumber, 'text')}
+            {field('Style No', 'styleNumber', order.styleNumber, 'text')}
           </div>
         </Card>
 
         <Card>
           <CardHeader title="The result" subtitle="Per piece, against what shipped." />
-          <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-2">
-            <Labelled label="Sell Price" from="Order Details">
-              {field('sellPriceUsd', c.sellPriceUsd, 'money')}
-            </Labelled>
-            <Labelled label="Actual Cost/Unit" hint="total ÷ shipped">
-              {field('unitActualCostUsd', c.unitActualCostUsd, 'money')}
-            </Labelled>
-            <Labelled label="Profit" hint="sell price − unit cost">
-              {field('profitPerUnitUsd', c.profitPerUnitUsd, 'money')}
-            </Labelled>
-            <Labelled label="Pro. Percentage" hint="profit ÷ sell price">
-              {field('profitPct', c.profitPct, 'percent')}
-            </Labelled>
-            <Labelled
-              label="Perfect price"
-              hint={c.isProfitable === true && over.targetPriceUsd == null
+          <div className="grid gap-3 p-4 sm:grid-cols-2">
+            {field('Sell Price', 'sellPriceUsd', c.sellPriceUsd, 'money', { from: 'Order Details' })}
+            {field('Actual Cost/Unit', 'unitActualCostUsd', c.unitActualCostUsd, 'money', {
+              hint: 'total cost ÷ shipped quantity',
+            })}
+            {field('Profit', 'profitPerUnitUsd', c.profitPerUnitUsd, 'money', {
+              hint: 'sell price − unit cost',
+            })}
+            {field('Pro. Percentage', 'profitPct', c.profitPct, 'percent', {
+              hint: 'profit ÷ sell price',
+            })}
+            {field('Perfect price', 'targetPriceUsd', c.targetPriceUsd, 'money', {
+              hint: c.isProfitable === true && over.targetPriceUsd == null
                 ? 'nothing to fix at this price'
-                : 'the price that restores a 20% margin'}
-            >
-              {field('targetPriceUsd', c.targetPriceUsd, 'money')}
-            </Labelled>
+                : 'the price that would restore a 20% margin',
+            })}
             <div className="flex items-end">
               <p className={clsx(
                 'w-full rounded-md px-2.5 py-1.5 text-center text-xs font-medium',
@@ -406,16 +383,40 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
 
       <Card>
         <CardHeader
+          title="Machines and time"
+          subtitle="The factory's own figures. Nothing else in OpsFlow records them."
+        />
+        <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
+          {plain('Dollar Rate', 'dollarRate', 'EGP per $')}
+          {plain('Daily Cost', 'dailyCostEgp', 'EGP per day')}
+          {plain('All F. Machines', 'machineCount')}
+          {plain('Line Machines Qty', 'lineMachineQty')}
+          {plain('Days in line', 'daysInLine')}
+          {plain('Machine Already Used', 'machineDaysUsed', 'machine-days')}
+          {field('Machine Cost', 'machineCostEgpPerDay', c.machineCostEgpPerDay, 'number', {
+            places: 2, hint: 'daily cost ÷ machines, in EGP',
+          })}
+          {field('Work Days', 'workDays', c.workDays, 'number', {
+            places: 1, hint: 'machine-days ÷ machines',
+          })}
+          {field('Productivity rate', 'productivityRate', c.productivityRate, 'number', {
+            hint: 'pieces cut per work day',
+          })}
+        </div>
+      </Card>
+
+      <Card>
+        <CardHeader
           title="Production quantities"
           subtitle="Counted on the floor and read from their ledgers. Typing here does not change them."
         />
-        <div className="grid gap-x-4 gap-y-3 p-4 sm:grid-cols-3 lg:grid-cols-6">
-          <Labelled label="Order Qty" from="order ledger">{field('orderQty', c.orderQty, 'number')}</Labelled>
-          <Labelled label="Cutted Qty" from="cut ledger">{field('cutQty', c.cutQty, 'number')}</Labelled>
-          <Labelled label="Shipped Qty" from="shipped ledger">{field('shippedQty', c.shippedQty, 'number')}</Labelled>
-          <Labelled label="1st Degree Qty" from="out-line">{field('firstDegreeQty', c.firstDegreeQty, 'number')}</Labelled>
-          <Labelled label="2nd Degree Qty" from="second-degree ledger">{field('secondDegreeQty', c.secondDegreeQty, 'number')}</Labelled>
-          <Labelled label="Diff. Percentage" hint="shipped vs ordered">{field('diffPct', c.diffPct, 'percent')}</Labelled>
+        <div className="grid gap-3 p-4 sm:grid-cols-3 lg:grid-cols-6">
+          {field('Order Qty', 'orderQty', c.orderQty, 'number', { from: 'order ledger' })}
+          {field('Cutted Qty', 'cutQty', c.cutQty, 'number', { from: 'cut ledger' })}
+          {field('Shipped Qty', 'shippedQty', c.shippedQty, 'number', { from: 'shipped ledger' })}
+          {field('1st Degree Qty', 'firstDegreeQty', c.firstDegreeQty, 'number', { from: 'out-line' })}
+          {field('2nd Degree Qty', 'secondDegreeQty', c.secondDegreeQty, 'number', { from: '2nd-degree' })}
+          {field('Diff. Percentage', 'diffPct', c.diffPct, 'percent', { hint: 'shipped vs ordered' })}
         </div>
       </Card>
 
@@ -435,47 +436,47 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
                 <th className="th w-28 text-right">Unit Price</th>
                 <th className="th w-28 text-right">Cost</th>
                 <th className="th w-20 text-right">Percentage</th>
-                {editable && <th className="th w-10" />}
+                {editing && <th className="th w-10" />}
               </tr>
             </thead>
             <tbody className="divide-y divide-ink-100">
               <RowBlock
-                caption="UsedFabric" rows={fabricRows} total={total} editable={editable}
+                caption="UsedFabric" rows={fabricRows} total={total} editing={editing}
                 onEdit={editRow} onDelete={deleteRow} onAdd={() => addRow('FABRIC')} rowCost={rowCost}
                 emptyText="No fabric on the bill of materials yet"
               />
               <SubtotalRow
-                label="Fabric Costing" cost={liveFabric} total={total} editable={editable}
+                label="Fabric Costing" cost={liveFabric} total={total} editing={editing}
                 value={over.fabricCostUsd ?? ''} calculated={c.groups.fabric.total}
                 onChange={setOverride('fabricCostUsd')} onRevert={revert('fabricCostUsd')}
               />
 
               <RowBlock
-                caption="UsedAcc" rows={accessoryRows} total={total} editable={editable}
+                caption="UsedAcc" rows={accessoryRows} total={total} editing={editing}
                 onEdit={editRow} onDelete={deleteRow} onAdd={() => addRow('ACCESSORY')} rowCost={rowCost}
                 emptyText="No accessories on the bill of materials yet"
               />
               <SubtotalRow
-                label="Accesory Costing" cost={liveAccessory} total={total} editable={editable}
+                label="Accesory Costing" cost={liveAccessory} total={total} editing={editing}
                 value={over.accessoryCostUsd ?? ''} calculated={c.groups.accessory.total}
                 onChange={setOverride('accessoryCostUsd')} onRevert={revert('accessoryCostUsd')}
               />
 
               <OutsideRow
-                label="Sublimation" cost={c.sublimationCostUsd} total={total} editable={editable}
+                label="Sublimation" cost={c.sublimationCostUsd} total={total} editing={editing}
                 value={stored.sublimationCostUsd} onChange={setField('sublimationCostUsd')}
               />
               <OutsideRow
-                label="Embroidery" cost={c.embroideryCostUsd} total={total} editable={editable}
+                label="Embroidery" cost={c.embroideryCostUsd} total={total} editing={editing}
                 value={stored.embroideryCostUsd} onChange={setField('embroideryCostUsd')}
               />
               {otherRows.map((r) => (
                 <EditableRow
-                  key={r.key} row={r} total={total} editable={editable}
+                  key={r.key} row={r} total={total} editing={editing}
                   onEdit={editRow} onDelete={deleteRow} cost={rowCost(r)}
                 />
               ))}
-              {editable && (
+              {editing && (
                 <tr className="no-print">
                   <td className="td" />
                   <td className="td" colSpan={7}>
@@ -497,29 +498,29 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
                     ? '—'
                     : fmtMoney(c.dailyCostEgp / c.dollarRate, '$', 4)}
                 </td>
-                <td className="td p-1">
-                  <CostValue
-                    value={over.cmCostUsd ?? ''} calculated={c.cmCostUsd} kind="money"
-                    editable={editable} onChange={setOverride('cmCostUsd')} onRevert={revert('cmCostUsd')}
+                <td className="td text-right">
+                  <CostCell
+                    editing={editing} value={over.cmCostUsd ?? ''} calculated={c.cmCostUsd}
+                    kind="money" onChange={setOverride('cmCostUsd')} onRevert={revert('cmCostUsd')}
                   />
                 </td>
                 <td className="td tnum text-right">{fmtPct(pctOf(c.cmCostUsd, total), 1)}</td>
-                {editable && <td className="td" />}
+                {editing && <td className="td" />}
               </tr>
 
               <tr className="bg-ink-100">
                 <td className="td font-bold text-ink-900" colSpan={5}>Total</td>
-                <td className="td p-1">
-                  <CostValue
-                    value={over.totalCostUsd ?? ''} calculated={c.totalCostUsd} kind="money"
-                    editable={editable} className="font-semibold"
+                <td className="td text-right">
+                  <CostCell
+                    editing={editing} value={over.totalCostUsd ?? ''} calculated={c.totalCostUsd}
+                    kind="money" className="font-semibold"
                     onChange={setOverride('totalCostUsd')} onRevert={revert('totalCostUsd')}
                   />
                 </td>
                 <td className="td tnum text-right font-semibold">
                   {total == null ? '—' : '100.0%'}
                 </td>
-                {editable && <td className="td" />}
+                {editing && <td className="td" />}
               </tr>
             </tbody>
           </table>
@@ -529,13 +530,16 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
       <Card>
         <CardHeader title="Notes" subtitle="Anything about this costing that the numbers do not say." />
         <div className="p-4">
-          <textarea
-            className="input min-h-[5rem] resize-y"
-            value={stored.notes}
-            disabled={!editable}
-            onChange={(e) => setField('notes')(e.target.value)}
-            placeholder={editable ? 'Why a figure was overridden, what an invoice said, anything the next reader needs.' : ''}
-          />
+          {editing ? (
+            <textarea
+              className="input min-h-[5rem] resize-y"
+              value={stored.notes}
+              onChange={(e) => setField('notes')(e.target.value)}
+              placeholder="Why a figure was overridden, what an invoice said, anything the next reader needs."
+            />
+          ) : (
+            <p className="whitespace-pre-wrap text-sm text-ink-800">{stored.notes || '—'}</p>
+          )}
         </div>
       </Card>
 
@@ -555,31 +559,13 @@ function pctOf(part: number | null, whole: number | null): number | null {
   return (part / whole) * 100;
 }
 
-/** A labelled field, with a note of where its figure comes from. */
-function Labelled({
-  label, hint, from, children,
-}: {
-  label: string; hint?: string; from?: string; children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label className="label flex items-baseline justify-between gap-2">
-        <span>{label}</span>
-        {from && <span className="text-2xs font-normal normal-case text-ink-400">from {from}</span>}
-      </label>
-      {children}
-      {hint && <p className="mt-1 text-2xs text-ink-500">{hint}</p>}
-    </div>
-  );
-}
-
 function RowBlock({
-  caption, rows, total, editable, onEdit, onDelete, onAdd, rowCost, emptyText,
+  caption, rows, total, editing, onEdit, onDelete, onAdd, rowCost, emptyText,
 }: {
   caption: string;
   rows: RowDraft[];
   total: number | null;
-  editable: boolean;
+  editing: boolean;
   onEdit: (key: string, patch: Partial<RowDraft>) => void;
   onDelete: (row: RowDraft) => void;
   onAdd: () => void;
@@ -591,19 +577,19 @@ function RowBlock({
       {rows.length === 0 ? (
         <tr>
           <td className="td font-semibold text-ink-700">{caption}</td>
-          <td className="td text-xs italic text-ink-400" colSpan={editable ? 7 : 6}>{emptyText}</td>
+          <td className="td text-xs italic text-ink-400" colSpan={editing ? 7 : 6}>{emptyText}</td>
         </tr>
       ) : (
         rows.map((r, i) => (
           <EditableRow
             key={r.key}
             caption={i === 0 ? caption : ''}
-            row={r} total={total} editable={editable}
+            row={r} total={total} editing={editing}
             onEdit={onEdit} onDelete={onDelete} cost={rowCost(r)}
           />
         ))
       )}
-      {editable && (
+      {editing && (
         <tr className="no-print">
           <td className="td" />
           <td className="td" colSpan={7}>
@@ -618,12 +604,12 @@ function RowBlock({
 }
 
 function EditableRow({
-  caption, row, total, editable, onEdit, onDelete, cost,
+  caption, row, total, editing, onEdit, onDelete, cost,
 }: {
   caption?: string;
   row: RowDraft;
   total: number | null;
-  editable: boolean;
+  editing: boolean;
   onEdit: (key: string, patch: Partial<RowDraft>) => void;
   onDelete: (row: RowDraft) => void;
   cost: number | null;
@@ -631,46 +617,39 @@ function EditableRow({
   const origin = row.sourceRef
     ? row.derived ? `From ${explain(row.sourceRef)}` : `Edited — was from ${explain(row.sourceRef)}`
     : 'Added by hand';
-  const num = (v: string, set: (s: string) => void) => (
-    <input
-      className="input tnum py-1 text-right text-xs"
-      type="text"
-      inputMode="decimal"
-      value={v}
-      disabled={!editable}
-      onChange={(e) => {
-        const next = e.target.value;
-        if (!isTypeableNumber(next)) return;
-        set(next);
-      }}
-    />
-  );
 
   return (
     <tr className={clsx(!row.derived && row.sourceRef && 'bg-violet-50/40')}>
       <td className="td font-semibold text-ink-700">{caption ?? ''}</td>
       <td className="td" title={origin}>
-        <input
-          className="input py-1 text-xs"
-          value={row.label}
-          placeholder="Item"
-          disabled={!editable}
-          onChange={(e) => onEdit(row.key, { label: e.target.value })}
+        <TextCell
+          editing={editing} value={row.label} placeholder="Item"
+          onChange={(v) => onEdit(row.key, { label: v })}
         />
       </td>
-      <td className="td">{num(row.quantity, (v) => onEdit(row.key, { quantity: v }))}</td>
+      <td className="td text-right">
+        <NumberCell
+          editing={editing} value={row.quantity}
+          display={row.quantity === '' ? '—' : fmtNumber(Number(row.quantity), { places: 2 })}
+          onChange={(v) => onEdit(row.key, { quantity: v })}
+        />
+      </td>
       <td className="td">
-        <input
-          className="input py-1 text-center text-xs"
-          value={row.unit}
-          disabled={!editable}
-          onChange={(e) => onEdit(row.key, { unit: e.target.value })}
+        <TextCell
+          editing={editing} value={row.unit} align="center"
+          onChange={(v) => onEdit(row.key, { unit: v })}
         />
       </td>
-      <td className="td">{num(row.unitPrice, (v) => onEdit(row.key, { unitPrice: v }))}</td>
+      <td className="td text-right">
+        <NumberCell
+          editing={editing} value={row.unitPrice}
+          display={row.unitPrice === '' ? '—' : fmtMoney(Number(row.unitPrice), '$', 4)}
+          onChange={(v) => onEdit(row.key, { unitPrice: v })}
+        />
+      </td>
       <td className="td tnum text-right">{cost == null ? '—' : fmtMoney(cost)}</td>
       <td className="td tnum text-right">{fmtPct(pctOf(cost, total), 1)}</td>
-      {editable && (
+      {editing && (
         <td className="td text-right">
           <button
             type="button"
@@ -700,29 +679,28 @@ function explain(ref: string): string {
 
 /** The "Fabric Costing" / "Accesory Costing" rows the sheet prints. */
 function SubtotalRow({
-  label, cost, total, value, calculated, editable, onChange, onRevert,
+  label, cost, total, value, calculated, editing, onChange, onRevert,
 }: {
   label: string;
   cost: number | null;
   total: number | null;
   value: string;
   calculated: number | null;
-  editable: boolean;
+  editing: boolean;
   onChange: (v: string) => void;
   onRevert: () => void;
 }) {
   return (
     <tr className="bg-ink-50">
       <td className="td font-semibold text-ink-900" colSpan={5}>{label}</td>
-      <td className="td p-1">
-        <CostValue
-          value={value} calculated={calculated} kind="money"
-          editable={editable} className="font-semibold"
-          onChange={onChange} onRevert={onRevert}
+      <td className="td text-right">
+        <CostCell
+          editing={editing} value={value} calculated={calculated} kind="money"
+          className="font-semibold" onChange={onChange} onRevert={onRevert}
         />
       </td>
       <td className="td tnum text-right font-semibold">{fmtPct(pctOf(cost, total), 1)}</td>
-      {editable && <td className="td" />}
+      {editing && <td className="td" />}
     </tr>
   );
 }
@@ -736,10 +714,10 @@ function SubtotalRow({
  * sublimation twice is the kind of error a costing sheet exists to prevent.
  */
 function OutsideRow({
-  label, cost, total, editable, value, onChange,
+  label, cost, total, editing, value, onChange,
 }: {
   label: string; cost: number | null; total: number | null;
-  editable: boolean; value: string; onChange: (v: string) => void;
+  editing: boolean; value: string; onChange: (v: string) => void;
 }) {
   return (
     <tr>
@@ -751,24 +729,16 @@ function OutsideRow({
         )}
       </td>
       <td className="td" colSpan={2} />
-      <td className="td p-1">
-        <input
-          className="input tnum py-1 text-right text-xs"
-          type="text"
-          inputMode="decimal"
-          value={value}
-          placeholder={cost == null ? '' : formatCell(cost, 'money')}
-          disabled={!editable}
-          onChange={(e) => {
-            const next = e.target.value;
-            if (!isTypeableNumber(next)) return;
-            onChange(next);
-          }}
+      <td className="td text-right">
+        <NumberCell
+          editing={editing} value={value}
+          display={value === '' ? '—' : fmtMoney(Number(value), '$', 2)}
+          onChange={onChange}
         />
       </td>
       <td className="td tnum text-right">{cost == null ? '—' : fmtMoney(cost)}</td>
       <td className="td tnum text-right">{fmtPct(pctOf(cost, total), 1)}</td>
-      {editable && <td className="td" />}
+      {editing && <td className="td" />}
     </tr>
   );
 }
