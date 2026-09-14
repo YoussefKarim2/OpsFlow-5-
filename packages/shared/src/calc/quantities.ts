@@ -122,8 +122,10 @@ const PIECE_EPSILON = 1e-6;
  * The size/colour breakdown is then apportioned to sum to exactly this number
  * (see `computeCutMatrix`), so the header and the grid can never disagree.
  *
- * Note this is the ORDER quantity, not order-minus-stock: the Cut Order states
- * how many pieces to cut against the customer's original quantity.
+ * The quantity passed in is what remains to be cut — the order less any
+ * finished stock already held (see `computeCuttableQty`). Stock that exists
+ * does not need cutting, and the allowance applies to what is actually cut, not
+ * to pieces already sitting in the warehouse.
  */
 export function computeCutOrderTotal(mainOrderQty: number, cutPct: number): number {
   if (!Number.isFinite(mainOrderQty) || mainOrderQty <= 0) return 0;
@@ -150,7 +152,13 @@ export function computeCutMatrix(
   cutPct: number,
 ): QtyCell[] {
   const order = buildMatrix(cells, colors, sizes, QtyLedger.ORDER);
-  const target = computeCutOrderTotal(order.grandTotal, cutPct);
+  // Finished stock already covers part of the order, so it is not cut again.
+  // Netted per cell — see `computeCuttableQty` for why not on the totals.
+  const stock = buildMatrix(cells, colors, sizes, QtyLedger.STOCK);
+  const netAt = (colorId: string, sizeId: string): number =>
+    Math.max(0, (order.cells[colorId]?.[sizeId] ?? 0) - (stock.cells[colorId]?.[sizeId] ?? 0));
+
+  const target = computeCutOrderTotal(computeCuttableQty(cells, colors, sizes), cutPct);
   if (target <= 0) return [];
 
   interface Share { colorId: string; sizeId: string; base: number; remainder: number; rank: number }
@@ -159,7 +167,7 @@ export function computeCutMatrix(
 
   order.colors.forEach((c, ci) => {
     order.sizes.forEach((s, si) => {
-      const orderQty = order.cells[c.id]?.[s.id] ?? 0;
+      const orderQty = netAt(c.id, s.id);
       if (orderQty <= 0) return;
       const exact = orderQty * (1 + cutPct);
       const base = Math.floor(exact + PIECE_EPSILON);
@@ -187,6 +195,36 @@ export function computeCutMatrix(
       colorId: share.colorId, sizeId: share.sizeId,
       ledger: QtyLedger.CUT, qty: share.base,
     }));
+}
+
+/**
+ * What actually has to be cut: the order, less the finished stock already held.
+ *
+ * Netted per colour and size rather than on the totals, because stock is not
+ * fungible across the grid — fifty Navy S in the warehouse cover fifty Navy S
+ * of the order and nothing else. Netting on totals would let spare White XL
+ * cancel out a Navy S shortfall and under-cut the order.
+ *
+ * Floored at zero per cell, so holding more of one size than was ordered never
+ * borrows against another. If nothing is in stock this is simply the order
+ * quantity, which is the behaviour every order without a stock entry sees.
+ */
+export function computeCuttableQty(
+  cells: readonly QtyCell[],
+  colors: AxisRef[],
+  sizes: AxisRef[],
+): number {
+  const order = buildMatrix(cells, colors, sizes, QtyLedger.ORDER);
+  const stock = buildMatrix(cells, colors, sizes, QtyLedger.STOCK);
+  let net = 0;
+  for (const c of order.colors) {
+    for (const s of order.sizes) {
+      const ordered = order.cells[c.id]?.[s.id] ?? 0;
+      const held = stock.cells[c.id]?.[s.id] ?? 0;
+      net += Math.max(0, ordered - held);
+    }
+  }
+  return net;
 }
 
 /**
@@ -250,9 +288,22 @@ export interface CutVariance {
   variancePct: number | null;
 }
 
-export function computeCutVariance(cells: readonly QtyCell[], cutPct: number, actualCutQty: number | null): CutVariance {
+export function computeCutVariance(
+  cells: readonly QtyCell[],
+  cutPct: number,
+  actualCutQty: number | null,
+  colors: AxisRef[] = [],
+  sizes: AxisRef[] = [],
+): CutVariance {
   const orderedQty = ledgerTotal(cells, QtyLedger.ORDER);
-  const plannedCutQty = computeCutOrderTotal(orderedQty, cutPct);
+  // The plan is what the Cut Order step would generate, so it has to net stock
+  // the same way — otherwise the variance reports a shortfall against a number
+  // the factory was never going to cut. With no axes given there is no grid to
+  // net against, and the order total is the best available answer.
+  const cuttable = colors.length > 0 && sizes.length > 0
+    ? computeCuttableQty(cells, colors, sizes)
+    : Math.max(0, orderedQty - ledgerTotal(cells, QtyLedger.STOCK));
+  const plannedCutQty = computeCutOrderTotal(cuttable, cutPct);
   const actual = actualCutQty ?? ledgerTotal(cells, QtyLedger.CUT);
   return {
     orderedQty,

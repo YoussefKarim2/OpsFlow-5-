@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { QtyLedger } from '../enums.js';
 import { safeDiv, safePct, roundUp, fmtNumber, fmtMoney, NOT_CALCULATED } from './num.js';
 import {
-  buildMatrix, computeCutOrderTotal, computeCutMatrix, ledgerTotal, computeStockDeduction,
+  buildMatrix, computeCutOrderTotal, computeCutMatrix, computeCuttableQty, ledgerTotal, computeStockDeduction,
   computeCutVariance, computeFunnel, computeColorProgress, type QtyCell, type AxisRef,
 } from './quantities.js';
 import { computeProductionAnalytics } from './production.js';
@@ -534,5 +534,76 @@ describe('workflow template — Progress Status!C8:I34', () => {
   test('sequences run 1..14 with no gaps', () => {
     const seqs = [...new Set(WORKFLOW_TEMPLATE.map((t) => t.sequence))].sort((a, b) => a - b);
     assert.deepEqual(seqs, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+  });
+});
+
+describe('finished stock comes off the cut order', () => {
+  // A factory that already holds fifty finished pieces does not cut them again.
+  // The netting is per colour and size, because stock is not fungible across the
+  // grid: fifty Navy S cover fifty Navy S of the order and nothing else.
+  const COLORS = [
+    { id: 'navy', name: 'Navy', position: 0 },
+    { id: 'white', name: 'White', position: 1 },
+  ];
+  const SIZES = [
+    { id: 's', name: 'S', position: 0 },
+    { id: 'm', name: 'M', position: 1 },
+    { id: 'l', name: 'L', position: 2 },
+  ];
+  const cell = (colorId: string, sizeId: string, ledger: QtyLedger, qty: number) =>
+    ({ colorId, sizeId, ledger, qty });
+  const ORDER = [
+    cell('navy', 's', QtyLedger.ORDER, 100), cell('navy', 'm', QtyLedger.ORDER, 200),
+    cell('navy', 'l', QtyLedger.ORDER, 150), cell('white', 's', QtyLedger.ORDER, 80),
+    cell('white', 'm', QtyLedger.ORDER, 160), cell('white', 'l', QtyLedger.ORDER, 120),
+  ];
+  const cutTotal = (cells: typeof ORDER, pct = 0.05) =>
+    ledgerTotal(computeCutMatrix(cells, COLORS, SIZES, pct), QtyLedger.CUT);
+
+  test('with nothing in stock, nothing is subtracted', () => {
+    // The behaviour every order without a stock entry must keep seeing.
+    assert.equal(computeCuttableQty(ORDER, COLORS, SIZES), 810);
+    assert.equal(cutTotal(ORDER), computeCutOrderTotal(810, 0.05));
+    assert.equal(cutTotal(ORDER), 851);
+  });
+
+  test('stock is deducted, and the allowance applies to what is left', () => {
+    const withStock = [...ORDER,
+      cell('navy', 's', QtyLedger.STOCK, 50), cell('white', 'm', QtyLedger.STOCK, 60)];
+    assert.equal(computeCuttableQty(withStock, COLORS, SIZES), 700);
+    // 700 × 1.05 = 735 — the allowance is not paid on pieces already held.
+    assert.equal(cutTotal(withStock), 735);
+  });
+
+  test('it is deducted from the colour and size it belongs to', () => {
+    const withStock = [...ORDER, cell('navy', 's', QtyLedger.STOCK, 50)];
+    const grid = buildMatrix(computeCutMatrix(withStock, COLORS, SIZES, 0), COLORS, SIZES, QtyLedger.CUT);
+    assert.equal(grid.cells['navy']?.['s'], 50, 'Navy S loses exactly its own stock');
+    assert.equal(grid.cells['white']?.['s'], 80, 'White S is untouched');
+    assert.equal(grid.cells['navy']?.['m'], 200, 'Navy M is untouched');
+  });
+
+  test('surplus stock in one cell never borrows against another', () => {
+    // 999 Navy S in stock against 100 ordered: Navy S goes to zero and stops.
+    const withStock = [...ORDER, cell('navy', 's', QtyLedger.STOCK, 999)];
+    assert.equal(computeCuttableQty(withStock, COLORS, SIZES), 710);
+    const grid = buildMatrix(computeCutMatrix(withStock, COLORS, SIZES, 0), COLORS, SIZES, QtyLedger.CUT);
+    assert.equal(grid.cells['navy']?.['s'] ?? 0, 0);
+    assert.equal(grid.cells['white']?.['m'], 160, 'the surplus does not eat into White M');
+  });
+
+  test('an order entirely in stock has nothing to cut', () => {
+    const allHeld = [...ORDER, ...ORDER.map((c) => ({ ...c, ledger: QtyLedger.STOCK }))];
+    assert.equal(computeCuttableQty(allHeld, COLORS, SIZES), 0);
+    assert.equal(cutTotal(allHeld), 0);
+    assert.deepEqual(computeCutMatrix(allHeld, COLORS, SIZES, 0.05), []);
+  });
+
+  test('the grid still sums to the headline figure', () => {
+    // The invariant the apportionment exists to protect, now with stock in play.
+    const withStock = [...ORDER,
+      cell('navy', 'm', QtyLedger.STOCK, 37), cell('white', 'l', QtyLedger.STOCK, 11)];
+    const net = computeCuttableQty(withStock, COLORS, SIZES);
+    assert.equal(cutTotal(withStock), computeCutOrderTotal(net, 0.05));
   });
 });

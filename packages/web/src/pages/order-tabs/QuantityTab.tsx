@@ -11,7 +11,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Wand2, Save } from 'lucide-react';
 import {
   QtyLedger, LEDGER_LABEL, buildMatrix, computeVariances, fmtNumber,
-  ledgerTotal, computeCutOrderTotal,
+  ledgerTotal, computeCutOrderTotal, computeCuttableQty,
   type OrderDetailDto, type QtyCell, type AxisRef,
 } from '@opsflow/shared';
 import { api, ApiError } from '../../lib/api';
@@ -125,11 +125,16 @@ export function QuantityTab({
   // figure on screen always matches the percentage in the box. The Main Order
   // total is read from the ORDER ledger and never written back.
   const mainOrderQty = ledgerTotal(withEdits, QtyLedger.ORDER);
+  // Finished stock already covers part of the order and is not cut again, so
+  // the figure above the grid is netted exactly the way the grid itself is.
+  // With nothing in stock this is simply the order quantity.
+  const stockQty = ledgerTotal(withEdits, QtyLedger.STOCK);
+  const cuttableQty = computeCuttableQty(withEdits, colors, sizes);
   const pctText = pctDraft ?? String(Number((order.cutPercentage * 100).toFixed(4)));
   const pctParsed = Number(pctText);
   const pctValid = Number.isFinite(pctParsed) && pctParsed >= 0 && pctParsed <= 50;
   const cutPct = pctValid ? pctParsed / 100 : order.cutPercentage;
-  const cutOrderQty = computeCutOrderTotal(mainOrderQty, cutPct);
+  const cutOrderQty = computeCutOrderTotal(cuttableQty, cutPct);
   const savedCutQty = ledgerTotal(baseCells, QtyLedger.CUT);
   const pctDirty = pctDraft !== null && Math.abs(cutPct - order.cutPercentage) > 1e-9;
 
@@ -256,8 +261,13 @@ export function QuantityTab({
                   {fmtNumber(cutOrderQty)}
                   <span className="ml-1 text-xs font-normal text-ink-500">pcs</span>
                 </div>
+                {/* The arithmetic, shown. With stock recorded the subtraction
+                    is named, so the figure is never a number nobody can trace. */}
                 <div className="mt-0.5 text-2xs text-ink-400">
-                  Calculated — {fmtNumber(mainOrderQty)} × {(1 + cutPct).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}
+                  Calculated — {stockQty > 0
+                    ? `(${fmtNumber(mainOrderQty)} − ${fmtNumber(stockQty)} in stock) × `
+                    : `${fmtNumber(mainOrderQty)} × `}
+                  {(1 + cutPct).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}
                 </div>
               </div>
             </div>
