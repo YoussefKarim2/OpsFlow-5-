@@ -27,7 +27,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Lock, Pencil, Plus, Printer, Save, Trash2 } from 'lucide-react';
+import { Check, Cloud, CloudOff, Lock, Pencil, Plus, Printer, Trash2 } from 'lucide-react';
 import {
   computeCosting, rowCost, applyRowEdit, sanitiseOverrides,
   fmtMoney, fmtNumber, fmtPct, NOT_CALCULATED,
@@ -74,6 +74,18 @@ interface RowDraft {
   /** True while it is still the derivation's row and nobody has touched it. */
   derived: boolean;
 }
+
+/**
+ * How long to wait after the last keystroke before writing to the database.
+ *
+ * Long enough that typing "1250" is one save rather than four, short enough
+ * that nobody gets as far as closing the tab believing they are done. The
+ * arithmetic on screen does not wait for any of this — it is recomputed on
+ * every keystroke — so this delay is invisible except in the saved indicator.
+ */
+const AUTOSAVE_DELAY_MS = 1200;
+
+type SaveState = 'clean' | 'pending' | 'saving' | 'saved' | 'error';
 
 const numText = (v: number | null | undefined): string => (v == null ? '' : String(v));
 
@@ -153,9 +165,14 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
   // The rest of OpsFlow shows a record as text and turns it into a form on
   // "Edit". A screen of input boxes reads as a different application.
   const [editing, setEditing] = useState(false);
+  const [saveState, setSaveState] = useState<SaveState>('clean');
   // Read inside the re-seeding effect, which must not depend on it.
   const editingRef = useRef(editing);
   editingRef.current = editing;
+  /** True while a request is in flight, so two never overlap. */
+  const inFlightRef = useRef(false);
+  /** The draft as it was when the in-flight save was sent. */
+  const sentRef = useRef('');
 
   // Re-seed when the server's copy actually changes — including when the user
   // switches to a different order, which replaces the data without remounting.
@@ -170,15 +187,28 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
   useEffect(() => {
     const [, s, o, r, h] = JSON.parse(serverState) as
       [string, Stored, Record<string, string>, RowDraft[], string[]];
-    setBaseline(JSON.stringify([s, o, r, h]));
-    // Not while somebody is typing: a background refetch, or a colleague
-    // saving the same order, would otherwise wipe an edit in progress.
-    if (editingRef.current) return;
+    const fromServer = JSON.stringify([s, o, r, h]);
+    setBaseline(fromServer);
+
+    // Take the server's copy when nothing would be lost by it: either nobody
+    // is editing, or they are but have typed nothing since the last save
+    // landed.
+    //
+    // That second case is what stops an endless save loop. Somebody types
+    // "2.50"; the database stores 2.5 and hands back "2.5"; the draft still
+    // says "2.50", so it looks unsaved, so it saves again — for ever. Adopting
+    // the server's spelling the moment the person pauses settles it, and
+    // cannot interrupt them, because by definition they have stopped typing.
+    const idle = currentRef.current === sentRef.current;
+    if (editingRef.current && !idle) return;
     setStored(s); setOver(o); setRows(r); setHidden(h);
   }, [serverState]);
 
-  // Kept so Cancel can restore exactly what the server last sent.
-  void JSON.stringify([stored, over, rows, hidden]);
+  /** The draft, as one comparable string. Changing it is what "unsaved" means. */
+  const current = JSON.stringify([stored, over, rows, hidden]);
+  const currentRef = useRef(current);
+  currentRef.current = current;
+  const dirty = baseline !== '' && current !== baseline;
 
   const save = useMutation({
     mutationFn: () => api.steps.saveCosting(order.id, {
@@ -209,17 +239,51 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
         })),
     }),
     onSuccess: () => {
-      setEditing(false);
+      // The draft as it was when this request left. Anything typed since is
+      // still unsaved, and the effect below will notice and send it.
+      setBaseline(sentRef.current);
+      setSaveState('saved');
       void qc.invalidateQueries({ queryKey: ['costing', order.id] });
       void qc.invalidateQueries({ queryKey: ['order', order.id] });
     },
+    onError: () => setSaveState('error'),
+    onSettled: () => { inFlightRef.current = false; },
   });
 
-  const restore = () => {
-    const [s, o, r, h] = JSON.parse(baseline) as
-      [Stored, Record<string, string>, RowDraft[], string[]];
-    setStored(s); setOver(o); setRows(r); setHidden(h);
+  /** Send the draft, unless one is already on its way. */
+  const saveNow = () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    sentRef.current = currentRef.current;
+    setSaveState('saving');
+    save.mutate();
   };
+  const saveRef = useRef(saveNow);
+  saveRef.current = saveNow;
+
+  /**
+   * Write the draft once the typing stops.
+   *
+   * Re-armed on every change, so a burst of keystrokes is one request rather
+   * than one each. A save already in flight is not interrupted — when it lands
+   * the baseline moves to what was sent, and anything typed meanwhile leaves
+   * the draft dirty again, which brings this effect straight back. That is what
+   * stops the last edit being the one that goes missing.
+   */
+  useEffect(() => {
+    if (!editable || !dirty) return;
+    setSaveState((prev) => (prev === 'saving' ? prev : 'pending'));
+    const timer = setTimeout(() => saveRef.current(), AUTOSAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [current, dirty, editable]);
+
+  /**
+   * Leaving the tab must not cost the last thing typed. The debounce window is
+   * short, but closing an order inside it is exactly when it would hurt.
+   */
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  useEffect(() => () => { if (dirtyRef.current) saveRef.current(); }, []);
 
   /**
    * The whole costing, recomputed from the draft on every keystroke.
@@ -360,37 +424,37 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
         </div>
       )}
 
-      {/* The toolbar every other section puts here: read the record, press
-          Edit to change it, Save or Cancel. */}
-      <div className="no-print flex justify-end gap-2">
+      {/* Edit puts the section into a form, as everywhere else in OpsFlow. What
+          is different is that there is nothing to press afterwards: changes are
+          written a moment after the typing stops, and the indicator says so. */}
+      <div className="no-print flex items-center justify-end gap-3">
+        <SaveState state={saveState} dirty={dirty} onRetry={() => saveNow()} />
         <button className="btn-secondary btn-sm" onClick={() => window.print()}>
           <Printer className="h-3.5 w-3.5" /> Print
         </button>
-        {editable && !editing && (
-          <button className="btn-secondary btn-sm" onClick={() => setEditing(true)}>
-            <Pencil className="h-3.5 w-3.5" /> Edit costing
+        {editable && (
+          <button
+            className={editing ? 'btn-primary btn-sm' : 'btn-secondary btn-sm'}
+            onClick={() => {
+              // Leaving edit mode must not strand an unsaved keystroke.
+              if (editing && dirty) saveNow();
+              setEditing(!editing);
+            }}
+          >
+            {editing ? <><Check className="h-3.5 w-3.5" /> Done</> : <><Pencil className="h-3.5 w-3.5" /> Edit costing</>}
           </button>
-        )}
-        {editable && editing && (
-          <>
-            <button
-              className="btn-secondary btn-sm"
-              onClick={() => { restore(); setEditing(false); }}
-            >
-              Cancel
-            </button>
-            <button
-              className="btn-primary btn-sm"
-              disabled={save.isPending}
-              onClick={() => save.mutate()}
-            >
-              <Save className="h-3.5 w-3.5" /> {save.isPending ? 'Saving…' : 'Save changes'}
-            </button>
-          </>
         )}
       </div>
 
-      {save.isError && <ErrorNote error={save.error} />}
+      {saveState === 'error' && (
+        <div className="no-print">
+          <ErrorNote error={save.error} onRetry={() => saveNow()} />
+          <p className="mt-1 text-2xs text-ink-500">
+            Your changes are still on screen and nothing has been lost. They will be written
+            again as soon as the next edit is made, or press Try again.
+          </p>
+        </div>
+      )}
 
       {live.overridden.length > 0 && (
         <p className="no-print text-xs text-violet-700">
@@ -619,6 +683,37 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
       <MissingNotes live={live} />
     </div>
   );
+}
+
+/**
+ * Whether what is on screen has reached the database.
+ *
+ * Deliberately quiet: a costing screen that shouts after every keystroke is
+ * worse than one that says nothing. It only speaks up when something is
+ * outstanding or has failed.
+ */
+function SaveState({
+  state, dirty, onRetry,
+}: {
+  state: SaveState; dirty: boolean; onRetry: () => void;
+}) {
+  if (state === 'error') {
+    return (
+      <button className="flex items-center gap-1.5 text-2xs font-medium text-red-700" onClick={onRetry}>
+        <CloudOff className="h-3.5 w-3.5" /> Not saved — try again
+      </button>
+    );
+  }
+  if (state === 'saving') {
+    return <span className="flex items-center gap-1.5 text-2xs text-ink-500"><Cloud className="h-3.5 w-3.5" /> Saving…</span>;
+  }
+  if (dirty || state === 'pending') {
+    return <span className="flex items-center gap-1.5 text-2xs text-ink-400"><Cloud className="h-3.5 w-3.5" /> Unsaved changes</span>;
+  }
+  if (state === 'saved') {
+    return <span className="flex items-center gap-1.5 text-2xs text-emerald-700"><Check className="h-3.5 w-3.5" /> All changes saved</span>;
+  }
+  return null;
 }
 
 function drop(map: Record<string, string>, key: string): Record<string, string> {
