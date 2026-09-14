@@ -42,6 +42,15 @@ export interface AlertContext {
     orderQty: number;
     packedQty: number;
     producedQty: number;
+    /**
+     * Pieces shipped, from whichever record holds the answer.
+     *
+     * Without it an order whose consignments have all left still counted as
+     * incomplete — because only the packed ledger was consulted — and went on
+     * raising an overdue alert nobody could clear. Shipping the order is the
+     * strongest possible evidence that it is finished.
+     */
+    shippedQty?: number;
   };
   tasks: readonly TaskLike[];
   bom?: BomSummary | null;
@@ -71,7 +80,9 @@ export function evaluateAlerts(ctx: AlertContext): Alert[] {
   // --- Dates -------------------------------------------------------------
   const daysToDelivery = daysBetween(today, ctx.order.requiredDeliveryDate);
   const daysToShip = daysBetween(today, ctx.order.promisedShippingDate);
-  const complete = ctx.order.orderQty > 0 && ctx.order.packedQty >= ctx.order.orderQty;
+  const complete = ctx.order.orderQty > 0
+    && (ctx.order.packedQty >= ctx.order.orderQty
+      || (ctx.order.shippedQty ?? 0) >= ctx.order.orderQty);
 
   if (daysToDelivery != null && daysToDelivery < 0 && !complete) {
     push({

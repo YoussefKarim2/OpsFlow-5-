@@ -122,7 +122,10 @@ export function QuantityTab({
     );
 
   const matrix = buildMatrix(withEdits, colors, sizes, ledger as QtyLedger);
-  const variances = computeVariances(withEdits);
+  // The order's shipped figure, which may come from the consignments rather
+  // than this grid. Read from the funnel so both screens say the same thing.
+  const shippedQty = order.funnel.find((f) => f.ledger === QtyLedger.SHIPPED)?.qty;
+  const variances = computeVariances(withEdits, shippedQty);
   const editable = EDITABLE.includes(ledger) && can('order:edit');
   const dirty = Object.keys(edits).length > 0;
 

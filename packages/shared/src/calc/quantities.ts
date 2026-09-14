@@ -262,8 +262,17 @@ export interface LedgerVariance {
   yieldPct: number | null;
 }
 
-export function computeVariances(cells: readonly QtyCell[]): LedgerVariance[] {
-  const t = ledgerTotals(cells);
+export function computeVariances(
+  cells: readonly QtyCell[],
+  /**
+   * The order's shipped figure, when it comes from the consignments rather
+   * than the grid. Passed in so this table cannot contradict the funnel on the
+   * next screen — the two were reading different records.
+   */
+  shippedQty?: number,
+): LedgerVariance[] {
+  const t = { ...ledgerTotals(cells) };
+  if (shippedQty != null) t[QtyLedger.SHIPPED] = shippedQty;
   const pairs: Array<[QtyLedger, QtyLedger, string]> = [
     [QtyLedger.CUT, QtyLedger.IN_LINE, 'Cut → In-line'],
     [QtyLedger.IN_LINE, QtyLedger.OUT_LINE, 'In-line → Out-line'],
@@ -324,12 +333,55 @@ export interface FunnelStep {
   pctOfPrev: number | null;
 }
 
-export function computeFunnel(cells: readonly QtyCell[]): FunnelStep[] {
+/**
+ * A shipment, as far as counting shipped pieces goes.
+ */
+export interface ShipmentLike {
+  qty: number;
+  status: string;
+}
+
+/** Only these have actually left the building. Booked is not shipped. */
+const HAS_SHIPPED = new Set(['SHIPPED', 'DELIVERED']);
+
+/**
+ * How many pieces have shipped.
+ *
+ * Two records can answer this, and they are not copies of one another. The
+ * SHIPPED ledger is a colour × size breakdown, typed on the quantity grid; the
+ * shipment rows are the consignments that actually left, recorded on Packing &
+ * Shipping with a carrier and a date. Before this existed only the ledger was
+ * read, so recording a shipment moved nothing: the order never reached its
+ * shipped status, the costing went on reporting that it was waiting for a
+ * shipped quantity, and the only way to make either work was to type the
+ * figure a second time on a different screen.
+ *
+ * The breakdown wins when there is one, because it is the more specific
+ * record. Otherwise the consignments are the answer. Nothing is apportioned or
+ * inferred: a shipment's total is its own, and a ledger cell is somebody's.
+ */
+export function resolveShippedQty(
+  cells: readonly QtyCell[],
+  shipments: readonly ShipmentLike[] = [],
+): number {
+  const fromLedger = ledgerTotal(cells, QtyLedger.SHIPPED);
+  if (fromLedger > 0) return fromLedger;
+  return sum(shipments.filter((s) => HAS_SHIPPED.has(s.status)).map((s) => s.qty));
+}
+
+export function computeFunnel(
+  cells: readonly QtyCell[],
+  shipments: readonly ShipmentLike[] = [],
+): FunnelStep[] {
   const t = ledgerTotals(cells);
   const base = t[QtyLedger.ORDER] ?? 0;
   let prev: number | null = null;
   return LEDGER_FUNNEL.map((ledger) => {
-    const qty = t[ledger] ?? 0;
+    // The funnel must show the same shipped figure the rest of the order does,
+    // or the two contradict each other on the same screen.
+    const qty = ledger === QtyLedger.SHIPPED
+      ? resolveShippedQty(cells, shipments)
+      : t[ledger] ?? 0;
     const step: FunnelStep = { ledger, qty, pctOfOrder: safePct(qty, base), pctOfPrev: prev === null ? 100 : safePct(qty, prev) };
     prev = qty;
     return step;
