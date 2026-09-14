@@ -173,6 +173,19 @@
   .print-document th,
   .print-document td { border-color: #9ca3af !important; }
 
+  /*
+   * Browsers drop background colours when printing unless told otherwise, and
+   * on a costing sheet the shading is not decoration: the black banners
+   * separate the sections and the shaded cells say which figures were
+   * calculated and which were counted. A printed copy without them is a wall
+   * of numbers.
+   */
+  .print-document,
+  .print-document * {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
   @page { margin: 14mm; }
 }
 
