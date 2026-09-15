@@ -410,6 +410,11 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
   const liveFabric = live.groups.fabric.total;
   const liveAccessory = live.groups.accessory.total;
   const total = live.totalCostUsd;
+  // What one piece of cut-and-make costs — the C.M total over the pieces it is
+  // charged against. Derived here for display only; the engine owns the total.
+  const cmPerPiece = live.cmCostUsd != null && live.firstDegreeQty
+    ? live.cmCostUsd / live.firstDegreeQty
+    : null;
 
   return (
     <div className="print-document space-y-4 p-5">
@@ -525,7 +530,12 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
           {plain('All F. Machines', 'machineCount')}
           {plain('Line Machines Qty', 'lineMachineQty')}
           {plain('Days in line', 'daysInLine')}
-          {plain('Machine Already Used', 'machineDaysUsed', 'machine-days')}
+          {/* Worked out from the line machines and the days in line, which sit
+              two fields above it. Still typeable, like every calculated field
+              on this sheet. Same field, same place, same label. */}
+          {field('Machine Already Used', 'machineDaysUsed', live.machineDaysUsed, 'number', {
+            hint: 'line machines × days in line',
+          })}
           {field('Machine Cost', 'machineCostEgpPerDay', live.machineCostEgpPerDay, 'number', {
             places: 2, hint: 'daily cost ÷ machines, in EGP',
           })}
@@ -627,17 +637,21 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
                 </tr>
               )}
 
-              {/* C.M — the workbook's work days × daily cost, converted. */}
+              {/* C.M — (machine cost × machine-days) ÷ productivity, charged
+                  against the pieces that passed end-line inspection. The
+                  consumption and unit price columns show that quantity and the
+                  cost per piece, so the row multiplies out to its own total the
+                  way every other row in this table does. */}
               <tr className="bg-ink-50">
                 <td className="td font-semibold text-ink-900">C.M</td>
-                <td className="td text-ink-600">Production — work days × daily cost</td>
+                <td className="td text-ink-600">Production — machine run cost per piece</td>
                 <td className="td" />
-                <td className="td tnum text-right">{fmtNumber(live.workDays, { places: 1 })}</td>
-                <td className="td">DAY</td>
                 <td className="td tnum text-right">
-                  {live.dailyCostEgp == null || live.dollarRate == null
-                    ? '—'
-                    : fmtMoney(live.dailyCostEgp / live.dollarRate, '$', 4)}
+                  {live.firstDegreeQty == null ? '—' : fmtNumber(live.firstDegreeQty)}
+                </td>
+                <td className="td">PCS</td>
+                <td className="td tnum text-right">
+                  {cmPerPiece == null ? '—' : fmtMoney(cmPerPiece, '$', 4)}
                 </td>
                 <td className="td text-right">
                   <CostCell

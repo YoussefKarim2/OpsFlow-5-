@@ -224,7 +224,8 @@ export interface CostingResult {
 export function computeCosting(input: CostingInput): CostingResult {
   const {
     orderQty: orderQtyIn, cutQty: cutQtyIn, shippedQty: shippedQtyIn,
-    dollarRate, dailyCostEgp, machineCount, machineDaysUsed, daysInLine,
+    dollarRate, dailyCostEgp, machineCount,
+    machineDaysUsed: machineDaysUsedIn, daysInLine,
     sellPriceUsd: sellPriceIn, lines,
     lineMachineQty = null, firstDegreeQty: firstDegreeIn = null,
     secondDegreeQty: secondDegreeIn = null, overrides,
@@ -268,6 +269,23 @@ export function computeCosting(input: CostingInput): CostingResult {
   // Actual Costing!D16/D17/D18: cost per machine-day, the factory days this
   // order consumed, and pieces cut per factory day.
   const machineCostEgpPerDay = pick('machineCostEgpPerDay', safeDiv(dailyCostEgp, machineCount));
+
+  /**
+   * Machine-days this order consumed.
+   *
+   * The machines on its line, for the days it held them. Nobody should be
+   * multiplying those two by hand when the sheet holds both, so it is worked
+   * out whenever both are present. An order costed before this — or one whose
+   * line and days were never recorded — keeps the figure that was stored, and
+   * typing over the field still wins, as it does everywhere on this sheet.
+   */
+  const machineDaysUsed = pick(
+    'machineDaysUsed',
+    lineMachineQty != null && daysInLine != null
+      ? lineMachineQty * daysInLine
+      : machineDaysUsedIn,
+  );
+
   const workDays = pick('workDays', safeDiv(machineDaysUsed, machineCount));
   const productivityRate = pick('productivityRate', safeDiv(cutQty, workDays));
 
@@ -318,9 +336,30 @@ export function computeCosting(input: CostingInput): CostingResult {
   const externalParts = [otherExternalCostUsd, externalOpCostUsd, resolvedSublimation, resolvedEmbroidery];
   const externalCostUsd = externalParts.every((p) => p == null) ? null : sum(externalParts);
 
-  // CM: the sheet's `=D17*D13` — factory days × daily running cost, in EGP,
-  // converted at the rate stored with the costing.
-  const cmCostEgp = workDays != null && dailyCostEgp != null ? workDays * dailyCostEgp : null;
+  /**
+   * Cut-and-make.
+   *
+   *   (machine cost × machine-days used) ÷ productivity rate × 1st degree qty
+   *
+   * The first half is what the machines cost to run for this order; dividing
+   * by the rate they produced at turns that into a cost per piece, and the
+   * pieces that passed end-line inspection are the ones it is charged against.
+   *
+   * Nothing is rounded on the way through — only the figure that reaches the
+   * screen is formatted — and every division goes through `safeDiv`, so a
+   * productivity rate of zero or an unrecorded one leaves the whole thing
+   * uncalculated rather than infinite.
+   *
+   * In EGP, like the daily cost it descends from, and converted at the rate
+   * stored with the costing so the Total column is one currency.
+   */
+  const machineRunCostEgp = machineCostEgpPerDay != null && machineDaysUsed != null
+    ? machineCostEgpPerDay * machineDaysUsed
+    : null;
+  const costPerPieceEgp = safeDiv(machineRunCostEgp, productivityRate);
+  const cmCostEgp = costPerPieceEgp != null && firstDegreeQty != null
+    ? costPerPieceEgp * firstDegreeQty
+    : null;
   const cmCostUsd = pick('cmCostUsd', safeDiv(cmCostEgp, dollarRate));
 
   const costParts = [fabricCostUsd, accessoryCostUsd, externalCostUsd, cmCostUsd, otherCostUsd];
@@ -401,9 +440,13 @@ export function computeCosting(input: CostingInput): CostingResult {
   needs('productivityRate', productivityRate,
     workDays == null ? 'Waiting for the work days' : 'Waiting for a cut quantity');
   needs('cmCostUsd', cmCostUsd,
-    workDays == null ? 'Waiting for the work days'
-      : noDaily ? `Waiting for ${noDaily}`
+    machineCostEgpPerDay == null ? 'Waiting for the machine cost'
+      : machineDaysUsed == null ? 'Waiting for the line machines and days in line'
+      : productivityRate == null || productivityRate === 0 ? 'Waiting for the productivity rate'
+      : firstDegreeQty == null ? 'Waiting for the 1st degree quantity'
       : noRate ? `Waiting for ${noRate}` : null);
+  needs('machineDaysUsed', machineDaysUsed,
+    'Waiting for the line machines and days in line');
   needs('fabricCostUsd', fabricCostUsd,
     fabricLines.length === 0 ? 'No fabric on the bill of materials yet'
       : 'Waiting for a unit price on the fabric rows');

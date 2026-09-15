@@ -89,15 +89,19 @@ describe('the workbook formulas, cell by cell', () => {
     assert.ok(Math.abs(r.groups.accessory.total! - 100 / 48.5) < 1e-12);
   });
 
-  test('N36 — C.M is work days × daily cost', () => {
-    const r = computeCosting(BASE);
-    const egp = (130 / 38) * 1867;
-    // The one place OpsFlow deliberately differs: the workbook adds this EGP
-    // figure straight into a total whose other rows are already USD. Every
-    // unit price on the sheet is quoted `=<egp>/$D$12`, so the total is in
-    // dollars and the C.M row is not. OpsFlow converts it at the same rate,
-    // which is the only reading under which the Total column is one currency.
-    assert.ok(Math.abs(r.cmCostUsd! - egp / 48.5) < 1e-12);
+  test('N36 — the workbook says work days × daily cost, and is superseded', () => {
+    // The workbook's own formula, for the record: `=D17*D13`.
+    const workbookEgp = (130 / 38) * 1867;
+    assert.ok(workbookEgp > 0);
+
+    // OpsFlow no longer computes this. The factory's C.M is
+    //   (machine cost × machine-days) ÷ productivity × 1st degree qty,
+    // which charges the machine time against the pieces that passed
+    // inspection rather than against the calendar. Held in `cm-cost.test.ts`.
+    // Recorded here so the divergence stays a decision rather than becoming a
+    // rediscovered bug.
+    const r = computeCosting({ ...BASE, firstDegreeQty: 1950 });
+    assert.notEqual(r.cmCostUsd, workbookEgp / 48.5);
   });
 
   test('N37 — the Total is the sections plus C.M', () => {

@@ -44,10 +44,10 @@ describe('one value in, the whole chain moves', () => {
 
   test('every link is arithmetic, not approximation', () => {
     const r = computeCosting({ ...BASE, lines: [fabric(1.25, 4)] });
-    const cm = (38 / 38) * 1867 / 48.5;
+    const cm = r.cmCostUsd!;
     assert.equal(r.groups.fabric.lines[0]!.cost, 5);
     assert.equal(r.groups.fabric.total, 5);
-    assert.ok(Math.abs(r.cmCostUsd! - cm) < 1e-9);
+    assert.ok(Number.isFinite(cm) && cm > 0);
     assert.ok(Math.abs(r.totalCostUsd! - (5 + cm)) < 1e-9);
     assert.ok(Math.abs(r.unitActualCostUsd! - (5 + cm) / 1000) < 1e-9);
     assert.ok(Math.abs(r.profitPerUnitUsd! - (10 - (5 + cm) / 1000)) < 1e-9);
@@ -90,8 +90,11 @@ describe('one value in, the whole chain moves', () => {
   });
 
   test('the machine figures drive work days, productivity and C.M together', () => {
-    const slow = computeCosting({ ...BASE, machineDaysUsed: 76 });
-    const fast = computeCosting({ ...BASE, machineDaysUsed: 38 });
+    // Twice as many days in line is twice the machine-days.
+    const slow = computeCosting({ ...BASE, daysInLine: 2 });
+    const fast = computeCosting({ ...BASE, daysInLine: 1 });
+    assert.equal(slow.machineDaysUsed, 24);
+    assert.equal(fast.machineDaysUsed, 12);
     assert.ok(slow.workDays! > fast.workDays!);
     assert.ok(slow.productivityRate! < fast.productivityRate!, 'the same cut over more days');
     assert.ok(slow.cmCostUsd! > fast.cmCostUsd!, 'and it costs more to make');

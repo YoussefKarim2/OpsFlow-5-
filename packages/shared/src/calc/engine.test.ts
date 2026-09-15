@@ -431,10 +431,17 @@ describe('costing — the #DIV/0! cells become "Not calculated"', () => {
     assert.equal(r.unitActualCostUsd, null);
   });
 
-  test('CM cost is work days × daily cost, converted at the dollar rate', () => {
-    const r = computeCosting({ ...base, shippedQty: 1972 });
-    // 3.42105 × 1867 = 6387.11 EGP → / 48.5 = 131.69 USD
-    assert.ok(Math.abs((r.cmCostUsd ?? 0) - 131.6929) < 0.01);
+  test('CM cost charges the machine run against the pieces that passed', () => {
+    // Superseded formula: the workbook's `work days × daily cost` gave 131.69
+    // here. The factory's is (machine cost × machine-days) ÷ productivity ×
+    // 1st degree qty, which is held cell by cell in `cm-cost.test.ts`.
+    const r = computeCosting({ ...base, shippedQty: 1972, firstDegreeQty: 1950 });
+    const machineCost = 1867 / 38;
+    const workDays = 130 / 38;
+    const productivity = 2084 / workDays;
+    const expected = ((machineCost * 130) / productivity) * 1950 / 48.5;
+    assert.ok(Math.abs((r.cmCostUsd ?? 0) - expected) < 0.01,
+      `got ${r.cmCostUsd}, expected ${expected}`);
   });
 
   test('a shipped order produces a real unit cost and profit', () => {

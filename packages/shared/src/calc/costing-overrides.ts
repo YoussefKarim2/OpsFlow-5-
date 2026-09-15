@@ -23,7 +23,7 @@ export const OVERRIDE_KEYS = [
   // Identity — free text, display only.
   'customer', 'orderName', 'itemType', 'poNumber', 'styleNumber',
   // Machine economics.
-  'machineCostEgpPerDay', 'workDays', 'productivityRate',
+  'machineCostEgpPerDay', 'machineDaysUsed', 'workDays', 'productivityRate',
   // Production quantities.
   'orderQty', 'cutQty', 'shippedQty', 'firstDegreeQty', 'secondDegreeQty', 'diffPct',
   // The costing table's computed rows.

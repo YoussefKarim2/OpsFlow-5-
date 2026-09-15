@@ -32,10 +32,13 @@ describe('actual costing — the header block', () => {
     assert.ok(Math.abs((r.machineCostEgpPerDay ?? 0) - 1867 / 38) < 1e-9);
   });
 
-  test('work days and productivity follow the sheet', () => {
+  test('work days and productivity follow the machine-days actually used', () => {
+    // BASE records 12 machines on the line for 11 days, so machine-days is
+    // 132 — worked out, not the 130 that used to be typed in.
     const r = computeCosting(BASE);
-    assert.ok(Math.abs((r.workDays ?? 0) - 130 / 38) < 1e-9);
-    assert.ok(Math.abs((r.productivityRate ?? 0) - 2084 / (130 / 38)) < 1e-6);
+    assert.equal(r.machineDaysUsed, 132);
+    assert.ok(Math.abs((r.workDays ?? 0) - 132 / 38) < 1e-9);
+    assert.ok(Math.abs((r.productivityRate ?? 0) - 2084 / (132 / 38)) < 1e-6);
   });
 
   test('the inputs are echoed back so the sheet can print them', () => {
@@ -43,7 +46,7 @@ describe('actual costing — the header block', () => {
     assert.equal(r.lineMachineQty, 12);
     assert.equal(r.daysInLine, 11);
     assert.equal(r.machineCount, 38);
-    assert.equal(r.machineDaysUsed, 130);
+    assert.equal(r.machineDaysUsed, 132, '12 line machines × 11 days');
     assert.equal(r.dailyCostEgp, 1867);
     assert.equal(r.dollarRate, 48.5);
   });
@@ -190,10 +193,17 @@ describe('actual costing — the money', () => {
     lines: [line('FABRIC', 'Rosetta', 1000, 'Met.', 2, 'bom:FABRIC')],
   };
 
-  test('C.M is work days × daily cost, converted at the stored rate', () => {
+  test('C.M is the machine run cost per piece, over the pieces that passed', () => {
+    // (machine cost × machine-days) ÷ productivity × 1st degree qty, in EGP,
+    // converted once. The formula itself is covered in `cm-cost.test.ts`;
+    // this holds that the sheet as a whole still produces it.
     const r = computeCosting(shipped);
-    const expected = (130 / 38) * 1867 / 48.5;
-    assert.ok(Math.abs((r.cmCostUsd ?? 0) - expected) < 1e-9);
+    const machineCost = 1867 / 38;
+    const used = 12 * 11;
+    const productivity = 2084 / (used / 38);
+    const expected = ((machineCost * used) / productivity) * 1950 / 48.5;
+    assert.ok(Math.abs((r.cmCostUsd ?? 0) - expected) < 1e-9,
+      `got ${r.cmCostUsd}, expected ${expected}`);
   });
 
   test('unit cost divides the total by what shipped', () => {
