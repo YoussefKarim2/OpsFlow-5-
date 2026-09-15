@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { Prisma } from '@prisma/client';
 import { computeBomSummary, groupBomByCategory, computeMarkerPlan, computeFabricPosition, type BomItemInput, type LayInput } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
@@ -104,6 +105,21 @@ const bomItemSchema = z.object({
   colorText: z.string().max(200).nullish(),
   consumptionPerPiece: z.number().nonnegative().nullish(),
   requiredQty: z.number().nonnegative(),
+  /**
+   * What the warehouse has actually issued.
+   *
+   * Editable here as well as on the Materials tab. That tab's dialog only ever
+   * *adds* — it is the warehouse recording a handover, with a recipient and a
+   * note — so a figure typed once could not afterwards be corrected downwards
+   * or at all. Correcting a number nobody can correct is not an edge case; it
+   * is Tuesday.
+   *
+   * The correction is recorded rather than applied silently: the difference
+   * lands in `material_issues` like any other movement, so the log still adds
+   * up to the total and the costing, which reads issued quantities as actual
+   * consumption, changes for a reason somebody can find.
+   */
+  issuedQty: z.number().nonnegative().max(99_999_999).nullish(),
   unit: z.string().min(1).max(40),
   unitPriceUsd: z.number().nonnegative().max(999_999.9999).nullish(),
   supplier: z.string().max(200).nullish(),
@@ -145,6 +161,36 @@ const bomRowSchema = bomItemSchema.extend({
  * needed in three sizes would be counted once, or three times, depending on
  * which field the reader trusted.
  */
+/**
+ * Set the issued quantity to a figure somebody typed, and record the change.
+ *
+ * The difference is written to `material_issues` — negative when the figure is
+ * corrected downwards — so the log remains a running account that adds up to
+ * the total on the item, and the costing, which reads issued quantities as
+ * actual consumption, moves for a reason that can be traced.
+ */
+async function setIssuedQty(
+  item: { id: string; orderId: string; unit: string; issuedQty: Prisma.Decimal },
+  issued: number,
+  actor: { id: string; name: string },
+): Promise<void> {
+  const was = Number(item.issuedQty.toString());
+  if (issued === was) return;
+  await prisma.$transaction(async (tx) => {
+    await tx.bomItem.update({
+      where: { id: item.id },
+      data: { issuedQty: issued, issuedByName: actor.name, issuedAt: new Date() },
+    });
+    await tx.materialIssue.create({
+      data: {
+        orderId: item.orderId, bomItemId: item.id, qty: issued - was,
+        unit: item.unit, issuedById: actor.id,
+        notes: `Corrected on the bill of materials from ${was.toLocaleString()} to ${issued.toLocaleString()}`,
+      },
+    });
+  });
+}
+
 materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   const rows = z.array(bomRowSchema).parse(req.body.items);
@@ -166,15 +212,41 @@ materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHa
     if (removed.length > 0) await tx.bomItem.deleteMany({ where: { id: { in: removed } } });
 
     for (const [i, row] of rows.entries()) {
-      const { id, sizes, ...fields } = row;
+      const { id, sizes, issuedQty, ...fields } = row;
       const total = sizes.length > 0
         ? sizes.reduce((a, s) => a + s.qty, 0)
         : fields.requiredQty;
       const data = { ...fields, requiredQty: total, position_: i };
 
+      // What the row said before this save, so a changed issued quantity can
+      // be recorded as the movement it is rather than overwritten in place.
+      const before = id
+        ? await tx.bomItem.findUnique({ where: { id }, select: { issuedQty: true, unit: true } })
+        : null;
+
       const itemId = id
         ? (await tx.bomItem.update({ where: { id }, data, select: { id: true } })).id
         : (await tx.bomItem.create({ data: { ...data, orderId: order.id }, select: { id: true } })).id;
+
+      if (issuedQty != null) {
+        const was = before ? Number(before.issuedQty.toString()) : 0;
+        const delta = issuedQty - was;
+        if (delta !== 0) {
+          await tx.bomItem.update({
+            where: { id: itemId },
+            data: { issuedQty, issuedByName: actor.name, issuedAt: new Date() },
+          });
+          // Negative when the figure is corrected downwards. The log is a
+          // running account, so it has to be able to go both ways.
+          await tx.materialIssue.create({
+            data: {
+              orderId: order.id, bomItemId: itemId, qty: delta,
+              unit: fields.unit, issuedById: actor.id,
+              notes: `Corrected on the bill of materials from ${was.toLocaleString()} to ${issuedQty.toLocaleString()}`,
+            },
+          });
+        }
+      }
 
       // The breakdown is small and wholly owned by its item, so replacing it is
       // simpler than diffing and nothing else references these rows.
@@ -199,16 +271,30 @@ materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHa
   res.json({ ok: true, count: rows.length, removed: removed.length });
 }));
 
+/**
+ * `issuedQty` is not nullable in the database — it defaults to zero and a row
+ * always has one. A form that sends it empty means "unchanged", never "null",
+ * so it is lifted out of the data Prisma is handed and applied only when it
+ * carries a number.
+ */
+function splitIssued<T extends { issuedQty?: number | null }>(
+  input: T,
+): { rest: Omit<T, 'issuedQty'>; issued: number | null } {
+  const { issuedQty, ...rest } = input;
+  return { rest, issued: typeof issuedQty === 'number' ? issuedQty : null };
+}
+
 materialsRouter.post('/:orderId/bom', requirePermission('material:edit'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
-  const input = bomItemSchema.parse(req.body);
+  const parsed = bomItemSchema.parse(req.body);
+  const { rest: input, issued } = splitIssued(parsed);
 
   const order = await prisma.order.findUnique({ where: { id: req.params.orderId } });
   if (!order) throw new NotFoundError('Order');
 
   const count = await prisma.bomItem.count({ where: { orderId: order.id } });
   const item = await prisma.bomItem.create({
-    data: { ...input, orderId: order.id, position_: count },
+    data: { ...input, orderId: order.id, position_: count, ...(issued == null ? {} : { issuedQty: issued }) },
   });
 
   await logActivity({
@@ -224,12 +310,14 @@ materialsRouter.post('/:orderId/bom', requirePermission('material:edit'), asyncH
 
 materialsRouter.patch('/bom/:id', requirePermission('material:edit'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
-  const input = bomItemSchema.partial().parse(req.body);
+  const parsed = bomItemSchema.partial().parse(req.body);
+  const { rest: input, issued } = splitIssued(parsed);
 
   const item = await prisma.bomItem.findUnique({ where: { id: req.params.id } });
   if (!item) throw new NotFoundError('BOM item');
 
   await prisma.bomItem.update({ where: { id: item.id }, data: input });
+  if (issued != null) await setIssuedQty(item, issued, actor);
   await logActivity({
     orderId: item.orderId, actorId: actor.id, actorName: actor.name,
     action: 'BOM_ITEM_UPDATED', summary: `updated ${item.item} in the bill of materials`,

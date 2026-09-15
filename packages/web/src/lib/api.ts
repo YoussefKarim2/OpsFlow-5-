@@ -242,6 +242,9 @@ export interface BomRowDto {
   colorText: string | null;
   unit: string;
   requiredQty: number;
+  /** What the warehouse has issued. Editable on the BOM, where a correction is
+   *  recorded in the issue log rather than applied silently. */
+  issuedQty: number | null;
   unitPriceUsd: number | null;
   supplier: string | null;
   notes: string | null;

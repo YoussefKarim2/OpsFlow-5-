@@ -34,7 +34,7 @@ const label = (t: string) => {
 
 const blankRow = (): BomRowDto => ({
   category: 'ACCESSORY', item: '', description: null, colorText: null,
-  unit: 'PCS', requiredQty: 0, unitPriceUsd: null, supplier: null, notes: null, sizes: [],
+  unit: 'PCS', requiredQty: 0, issuedQty: null, unitPriceUsd: null, supplier: null, notes: null, sizes: [],
 });
 
 /** A row's quantity is the sum of its sizes once any exist. */
@@ -187,6 +187,22 @@ export function BomEditor({
                         onChange={(e) => setRow(i, { requiredQty: Number(e.target.value) || 0 })}
                       />
                     )}
+                  </td>
+                  {/* Issued — editable here, and at any time. The Materials
+                      tab's dialog only ever adds to this figure, so a number
+                      typed once could never afterwards be corrected. Changing
+                      it writes the difference to the issue log, so the trail
+                      still reconciles. */}
+                  <td className="p-1">
+                    <input
+                      className="input tnum border-transparent bg-transparent text-right"
+                      value={r.issuedQty ?? ''}
+                      placeholder="—"
+                      title="What the warehouse has issued. Correcting it is recorded in the issue log."
+                      onChange={(e) => setRow(i, {
+                        issuedQty: e.target.value === '' ? null : Number(e.target.value),
+                      })}
+                    />
                   </td>
                   <td className="p-1">
                     <input

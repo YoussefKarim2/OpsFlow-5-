@@ -67,6 +67,8 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
       colorText: (r.colorText as string) ?? (r.color as string) ?? null,
       unit: (r.unit as string) ?? 'PCS',
       requiredQty: Number(r.requiredQty ?? 0),
+      // Editable on the BOM: the Materials tab's dialog only ever adds to it.
+      issuedQty: r.issuedQty == null ? null : Number(r.issuedQty),
       unitPriceUsd: r.unitPriceUsd == null ? null : Number(r.unitPriceUsd),
       supplier: (r.supplier as string) ?? null,
       notes: (r.notes as string) ?? null,
