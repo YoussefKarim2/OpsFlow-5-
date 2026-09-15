@@ -183,8 +183,9 @@ export function CostCell({
       <input
         type="text"
         inputMode="decimal"
-        className={clsx('input tnum py-1 text-right text-xs',
-          overridden && 'border-violet-400 bg-violet-50 pr-7 text-violet-900', className)}
+        className={clsx('input tnum px-1.5 py-1 text-right text-xs',
+          // Room for the revert arrow only when there is one to make room for.
+          overridden && 'border-violet-400 bg-violet-50 pr-6 text-violet-900', className)}
         value={value !== '' ? value : calculated == null ? '' : String(calculated)}
         placeholder={shown === NOT_CALCULATED ? NOT_CALCULATED : ''}
         onChange={(e) => { if (isTypeableNumber(e.target.value)) onChange(e.target.value); }}
@@ -220,7 +221,7 @@ export function TextCell({
   }
   return (
     <input
-      className={clsx('input py-1 text-xs', align === 'center' && 'text-center')}
+      className={clsx('input px-1.5 py-1 text-xs', align === 'center' && 'text-center')}
       value={value}
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
@@ -254,7 +255,7 @@ export function NumberCell({
   }
   return (
     <input
-      className={clsx('input tnum py-1 text-right text-xs',
+      className={clsx('input tnum px-1.5 py-1 text-right text-xs',
         derived && 'border-dashed bg-ink-50 text-ink-600')}
       type="text"
       inputMode="decimal"

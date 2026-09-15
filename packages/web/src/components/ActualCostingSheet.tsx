@@ -559,16 +559,20 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
           subtitle="Materials from the bill of materials, outside work from the External Order section. Rows can be edited, added and removed here without changing either."
         />
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[48rem]">
+          {/* Wide enough for the widest figure each column can hold: a unit
+              price carries four decimals, so "$1,234.5678" has to fit without
+              being cut off. The container scrolls sideways rather than
+              squeezing the columns. */}
+          <table className="w-full min-w-[64rem]">
             <thead className="border-b border-ink-200 bg-ink-50">
               <tr>
                 <th className="th w-28">Section</th>
                 <th className="th">Item</th>
-                <th className="th w-24 text-right">Planned</th>
-                <th className="th w-28 text-right">Actual Cons.</th>
-                <th className="th w-20">Unit</th>
-                <th className="th w-28 text-right">Unit Price</th>
-                <th className="th w-28 text-right">Cost</th>
+                <th className="th w-28 text-right">Planned</th>
+                <th className="th w-32 text-right">Actual Cons.</th>
+                <th className="th w-24">Unit</th>
+                <th className="th w-36 text-right">Unit Price</th>
+                <th className="th w-36 text-right">Cost</th>
                 <th className="th w-20 text-right">Percentage</th>
                 {editing && <th className="th w-10" />}
               </tr>
