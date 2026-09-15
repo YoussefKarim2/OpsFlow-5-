@@ -36,7 +36,9 @@ import {
 } from '@opsflow/shared';
 import { api, type CostLineDto, type CostingDto } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { CostCell, CostField, NumberCell, StoredField, TextCell } from './CostValue';
+import {
+  CostCell, CostField, NumberCell, StoredField, TextCell, type FieldTone,
+} from './CostValue';
 import { Card, CardHeader, ErrorNote, clsx } from './ui';
 
 type Group = CostLineDto['group'];
@@ -327,10 +329,11 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
   const field = (
     label: string, key: OverrideKey, calculated: number | string | null,
     kind: 'money' | 'percent' | 'number' | 'text',
-    opts: { places?: number; hint?: string; from?: string } = {},
+    opts: { places?: number; hint?: string; from?: string; tone?: FieldTone } = {},
   ) => (
     <CostField
       label={label}
+      tone={opts.tone ?? 'auto'}
       editing={editing}
       value={over[key] ?? ''}
       calculated={calculated}
@@ -469,97 +472,68 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
         </p>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader title="The order" subtitle="Read from the order record." />
-          <div className="grid gap-3 p-4 sm:grid-cols-2">
-            <StoredField
-              label="Date" editing={editing} type="date"
-              value={stored.costingDate} onChange={setField('costingDate')}
-            />
-            {field('Customer', 'customer', live.source.customer, 'text', { from: 'the order' })}
-            {field('Order Name', 'orderName', live.source.orderName, 'text', { from: 'the order' })}
-            {field('Item Type', 'itemType', live.source.itemType, 'text', { from: 'the order' })}
-            {field('Po No', 'poNumber', live.source.poNumber, 'text', { from: 'the order' })}
-            {field('Style No', 'styleNumber', live.source.styleNumber, 'text', { from: 'the order' })}
-          </div>
-        </Card>
+      {/* ── 1. The order ────────────────────────────────────────────────
+          What OpsFlow already knows. Nothing here wants typing, so it reads
+          as a heading rather than as seven more boxes. */}
+      <Card>
+        <CardHeader title="The order" subtitle="Everything here is read from the order itself." />
+        <div className="grid gap-3 p-4 sm:grid-cols-3 lg:grid-cols-4">
+          {field('Customer', 'customer', live.source.customer, 'text')}
+          {field('Order Name', 'orderName', live.source.orderName, 'text')}
+          {field('Po No', 'poNumber', live.source.poNumber, 'text')}
+          {field('Style No', 'styleNumber', live.source.styleNumber, 'text')}
+          {field('Item Type', 'itemType', live.source.itemType, 'text')}
+          {field('Order Qty', 'orderQty', live.source.orderQty, 'number', { from: 'order ledger' })}
+          {field('Shipped Qty', 'shippedQty', live.source.shippedQty, 'number', { from: 'shipped ledger' })}
+        </div>
+      </Card>
 
-        <Card>
-          <CardHeader title="The result" subtitle="Per piece, against what shipped." />
-          <div className="grid gap-3 p-4 sm:grid-cols-2">
-            {field('Sell Price', 'sellPriceUsd', live.source.sellPriceUsd, 'money', { from: 'Order Details' })}
-            {field('Actual Cost/Unit', 'unitActualCostUsd', live.unitActualCostUsd, 'money', {
-              hint: 'total cost ÷ shipped quantity',
-            })}
-            {field('Profit', 'profitPerUnitUsd', live.profitPerUnitUsd, 'money', {
-              hint: 'sell price − unit cost',
-            })}
-            {field('Pro. Percentage', 'profitPct', live.profitPct, 'percent', {
-              hint: 'profit ÷ sell price',
-            })}
-            {field('Perfect price', 'targetPriceUsd', live.targetPriceUsd, 'money', {
-              hint: live.isProfitable === true && over.targetPriceUsd == null
-                ? 'nothing to fix at this price'
-                : 'the price that would restore a 20% margin',
-            })}
-            <div className="flex items-end">
-              <p className={clsx(
-                'w-full rounded-md px-2.5 py-1.5 text-center text-xs font-medium',
-                live.isProfitable === true && 'bg-emerald-50 text-emerald-800',
-                live.isProfitable === false && 'bg-red-50 text-red-700',
-                live.isProfitable == null && 'bg-ink-50 text-ink-500',
-              )}>
-                {live.isProfitable === true ? 'In profit'
-                  : live.isProfitable === false ? 'At a loss'
-                  : 'Not calculable yet'}
-              </p>
-            </div>
-          </div>
-        </Card>
-      </div>
-
+      {/* ── 2. What you enter ───────────────────────────────────────────
+          The only fields on this page nothing else in OpsFlow can answer. */}
       <Card>
         <CardHeader
-          title="Machines and time"
-          subtitle="The factory's own figures. Nothing else in OpsFlow records them."
+          title="What you enter"
+          subtitle="The factory's own figures. These six are the only ones OpsFlow cannot work out for itself."
         />
-        <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-3 p-4 sm:grid-cols-3 lg:grid-cols-6">
+          <StoredField
+            label="Date" editing={editing} type="date"
+            value={stored.costingDate} onChange={setField('costingDate')}
+          />
           {plain('Dollar Rate', 'dollarRate', 'EGP per $')}
           {plain('Daily Cost', 'dailyCostEgp', 'EGP per day')}
           {plain('All F. Machines', 'machineCount')}
           {plain('Line Machines Qty', 'lineMachineQty')}
           {plain('Days in line', 'daysInLine')}
-          {/* Worked out from the line machines and the days in line, which sit
-              two fields above it. Still typeable, like every calculated field
-              on this sheet. Same field, same place, same label. */}
-          {field('Machine Already Used', 'machineDaysUsed', live.machineDaysUsed, 'number', {
-            hint: 'line machines × days in line',
-          })}
-          {field('Machine Cost', 'machineCostEgpPerDay', live.machineCostEgpPerDay, 'number', {
-            places: 2, hint: 'daily cost ÷ machines, in EGP',
-          })}
-          {field('Work Days', 'workDays', live.workDays, 'number', {
-            places: 1, hint: 'machine-days ÷ machines',
-          })}
-          {field('Productivity rate', 'productivityRate', live.productivityRate, 'number', {
-            hint: 'pieces cut per work day',
-          })}
         </div>
       </Card>
 
+      {/* ── 3. What OpsFlow works out ───────────────────────────────────
+          Each one carries the arithmetic that produced it, so a figure can be
+          followed back rather than taken on trust. Still typeable, but they no
+          longer look like blanks. */}
       <Card>
         <CardHeader
-          title="Production quantities"
-          subtitle="Counted on the floor and read from their ledgers. Typing here does not change them."
+          title="What OpsFlow works out"
+          subtitle="Calculated from the figures above and from what production recorded. The sum under each says how."
         />
-        <div className="grid gap-3 p-4 sm:grid-cols-3 lg:grid-cols-6">
-          {field('Order Qty', 'orderQty', live.source.orderQty, 'number', { from: 'order ledger' })}
+        <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
+          {field('Machine Cost', 'machineCostEgpPerDay', live.machineCostEgpPerDay, 'number', {
+            places: 2, hint: 'daily cost ÷ all machines',
+          })}
+          {field('Machine Already Used', 'machineDaysUsed', live.machineDaysUsed, 'number', {
+            hint: 'line machines × days in line',
+          })}
+          {field('Work Days', 'workDays', live.workDays, 'number', {
+            places: 1, hint: 'machine-days ÷ all machines',
+          })}
+          {field('Productivity rate', 'productivityRate', live.productivityRate, 'number', {
+            hint: 'cut qty ÷ work days',
+          })}
           {field('Cutted Qty', 'cutQty', live.source.cutQty, 'number', { from: 'cut ledger' })}
-          {field('Shipped Qty', 'shippedQty', live.source.shippedQty, 'number', { from: 'shipped ledger' })}
           {field('1st Degree Qty', 'firstDegreeQty', live.source.firstDegreeQty, 'number', { from: 'out-line' })}
           {field('2nd Degree Qty', 'secondDegreeQty', live.source.secondDegreeQty, 'number', { from: '2nd-degree' })}
-          {field('Diff. Percentage', 'diffPct', live.diffPct, 'percent', { hint: 'shipped vs ordered' })}
+          {field('Diff. Percentage', 'diffPct', live.diffPct, 'percent', { hint: 'shipped ÷ ordered − 100%' })}
         </div>
       </Card>
 
@@ -679,6 +653,55 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
               </tr>
             </tbody>
           </table>
+        </div>
+      </Card>
+
+      {/* ── 5. The result ───────────────────────────────────────────────
+          Where the page has been heading. Deliberately the largest type on it:
+          a coordinator should be able to answer "did we make money on this?"
+          without reading anything above. */}
+      <Card className={clsx(
+        live.isProfitable === true && 'border-emerald-300',
+        live.isProfitable === false && 'border-red-300',
+      )}>
+        <CardHeader
+          title="The result"
+          subtitle="Per piece, against what shipped. Nothing here is typed — it all follows from the figures above."
+          action={
+            <span className={clsx(
+              'rounded-full px-2.5 py-1 text-2xs font-semibold',
+              live.isProfitable === true && 'bg-emerald-100 text-emerald-800',
+              live.isProfitable === false && 'bg-red-100 text-red-700',
+              live.isProfitable == null && 'bg-ink-100 text-ink-500',
+            )}>
+              {live.isProfitable === true ? 'In profit'
+                : live.isProfitable === false ? 'At a loss'
+                : 'Not calculable yet'}
+            </span>
+          }
+        />
+        <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
+          {field('Total Actual Cost', 'totalCostUsd', live.totalCostUsd, 'money', {
+            tone: 'result', hint: 'every cost below, added up',
+          })}
+          {field('Actual Cost/Unit', 'unitActualCostUsd', live.unitActualCostUsd, 'money', {
+            tone: 'result', hint: 'total cost ÷ shipped qty',
+          })}
+          {field('Sell Price', 'sellPriceUsd', live.source.sellPriceUsd, 'money', {
+            tone: 'result', from: 'Order Details',
+          })}
+          {field('Profit', 'profitPerUnitUsd', live.profitPerUnitUsd, 'money', {
+            tone: 'result', hint: 'sell price − cost per unit',
+          })}
+          {field('Pro. Percentage', 'profitPct', live.profitPct, 'percent', {
+            tone: 'result', hint: 'profit ÷ sell price',
+          })}
+          {field('Perfect price', 'targetPriceUsd', live.targetPriceUsd, 'money', {
+            tone: 'result',
+            hint: live.isProfitable === true && over.targetPriceUsd == null
+              ? 'nothing to fix at this price'
+              : 'the price that would restore a 20% margin',
+          })}
         </div>
       </Card>
 

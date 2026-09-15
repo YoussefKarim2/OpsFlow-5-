@@ -21,8 +21,23 @@ import { RotateCcw } from 'lucide-react';
 import { formatCell, isTypeableNumber, NOT_CALCULATED, type CellKind } from '@opsflow/shared';
 import { clsx } from './ui';
 
+/**
+ * What a field is for, which is the thing the screen has to make obvious.
+ *
+ *   input   — somebody has to type it; nothing else in OpsFlow knows it
+ *   auto    — read from the order, or worked out from other fields
+ *   result  — the answer the page exists to give
+ *
+ * All three stay editable: a coordinator reconciling against an invoice can
+ * type over anything. But a screen where twenty-seven fields look equally like
+ * blanks to fill in is the spreadsheet feeling this is meant to remove — only
+ * six of them actually want typing.
+ */
+export type FieldTone = 'input' | 'auto' | 'result';
+
 export function CostField({
   label, editing, value, calculated, kind, places, onChange, onRevert, hint, from, waiting,
+  tone = 'input',
 }: {
   label: string;
   editing: boolean;
@@ -43,6 +58,7 @@ export function CostField({
    * "Waiting for the shipped quantity" is something a person can act on.
    */
   waiting?: string;
+  tone?: FieldTone;
 }) {
   const overridden = value.trim() !== '';
   const unknown = !overridden && calculated == null;
@@ -64,6 +80,9 @@ export function CostField({
               type="text"
               inputMode={kind === 'text' ? 'text' : 'decimal'}
               className={clsx('input', kind !== 'text' && 'tnum text-right',
+                // A worked-out field is still typeable, but it should not look
+                // like a blank waiting to be filled in.
+                tone !== 'input' && !overridden && 'border-dashed border-ink-200 bg-ink-50/60',
                 overridden && 'border-violet-400 bg-violet-50 pr-8 text-violet-900')}
               value={value !== '' ? value : calculated == null ? '' : String(calculated)}
               placeholder={unknown ? waiting ?? NOT_CALCULATED : ''}
@@ -93,8 +112,9 @@ export function CostField({
       ) : (
         <>
           <p className={clsx(
-            'text-sm',
-            overridden ? 'font-medium text-violet-800' : unknown ? 'text-ink-400' : 'text-ink-800',
+            tone === 'result' ? 'text-lg font-semibold' : 'text-sm',
+            overridden ? 'text-violet-800' : unknown ? 'text-ink-400' : 'text-ink-900',
+            unknown && tone === 'result' && 'text-sm font-normal',
           )}>
             {unknown && waiting ? waiting : shown}
           </p>
