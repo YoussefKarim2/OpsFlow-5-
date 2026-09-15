@@ -128,6 +128,7 @@ export function BomEditor({
               <th className="th">Item</th>
               <th className="th w-36">Colour</th>
               <th className="th w-28 text-right">Quantity</th>
+              <th className="th w-28 text-right">Issued</th>
               <th className="th w-20">Unit</th>
               <th className="th w-28 text-right">Unit price</th>
               <th className="th w-28 text-right">Total</th>
@@ -138,7 +139,7 @@ export function BomEditor({
           <tbody className="divide-y divide-ink-100">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={9} className="td py-6 text-center text-ink-500">
+                <td colSpan={10} className="td py-6 text-center text-ink-500">
                   Nothing in the bill of materials yet. Import a document, or add an item.
                 </td>
               </tr>
@@ -255,7 +256,7 @@ export function BomEditor({
 
                 {expanded === i ? (
                   <tr key={`s${i}`} className="bg-ink-50/60">
-                    <td colSpan={9} className="px-4 py-3">
+                    <td colSpan={10} className="px-4 py-3">
                       <div className="mb-2 flex items-center justify-between">
                         <span className="text-xs font-medium text-ink-600">
                           Sizes for {r.item || 'this item'} — the quantity above becomes their total
@@ -308,7 +309,7 @@ export function BomEditor({
           {rows.length > 0 ? (
             <tfoot className="border-t border-ink-200 bg-ink-50">
               <tr>
-                <td colSpan={6} className="td text-right font-medium">Estimated material cost</td>
+                <td colSpan={7} className="td text-right font-medium">Estimated material cost</td>
                 <td className="td tnum text-right font-semibold">
                   <Num value={total || null} kind="money" places={2} />
                 </td>
