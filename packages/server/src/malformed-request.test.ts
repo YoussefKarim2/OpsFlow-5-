@@ -52,6 +52,29 @@ describe('a request the server cannot parse', () => {
     }
   });
 
+  /**
+   * A quantity past what a 32-bit column holds, and a date that is not one.
+   * Both used to reach Postgres and come back as 500s — the caller told the
+   * server had broken when they had typed too many digits, or a bad date.
+   */
+  test('a quantity larger than the column holds is refused as input', async () => {
+    const { assertValidQuantity } = await import('./services/rules.js');
+    assert.throws(() => assertValidQuantity(1e12), /larger than this system records/);
+    assert.throws(() => assertValidQuantity(2_147_483_648), /larger than this system records/);
+    assert.doesNotThrow(() => assertValidQuantity(1_000_000));
+    assert.doesNotThrow(() => assertValidQuantity(0));
+  });
+
+  test('a date that cannot be read is refused as input', async () => {
+    const { requiredDate } = await import('./util/form-input.js');
+    for (const bad of ['not-a-date', '', '2026-13-45', 'yesterday']) {
+      assert.equal(requiredDate.safeParse(bad).success, false, `${bad} should be refused`);
+    }
+    for (const good of ['2026-06-02', '2026-06-02T10:00:00Z']) {
+      assert.equal(requiredDate.safeParse(good).success, true, `${good} should be accepted`);
+    }
+  });
+
   test('an empty body is refused the same way', async () => {
     const res = await fetch(`${base}/api/auth/login`, {
       method: 'POST',

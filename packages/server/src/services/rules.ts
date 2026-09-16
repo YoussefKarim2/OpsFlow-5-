@@ -14,10 +14,27 @@ import {
 } from '../errors.js';
 
 /** Quantity sanity — negative, absurd, or out-of-order values are refused. */
+/**
+ * The largest quantity the quantity columns can hold.
+ *
+ * They are 32-bit integers, so anything past 2,147,483,647 is refused by
+ * Postgres itself — and arrived as a 500, telling the caller the server had
+ * broken when they had typed too many digits. Ten million pieces is far beyond
+ * any real garment order and comfortably inside the column, so the refusal
+ * happens here, in a sentence, rather than there, in a stack trace.
+ */
+const MAX_QUANTITY = 10_000_000;
+
 export function assertValidQuantity(qty: number, label = 'Quantity'): void {
   if (!Number.isFinite(qty)) throw new ValidationError(`${label} must be a number.`);
   if (qty < 0) throw new QuantityRuleError(`${label} cannot be negative.`);
   if (!Number.isInteger(qty)) throw new ValidationError(`${label} must be a whole number of pieces.`);
+  if (qty > MAX_QUANTITY) {
+    throw new ValidationError(
+      `${label} of ${qty.toLocaleString()} is larger than this system records. `
+      + `Check for an extra digit — the limit is ${MAX_QUANTITY.toLocaleString()} pieces.`,
+    );
+  }
 }
 
 /**

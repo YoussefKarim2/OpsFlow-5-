@@ -1069,6 +1069,17 @@ stepsRouter.put('/:id/costing', requirePermission('costing:write'), asyncHandler
   const record = await prisma.costingRecord.findUniqueOrThrow({ where: { orderId }, select: { id: true } });
 
   await prisma.$transaction(async (tx) => {
+    /**
+     * Two saves at once used to leave both sets of rows.
+     *
+     * The rewrite is delete-then-create, and two transactions interleave
+     * happily: both delete, then both create, and the costing ends up with its
+     * lines twice over and a total to match. Debounced auto-save makes that
+     * likelier, not less — two people on the same costing, or one person on
+     * two tabs. Serialised on the order, so the second save waits for the
+     * first to finish rather than racing it.
+     */
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${orderId}))`;
     await tx.costLine.deleteMany({ where: { costingId: record.id } });
     await tx.costLine.createMany({
       data: [

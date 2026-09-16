@@ -108,3 +108,16 @@ export const longText = (max = 20_000) =>
  */
 export const money = (maxValue = 999_999.9999) =>
   optionalNumber(z.number().nonnegative().max(maxValue));
+
+
+/**
+ * A date the caller must supply, checked for being one.
+ *
+ * `z.string()` accepts "not-a-date", which becomes an Invalid Date, which
+ * Postgres refuses — and the caller was told the server had broken. A date
+ * that cannot be read is the caller's, and saying so is a sentence, not a
+ * stack trace.
+ */
+export const requiredDate = z
+  .string()
+  .refine((v) => !Number.isNaN(new Date(v).getTime()), 'That date could not be understood.');

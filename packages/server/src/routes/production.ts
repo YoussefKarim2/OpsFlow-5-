@@ -7,6 +7,7 @@ import {
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
+import { requiredDate } from '../util/form-input.js';
 import { NotFoundError } from '../errors.js';
 import { ORDER_INCLUDE, deriveOrder, refreshOrderCache } from '../services/order-service.js';
 import { logAndNotify, logActivity } from '../services/activity-service.js';
@@ -46,7 +47,7 @@ productionRouter.get('/:orderId', requirePermission('production:read'), asyncHan
 }));
 
 const recordSchema = z.object({
-  date: z.string(),
+  date: requiredDate,
   operation: z.enum(OPERATIONS),
   qty: z.number().int(),
   line: z.string().optional(),

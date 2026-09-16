@@ -18,7 +18,7 @@ import {
   resolveShippedQty, furthestShipmentStatus, recordedCutQty,
   computeProductionAnalytics, computeBomSummary, computeCosting, computeQualityPassPct,
   computeMaterialPosition, computeStockPosition, computeConsumptionVariance,
-  computeMarkerPlan, evaluateAllGates, sanitiseOverrides,
+  computeMarkerPlan, evaluateAllGates, sanitiseOverrides, deriveCostLines,
   ledgerTotals, buildMatrix, daysBetween, sum, qtyAdd, qtySub,
   type QtyCell, type AxisRef, type TaskLike, type OrderDetailDto, type OrderSummaryDto,
   type TaskDto, type BomItemInput, type CostLineInput, type ProductionEntry, type Alert,
@@ -291,6 +291,65 @@ export interface DerivedOrder {
   daysRemaining: number | null;
 }
 
+
+/**
+ * The cost lines this order currently supports.
+ *
+ * Derived here rather than read back from the rows the last save wrote. Those
+ * rows are a snapshot: change a material's issued quantity, or its price, or
+ * send another operation out, and the costing went on reporting the figures as
+ * they stood when somebody last pressed save. Nobody presses save on the
+ * costing because a warehouse issued some fabric, so the cost of that fabric
+ * simply never arrived.
+ *
+ * The bill of materials and the outside work are already loaded for every other
+ * derivation on this order, so this costs no extra query.
+ *
+ * Hand-entered lines are still read from the record — they are nobody else's
+ * to derive. A hand-edited row carries the `sourceRef` of the derived row it
+ * replaces, and a removed one is named in `hiddenCostRefs`; both are honoured
+ * here exactly as the save route honours them, so the screen and the stored
+ * copy cannot disagree.
+ */
+function costingLines(order: FullOrder): CostLineInput[] {
+  const cr = order.costing;
+  const manual = (cr?.lines ?? []).filter((l) => l.source === 'MANUAL');
+  const claimed = new Set(manual.map((l) => l.sourceRef).filter((r): r is string => !!r));
+  const hidden = new Set(cr?.hiddenCostRefs ?? []);
+
+  const derived = deriveCostLines({
+    bom: order.bomItems.map((b) => ({
+      category: b.category,
+      item: b.item,
+      issuedQty: dec(b.issuedQty),
+      requiredQty: dec(b.requiredQty),
+      unit: b.unit,
+      unitPriceUsd: dec(b.unitPriceUsd),
+    })),
+    external: order.externalOperations.map((e) => ({
+      operationType: e.operationType,
+      qty: e.qty,
+      unitPriceUsd: dec(e.unitPriceUsd),
+    })),
+    production: {
+      machineDaysUsed: cr?.machineDaysUsed ?? null,
+      dailyCostEgp: dec(cr?.dailyCostEgp),
+      dollarRate: cr == null ? null : Number(cr.dollarRate.toString()),
+    },
+  }).filter((l) => !claimed.has(l.sourceRef) && !hidden.has(l.sourceRef));
+
+  return [
+    ...derived.map<CostLineInput>((l) => ({
+      group: l.group, label: l.label, quantity: l.quantity,
+      unit: l.unit, unitPriceUsd: l.unitPriceUsd, sourceRef: l.sourceRef,
+    })),
+    ...manual.map<CostLineInput>((l) => ({
+      group: l.group, label: l.label, quantity: dec(l.quantity),
+      unit: l.unit, unitPriceUsd: dec(l.unitPriceUsd), sourceRef: l.sourceRef,
+    })),
+  ];
+}
+
 export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder {
   const { colors, sizes } = toAxes(order);
   const cells = toQtyCells(order);
@@ -511,14 +570,7 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     externalOpCostUsd: dec(cr?.externalOpCostUsd),
     sublimationCostUsd: dec(cr?.sublimationCostUsd),
     embroideryCostUsd: dec(cr?.embroideryCostUsd),
-    lines: (cr?.lines ?? []).map<CostLineInput>((l) => ({
-      group: l.group,
-      label: l.label,
-      quantity: dec(l.quantity),
-      unit: l.unit,
-      unitPriceUsd: dec(l.unitPriceUsd),
-      sourceRef: l.sourceRef,
-    })),
+    lines: costingLines(order),
   });
 
   return {
