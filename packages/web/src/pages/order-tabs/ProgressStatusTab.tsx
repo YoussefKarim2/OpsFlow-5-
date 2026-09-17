@@ -19,11 +19,12 @@ import {
   type OrderDetailDto, type Department,
 } from '@opsflow/shared';
 import { api, type OrderStepsPayload } from '../../lib/api';
+import { displayStepState } from '../../lib/step-display';
 import { Card, CardHeader, ProgressBar, Num, Spinner, clsx } from '../../components/ui';
 
 const STATE_DOT: Record<string, string> = {
   COMPLETED: 'bg-emerald-500', IN_PROGRESS: 'bg-accent-500', WAITING: 'bg-amber-400',
-  BLOCKED: 'bg-red-500', NOT_REQUIRED: 'bg-ink-200', NOT_STARTED: 'bg-ink-300',
+NOT_REQUIRED: 'bg-ink-200', NOT_STARTED: 'bg-ink-300',
 };
 
 export function ProgressStatusTab({
@@ -95,32 +96,10 @@ export function ProgressStatusTab({
       {/* ── Delivery risk ───────────────────────────────────────────────── */}
       <DeliveryRisk order={order} />
 
-      {/* ── Blockers ────────────────────────────────────────────────────── */}
-      {order.blockers.length > 0 && (
-        <Card>
-          <CardHeader
-            title="Blockers"
-            subtitle="These stop work rather than slow it"
-            action={<span className="chip bg-red-50 text-red-700 ring-red-600/20">{order.blockers.length}</span>}
-          />
-          <ul className="divide-y divide-ink-100">
-            {order.blockers.map((b) => (
-              <li key={`${b.stageKey}-${b.key}`} className="flex items-start gap-3 px-4 py-3">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-ink-900">{b.requirement}</p>
-                  <p className="mt-0.5 text-xs text-ink-600">{b.detail}</p>
-                </div>
-                {b.tab && (
-                  <button className="btn-ghost btn-sm shrink-0" onClick={() => onJump(b.tab!)}>
-                    {b.actionLabel ?? 'Go there'} <ArrowRight className="h-3 w-3" />
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
+      {/* Blockers are still derived, still returned by the API and still read
+          by the checklist and by the server's own refusals. They are simply
+          not listed here as a red card. The step list below still shows what
+          is incomplete. */}
 
       {overdueTasks.length > 0 && (
         <Card>
@@ -189,11 +168,10 @@ export function ProgressStatusTab({
                 </span>
                 <span className={clsx(
                   'w-24 shrink-0 text-right text-2xs font-medium',
-                  s.state === 'BLOCKED' ? 'text-red-600'
-                  : s.state === 'COMPLETED' ? 'text-emerald-600'
-                  : 'text-ink-500',
+                  s.state === 'COMPLETED' ? 'text-emerald-600'
+                    : 'text-ink-500',
                 )}>
-                  {s.informational ? 'Reference' : STEP_STATE_STYLE[s.state].label}
+                  {s.informational ? 'Reference' : STEP_STATE_STYLE[displayStepState(s.state as never)].label}
                 </span>
               </button>
             </li>

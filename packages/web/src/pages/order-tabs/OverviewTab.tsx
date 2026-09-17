@@ -25,37 +25,11 @@ export function OverviewTab({
 
   return (
     <div className="space-y-4 p-5">
-      {/* ── Blockers first ───────────────────────────────────────────────────
-          §27: the coordinator should not scroll past twelve panels to find out
-          why the order is stopped. If something is blocking it, that is the
-          first thing on the page, in red, with somewhere to go. */}
-      {order.blockers.length > 0 && (
-        <div className="overflow-hidden rounded-lg border border-red-300 bg-red-50">
-          <div className="flex items-center gap-2 border-b border-red-200 px-4 py-2.5">
-            <AlertTriangle className="h-4 w-4 shrink-0 text-red-600" />
-            <h2 className="text-sm font-semibold text-red-900">
-              {order.blockers.length} thing{order.blockers.length === 1 ? '' : 's'} blocking this order
-            </h2>
-          </div>
-          <ul className="divide-y divide-red-200/70">
-            {order.blockers.map((b) => (
-              <li key={`${b.stageKey}-${b.key}`} className="flex items-start gap-3 px-4 py-3">
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-red-900">
-                    {b.stageLabel} — {b.requirement}
-                  </p>
-                  <p className="mt-0.5 text-xs leading-relaxed text-red-800">{b.detail}</p>
-                </div>
-                {b.tab && (
-                  <button onClick={() => onJump(b.tab!)} className="btn-secondary btn-sm shrink-0">
-                    {b.actionLabel ?? 'Open'}
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {/* The gates still run and `order.blockers` is still derived and still
+          returned by the API — the checklist, the next-action line and the
+          server's own refusals all read it. It is no longer announced here in
+          red: an order at the start of its life is not faulty for having work
+          nobody has reached yet. */}
 
       {order.blockers.length === 0 && order.readyStages.length > 0 && (
         <div className="flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5">

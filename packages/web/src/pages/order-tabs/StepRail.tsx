@@ -29,6 +29,7 @@ import {
   type StageKey, type OrderStepState,
 } from '@opsflow/shared';
 import { api, type OrderStepsPayload } from '../../lib/api';
+import { displayStepState } from '../../lib/step-display';
 import { Card, Modal, Field, clsx, useToast } from '../../components/ui';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -73,7 +74,8 @@ const STATE_LOOK: Record<StepState, {
   },
 };
 
-function StepDot({ state, number }: { state: StepState; number: number }) {
+function StepDot({ state: stored, number }: { state: StepState; number: number }) {
+  const state = displayStepState(stored);
   const look = STATE_LOOK[state];
   return (
     <span
@@ -85,7 +87,6 @@ function StepDot({ state, number }: { state: StepState; number: number }) {
     >
       {state === 'COMPLETED' ? <Check className="h-3.5 w-3.5" />
         : state === 'NOT_REQUIRED' ? <Minus className="h-3 w-3" />
-        : state === 'BLOCKED' ? <AlertTriangle className="h-3 w-3" />
         : number}
     </span>
   );
@@ -127,7 +128,7 @@ export function StepRail({
 
       <ol className="min-h-0 flex-1 overflow-y-auto py-1">
         {steps.steps.map((s) => {
-          const look = STATE_LOOK[s.state];
+          const look = STATE_LOOK[displayStepState(s.state)];
           const isActive = s.key === activeKey;
           return (
             <li key={s.key}>
@@ -206,8 +207,8 @@ export function StepHeader({
     onError: (e) => toast.error(e),
   });
 
-  const look = STATE_LOOK[step.state];
-  const blocker = steps.blockers.find((b) => b.stageKey === step.key);
+  const shown = displayStepState(step.state);
+  const look = STATE_LOOK[shown];
   const busy = mutate.isPending;
 
   return (
@@ -222,11 +223,10 @@ export function StepHeader({
               </h2>
               <span className={clsx(
                 'chip',
-                step.state === 'COMPLETED' ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20'
-                : step.state === 'BLOCKED' ? 'bg-red-50 text-red-700 ring-red-600/20'
-                : step.state === 'WAITING' ? 'bg-amber-50 text-amber-800 ring-amber-600/20'
-                : step.state === 'NOT_REQUIRED' ? 'bg-ink-100 text-ink-500 ring-ink-400/20'
-                : step.state === 'IN_PROGRESS' ? 'bg-accent-50 text-accent-700 ring-accent-600/20'
+                shown === 'COMPLETED' ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20'
+                : shown === 'WAITING' ? 'bg-amber-50 text-amber-800 ring-amber-600/20'
+                : shown === 'NOT_REQUIRED' ? 'bg-ink-100 text-ink-500 ring-ink-400/20'
+                : shown === 'IN_PROGRESS' ? 'bg-accent-50 text-accent-700 ring-accent-600/20'
                 : 'bg-ink-50 text-ink-500 ring-ink-300/40',
               )}>
                 {look.label}
@@ -264,16 +264,10 @@ export function StepHeader({
                   </ul>
                 </div>
 
-                {blocker && (
-                  <div className="mt-2.5 rounded border border-red-200 bg-red-50 px-3 py-2">
-                    <p className="text-xs font-semibold text-red-800">
-                      Blocked: {blocker.requirement}
-                    </p>
-                    <p className="mt-0.5 text-xs text-red-700">{blocker.detail}</p>
-                  </div>
-                )}
-
-                {step.missing && !blocker && step.state !== 'COMPLETED' && (
+                {/* The gate is still evaluated and the step is still
+                    incomplete; it is simply not announced in red. What the
+                    step still needs is said below, in the step's own words. */}
+                {step.missing && step.state !== 'COMPLETED' && (
                   <p className="mt-2.5 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
                     <span className="font-semibold">Still needed:</span> {step.missing}
                   </p>
