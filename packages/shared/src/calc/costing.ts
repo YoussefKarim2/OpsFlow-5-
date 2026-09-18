@@ -305,12 +305,24 @@ export function computeCosting(input: CostingInput): CostingResult {
   const isKind = (l: CostLineInput, word: string): boolean =>
     `${l.label} ${l.sourceRef ?? ''}`.toUpperCase().includes(word);
 
+  /**
+   * Each operation belongs to exactly one row.
+   *
+   * Sorted rather than filtered three times: an operation called "Sublimation
+   * embroidery" matched both tests and was added to the total twice, so a job
+   * costing 500 arrived on the sheet as 1,000. Sublimation is decided first
+   * because that is the printing step; whatever matches neither keeps its own
+   * row.
+   */
   const externalLines = priced.filter((l) => l.group === 'EXTERNAL');
-  const sublimationLines = externalLines.filter((l) => isKind(l, 'SUBLIMATION'));
-  const embroideryLines = externalLines.filter((l) => isKind(l, 'EMBROIDER'));
-  const otherExternalLines = externalLines.filter(
-    (l) => !sublimationLines.includes(l) && !embroideryLines.includes(l),
-  );
+  const sublimationLines: typeof externalLines = [];
+  const embroideryLines: typeof externalLines = [];
+  const otherExternalLines: typeof externalLines = [];
+  for (const line of externalLines) {
+    if (isKind(line, 'SUBLIMATION')) sublimationLines.push(line);
+    else if (isKind(line, 'EMBROIDER')) embroideryLines.push(line);
+    else otherExternalLines.push(line);
+  }
 
   const totalOf = (group: readonly { cost: number | null }[]): number | null => {
     if (group.length === 0) return null;

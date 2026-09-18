@@ -174,6 +174,34 @@ describe('actual costing — outside work is never billed twice', () => {
     }
   });
 
+  test('an operation named for both is counted once, not twice', () => {
+    // "Sublimation embroidery" matched both tests and was added to the total
+    // twice: a job costing 500 reached the sheet as 1,000. Each operation now
+    // belongs to exactly one row, sublimation decided first.
+    const r = computeCosting({
+      ...BASE, shippedQty: 1950,
+      lines: [line('EXTERNAL', 'Sublimation embroidery', 1000, 'PCS', 0.5, 'external:SUB_EMB')],
+    });
+    assert.equal(r.externalCostUsd, 500, 'the job cost 500, so the total is 500');
+    assert.equal(r.sublimationCostUsd, 500);
+    assert.equal(r.embroideryCostUsd, null, 'and it is not also embroidery');
+  });
+
+  test('each outside operation lands in exactly one bucket', () => {
+    const r = computeCosting({
+      ...BASE, shippedQty: 1950,
+      lines: [
+        line('EXTERNAL', 'Sublimation', 100, 'PCS', 1, 'external:SUBLIMATION'),
+        line('EXTERNAL', 'Embroidery', 100, 'PCS', 1, 'external:EMBROIDERY'),
+        line('EXTERNAL', 'Washing', 100, 'PCS', 1, 'external:WASHING'),
+      ],
+    });
+    assert.equal(r.sublimationCostUsd, 100);
+    assert.equal(r.embroideryCostUsd, 100);
+    assert.equal(r.groups.external.total, 100, 'washing keeps its own row');
+    assert.equal(r.externalCostUsd, 300, 'three jobs of 100, counted once each');
+  });
+
   test('outside work that is neither stays its own row and still counts', () => {
     const r = computeCosting({
       ...BASE, shippedQty: 1950,
