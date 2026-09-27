@@ -153,36 +153,59 @@ export async function completeTask(db: PrismaClient, input: CompleteTaskInput) {
   // Refuses if the prerequisite information is missing — see rules.ts.
   await assertTaskCompletable(db, task);
 
-  const updated = await db.task.update({
-    where: { id: task.id },
-    data: {
-      status: 'COMPLETED',
-      completedAt: new Date(),
-      completedById: input.actorId,
-      notes: input.notes ?? task.notes,
-      actualMinutes: input.actualMinutes ?? task.actualMinutes,
-      startedAt: task.startedAt ?? new Date(),
-    },
+  // One transaction, so a corrective-action task can never be marked done while
+  // the audit it answers still says its corrective action is open.
+  return db.$transaction(async (tx) => {
+    const updated = await tx.task.update({
+      where: { id: task.id },
+      data: {
+        status: 'COMPLETED',
+        completedAt: new Date(),
+        completedById: input.actorId,
+        notes: input.notes ?? task.notes,
+        actualMinutes: input.actualMinutes ?? task.actualMinutes,
+        startedAt: task.startedAt ?? new Date(),
+      },
+    });
+
+    await logActivity({
+      orderId: task.orderId,
+      actorId: input.actorId,
+      actorName: input.actorName,
+      action: 'TASK_COMPLETED',
+      summary: `completed "${task.title}"`,
+      entityType: 'Task',
+      entityId: task.id,
+      meta: { stageKey: task.stageKey, department: task.department },
+    }, tx);
+
+    // Completing the corrective-action task *is* closing the corrective
+    // action. Without this the task list said done while the audit stayed
+    // open, and the order sat Quality Blocked with nothing left to click but a
+    // second button on another tab. Mirrors the Quality tab's close route.
+    if (task.sourceAuditId) {
+      const closed = await tx.qualityAudit.updateMany({
+        where: { id: task.sourceAuditId, correctiveActionClosed: false },
+        data: { correctiveActionClosed: true },
+      });
+      if (closed.count > 0) {
+        await logActivity({
+          orderId: task.orderId, actorId: input.actorId, actorName: input.actorName,
+          action: 'CORRECTIVE_ACTION_CLOSED',
+          summary: 'closed the corrective action — the order is no longer quality-blocked',
+          entityType: 'QualityAudit', entityId: task.sourceAuditId,
+        }, tx);
+      }
+    }
+
+    // Unblock whatever was waiting on this task's sequence group.
+    await unblockDependents(tx, task.orderId, task.sequence);
+
+    // Tell the next group's owners that they are up.
+    await notifyNextGroup(tx, task.orderId, task.sequence, input.actorId);
+
+    return updated;
   });
-
-  await logActivity({
-    orderId: task.orderId,
-    actorId: input.actorId,
-    actorName: input.actorName,
-    action: 'TASK_COMPLETED',
-    summary: `completed "${task.title}"`,
-    entityType: 'Task',
-    entityId: task.id,
-    meta: { stageKey: task.stageKey, department: task.department },
-  }, db);
-
-  // Unblock whatever was waiting on this task's sequence group.
-  await unblockDependents(db, task.orderId, task.sequence);
-
-  // Tell the next group's owners that they are up.
-  await notifyNextGroup(db, task.orderId, task.sequence, input.actorId);
-
-  return updated;
 }
 
 /**

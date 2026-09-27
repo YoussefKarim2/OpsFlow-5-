@@ -85,7 +85,12 @@ export function createApp() {
       },
     },
   }));
-  app.use(cors({ origin: config.CORS_ORIGIN.split(',').map((s) => s.trim()), credentials: true }));
+  app.use(cors({
+    origin: config.CORS_ORIGIN.split(',').map((s) => s.trim()),
+    credentials: true,
+    // Lets a cross-origin client read the server's name for a downloaded file.
+    exposedHeaders: ['Content-Disposition'],
+  }));
   app.use(express.json({ limit: '2mb' }));
   app.use(express.urlencoded({ extended: true }));
 
@@ -272,6 +277,27 @@ function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFun
       });
       return;
     }
+    // Two people saving the same thing at the same moment: the loser can
+    // simply save again, which a 500 did not tell them.
+    if (err.code === 'P2034') {
+      res.status(409).json({
+        error: 'Someone else changed this at the same moment. Please try again.',
+        code: 'WRITE_CONFLICT',
+      });
+      return;
+    }
+  }
+
+  /**
+   * A filter value Prisma could not use — `?status=FOO`, a date that is not a
+   * date. Routes should validate these themselves, and the known ones do; this
+   * catches the rest as the caller's mistake rather than a 500 with a stack.
+   * Still logged, because it can equally be a query this code built wrongly.
+   */
+  if (err instanceof Prisma.PrismaClientValidationError) {
+    console.error('Rejected query:', err.message);
+    res.status(400).json({ error: 'One of the values sent could not be used. Check the filters and try again.', code: 'BAD_VALUE' });
+    return;
   }
 
   /**

@@ -201,7 +201,10 @@ function AuditModal({
 }: {
   open: boolean; order: OrderDetailDto; onClose: () => void; onDone: () => void;
 }) {
-  const producedQty = order.production.producedQty || order.funnel.find((f) => f.ledger === 'CUT')?.qty || 0;
+  // The produced figure the rest of the order uses (in-line or sewing,
+  // whichever is further along), not sewing alone, which reads 0 on an order
+  // whose production is recorded on the in-line ledger.
+  const producedQty = order.producedQty || order.funnel.find((f) => f.ledger === 'CUT')?.qty || 0;
   const [availableQty, setAvailableQty] = useState(String(producedQty));
   const [defects, setDefects] = useState<Record<string, number>>({});
   const [remarks, setRemarks] = useState('');

@@ -368,7 +368,19 @@ export function ModuleListPage({
   columns?: Array<'qty' | 'produced' | 'packed' | 'shipped'>;
 }) {
   const navigate = useNavigate();
-  const { data, isLoading } = useQuery({ queryKey: ['orders', 'all'], queryFn: () => api.orders.list({ pageSize: 100 }) });
+  // The API pages at 100, and one page silently hid every order after the
+  // hundredth; the remaining pages are fetched alongside the first.
+  const { data, isLoading } = useQuery({
+    queryKey: ['orders', 'all'],
+    queryFn: async () => {
+      const first = await api.orders.list({ pageSize: 100 });
+      const rest = await Promise.all(
+        Array.from({ length: Math.max(0, first.totalPages - 1) }, (_, i) =>
+          api.orders.list({ pageSize: 100, page: i + 2 })),
+      );
+      return { ...first, data: [first, ...rest].flatMap((p) => p.data) };
+    },
+  });
 
   if (isLoading) return <Spinner />;
   const orders = (data?.data ?? []).filter(filter ?? (() => true));

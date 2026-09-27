@@ -222,6 +222,7 @@ export async function getOrderSteps(orderId: string, today = new Date()): Promis
     materialShortCount: derivedOrder.materials?.shortCount ?? 0,
     markerPlannedQty: derivedOrder.markerPlan?.plannedTotal ?? 0,
     markerRequiredQty: derivedOrder.markerPlan?.requiredTotal ?? 0,
+    markerCoversRequirement: derivedOrder.markerPlan?.coversRequirement,
   }, today);
 
   const result = deriveOrderSteps(ctx, blockedStepKeys(derivedOrder.blockers));

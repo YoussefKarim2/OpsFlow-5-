@@ -17,7 +17,8 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Rows3 } from 'lucide-react';
-import { api, ApiError, type BomRowDto, type BomSizeDto } from '../lib/api';
+import { isTypeableNumber } from '@opsflow/shared';
+import { api, ApiError, type BomRowDto } from '../lib/api';
 import { Num, ErrorNote, clsx } from './ui';
 
 /** The BOM categories the schema stores. The dropdown labels them properly. */
@@ -32,14 +33,79 @@ const label = (t: string) => {
   return s.charAt(0).toUpperCase() + s.slice(1);
 };
 
-const blankRow = (): BomRowDto => ({
+/**
+ * A row while it is being edited.
+ *
+ * The numbers are held as the text typed, and parsed only when saved. Storing
+ * `Number(text)` on every keystroke turned "0." into 0 and made 0.35 or 12.5
+ * impossible to type at all.
+ */
+interface RowDraft extends Omit<BomRowDto, 'requiredQty' | 'issuedQty' | 'unitPriceUsd' | 'sizes'> {
+  requiredQty: string;
+  issuedQty: string;
+  unitPriceUsd: string;
+  sizes: Array<{ id?: string; sizeLabel: string; qty: string }>;
+  /** The issued figure as the editor was opened with it. See `issuedChanged`. */
+  issuedWas: string;
+}
+
+const text = (v: number | null | undefined): string => (v == null ? '' : String(v));
+
+/** Blank is "nobody has said"; anything else must be a real number. */
+const parse = (t: string): number | null => {
+  const s = t.trim();
+  if (s === '') return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+};
+
+/** Typed, but not something a number can be read from — "." or "-" alone. */
+const unreadable = (t: string): boolean => t.trim() !== '' && parse(t) == null;
+
+const toDraft = (r: BomRowDto): RowDraft => ({
+  ...r,
+  requiredQty: r.requiredQty ? String(r.requiredQty) : '',
+  issuedQty: text(r.issuedQty),
+  unitPriceUsd: text(r.unitPriceUsd),
+  sizes: r.sizes.map((z) => ({ id: z.id, sizeLabel: z.sizeLabel, qty: z.qty ? String(z.qty) : '' })),
+  issuedWas: text(r.issuedQty),
+});
+
+const blankRow = (): RowDraft => toDraft({
   category: 'ACCESSORY', item: '', description: null, colorText: null,
   unit: 'PCS', requiredQty: 0, issuedQty: null, unitPriceUsd: null, supplier: null, notes: null, sizes: [],
 });
 
 /** A row's quantity is the sum of its sizes once any exist. */
-export function rowQty(r: BomRowDto): number {
-  return r.sizes.length > 0 ? r.sizes.reduce((a, s) => a + (s.qty || 0), 0) : r.requiredQty || 0;
+export function rowQty(r: RowDraft): number {
+  return r.sizes.length > 0
+    ? r.sizes.reduce((a, s) => a + (parse(s.qty) ?? 0), 0)
+    : parse(r.requiredQty) ?? 0;
+}
+
+/**
+ * Whether the person changed the issued figure in this editor.
+ *
+ * The editor opens on whatever the bill of materials said when it was loaded,
+ * and the server treats a different issued figure as a correction and writes
+ * the difference to the issue log. Sent for every row, an editor left open
+ * while the warehouse issued stock would quietly reverse that issue on save.
+ * So it is sent only for a row whose figure was actually edited; the others
+ * leave the issued quantity to the warehouse.
+ */
+const issuedChanged = (r: RowDraft): boolean => parse(r.issuedQty) !== parse(r.issuedWas);
+
+/** The row as the server takes it. */
+function fromDraft(d: RowDraft): BomRowDto {
+  const { issuedWas: _was, ...r } = d;
+  return {
+    ...r,
+    requiredQty: rowQty(d),
+    // Null is "unchanged" to the server, which leaves the issued figure alone.
+    issuedQty: issuedChanged(d) ? parse(d.issuedQty) : null,
+    unitPriceUsd: parse(d.unitPriceUsd),
+    sizes: d.sizes.map((z) => ({ id: z.id, sizeLabel: z.sizeLabel, qty: parse(z.qty) ?? 0 })),
+  };
 }
 
 export function BomEditor({
@@ -58,17 +124,20 @@ export function BomEditor({
   onSaved?: () => void;
 }) {
   const qc = useQueryClient();
-  const [rows, setRows] = useState<BomRowDto[]>(initial);
+  const [rows, setRows] = useState<RowDraft[]>(() => initial.map(toDraft));
   const [expanded, setExpanded] = useState<number | null>(null);
 
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const save = useMutation({
-    mutationFn: () => api.materials.saveBom(orderId, rows.map((r) => ({ ...r, requiredQty: rowQty(r) }))),
+    mutationFn: () => api.materials.saveBom(orderId, rows.map(fromDraft)),
     onSuccess: () => {
       setSaveError(null);
       void qc.invalidateQueries({ queryKey: ['bom', orderId] });
       void qc.invalidateQueries({ queryKey: ['order', orderId] });
+      // The costing sheet and the workflow both read the bill of materials.
+      void qc.invalidateQueries({ queryKey: ['costing', orderId] });
+      void qc.invalidateQueries({ queryKey: ['order-steps', orderId] });
       onSaved?.();
     },
     // Without this the mutation swallowed every failure: the button finished,
@@ -79,16 +148,24 @@ export function BomEditor({
     ),
   });
 
-  const setRow = (i: number, patch: Partial<BomRowDto>) =>
+  const setRow = (i: number, patch: Partial<RowDraft>) =>
     setRows((rs) => rs.map((r, n) => (n === i ? { ...r, ...patch } : r)));
 
-  const setSize = (i: number, n: number, patch: Partial<BomSizeDto>) =>
+  const setSize = (i: number, n: number, patch: Partial<RowDraft['sizes'][number]>) =>
     setRow(i, { sizes: rows[i]!.sizes.map((s, k) => (k === n ? { ...s, ...patch } : s)) });
 
+  /** A numeric field's change: kept as typed, as long as it could become a number. */
+  const numeric = (apply: (v: string) => void) =>
+    (e: { target: { value: string } }) => { if (isTypeableNumber(e.target.value)) apply(e.target.value); };
+
   // An item with no name cannot be saved: the BOM is read by people picking
-  // stock off a shelf, and a nameless line helps nobody.
-  const invalid = rows.some((r) => !r.item.trim());
-  const total = rows.reduce((a, r) => a + rowQty(r) * (r.unitPriceUsd ?? 0), 0);
+  // stock off a shelf, and a nameless line helps nobody. Nor can a figure that
+  // is half a number — "." or "-" on its own.
+  const unnamed = rows.some((r) => !r.item.trim());
+  const halfTyped = rows.some((r) =>
+    [r.requiredQty, r.issuedQty, r.unitPriceUsd, ...r.sizes.map((z) => z.qty)].some(unreadable));
+  const invalid = unnamed || halfTyped;
+  const total = rows.reduce((a, r) => a + rowQty(r) * (parse(r.unitPriceUsd) ?? 0), 0);
 
   return (
     <div className="space-y-3">
@@ -102,7 +179,7 @@ export function BomEditor({
             type="button"
             className="btn-primary btn-sm"
             disabled={save.isPending || invalid}
-            title={invalid ? 'Every item needs a name' : undefined}
+            title={unnamed ? 'Every item needs a name' : halfTyped ? 'Finish the number being typed' : undefined}
             onClick={() => save.mutate()}
           >
             {save.isPending ? 'Saving…' : 'Save'}
@@ -184,8 +261,9 @@ export function BomEditor({
                     ) : (
                       <input
                         className="input tnum border-transparent bg-transparent text-right"
-                        value={r.requiredQty || ''}
-                        onChange={(e) => setRow(i, { requiredQty: Number(e.target.value) || 0 })}
+                        inputMode="decimal"
+                        value={r.requiredQty}
+                        onChange={numeric((v) => setRow(i, { requiredQty: v }))}
                       />
                     )}
                   </td>
@@ -197,12 +275,11 @@ export function BomEditor({
                   <td className="p-1">
                     <input
                       className="input tnum border-transparent bg-transparent text-right"
-                      value={r.issuedQty ?? ''}
+                      inputMode="decimal"
+                      value={r.issuedQty}
                       placeholder="—"
                       title="What the warehouse has issued. Correcting it is recorded in the issue log."
-                      onChange={(e) => setRow(i, {
-                        issuedQty: e.target.value === '' ? null : Number(e.target.value),
-                      })}
+                      onChange={numeric((v) => setRow(i, { issuedQty: v }))}
                     />
                   </td>
                   <td className="p-1">
@@ -216,13 +293,14 @@ export function BomEditor({
                   <td className="p-1">
                     <input
                       className="input tnum border-transparent bg-transparent text-right"
-                      value={r.unitPriceUsd ?? ''}
+                      inputMode="decimal"
+                      value={r.unitPriceUsd}
                       placeholder="—"
-                      onChange={(e) => setRow(i, { unitPriceUsd: e.target.value === '' ? null : Number(e.target.value) })}
+                      onChange={numeric((v) => setRow(i, { unitPriceUsd: v }))}
                     />
                   </td>
                   <td className="td tnum text-right font-semibold">
-                    <Num value={r.unitPriceUsd == null ? null : rowQty(r) * r.unitPriceUsd} kind="money" places={2} />
+                    <Num value={parse(r.unitPriceUsd) == null ? null : rowQty(r) * parse(r.unitPriceUsd)!} kind="money" places={2} />
                   </td>
                   <td className="p-1">
                     <input
@@ -264,7 +342,7 @@ export function BomEditor({
                         <button
                           type="button"
                           className="btn-ghost btn-sm"
-                          onClick={() => setRow(i, { sizes: [...r.sizes, { sizeLabel: '', qty: 0 }] })}
+                          onClick={() => setRow(i, { sizes: [...r.sizes, { sizeLabel: '', qty: '' }] })}
                         >
                           <Plus className="h-3.5 w-3.5" /> Add a size
                         </button>
@@ -286,8 +364,9 @@ export function BomEditor({
                               />
                               <input
                                 className="input tnum w-28 text-right"
-                                value={sz.qty || ''}
-                                onChange={(e) => setSize(i, n, { qty: Number(e.target.value) || 0 })}
+                                inputMode="decimal"
+                                value={sz.qty}
+                                onChange={numeric((v) => setSize(i, n, { qty: v }))}
                               />
                               <button
                                 type="button"

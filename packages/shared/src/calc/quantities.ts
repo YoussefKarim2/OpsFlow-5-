@@ -239,10 +239,23 @@ export interface StockDeduction {
   cutAllowancePct: number;
 }
 
-export function computeStockDeduction(cells: readonly QtyCell[], cutPct: number): StockDeduction {
+export function computeStockDeduction(
+  cells: readonly QtyCell[],
+  cutPct: number,
+  colors: AxisRef[] = [],
+  sizes: AxisRef[] = [],
+): StockDeduction {
   const customerOrderQty = ledgerTotal(cells, QtyLedger.ORDER);
-  const usableStockQty = ledgerTotal(cells, QtyLedger.STOCK);
-  const requiredProductionQty = Math.max(0, customerOrderQty - usableStockQty);
+  // Netted per cell, exactly as the cut order is (see `computeCuttableQty`).
+  // On the totals, 150 spare White XL would cancel a Navy S shortfall and the
+  // overview would promise less production than the cut order actually asks
+  // for. "Usable" stock is then only the part that covers an ordered cell, so
+  // the three figures on the overview still add up. Without axes there is no
+  // grid to net against and the totals are the best available answer.
+  const requiredProductionQty = colors.length > 0 && sizes.length > 0
+    ? computeCuttableQty(cells, colors, sizes)
+    : Math.max(0, customerOrderQty - ledgerTotal(cells, QtyLedger.STOCK));
+  const usableStockQty = customerOrderQty - requiredProductionQty;
   const cutQtyWithAllowance = ledgerTotal(cells, QtyLedger.CUT);
   return { customerOrderQty, usableStockQty, requiredProductionQty, cutQtyWithAllowance, cutAllowancePct: cutPct * 100 };
 }

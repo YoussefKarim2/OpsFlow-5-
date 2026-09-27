@@ -202,6 +202,104 @@ export interface MarkerPlanSummary {
   avgConsumptionPerPieceM: number | null;
   /** Fabric efficiency: required pieces vs planned pieces. */
   planEfficiencyPct: number | null;
+  /**
+   * The fabric whose lays count as garments — see `garmentLayIds`. Null when
+   * there are no lays.
+   */
+  mainFabric: string | null;
+  /** The lays whose pieces count toward `plannedBySize`. The rest are shown, not counted. */
+  garmentLayIds: string[];
+  /**
+   * True only when every size the cut order asks for is planned in full. A
+   * surplus in one size does not make up a shortage in another: nobody ships
+   * a spare XL to a customer who ordered a small.
+   */
+  coversRequirement: boolean;
+  /** Pieces missing across the sizes that are short — never offset by surpluses. */
+  shortfallTotal: number;
+}
+
+/** A panel name that means "the whole garment". An empty panel is read the same way. */
+function isWholeGarmentPanel(panel: string | null | undefined): boolean {
+  const p = (panel ?? '').trim().toUpperCase();
+  return p === '' || p === 'ALL';
+}
+
+const normaliseFabric = (f: string | null | undefined): string => (f ?? '').trim().replace(/\s+/g, ' ').toUpperCase();
+
+/**
+ * Which lays make garments, and so which lays' pieces count toward the plan.
+ *
+ * A lay plan lists every lay spread for the order, and not every lay cuts a
+ * whole garment. A rib collar in a second fabric, a lining, or a body cut
+ * front and back separately all produce pieces that are parts of the same
+ * garment as the body lay's. Summing them all counted one shirt two or three
+ * times, and a plan that was short could look covered.
+ *
+ * The rule, kept deliberately conservative:
+ *
+ *   1. Only the main fabric's lays count. The main fabric is the order's own
+ *      fabric when a lay uses it, otherwise the fabric with the most pieces
+ *      cut in whole-garment lays (or in any lay, if none are whole-garment).
+ *   2. Within the main fabric, a whole-garment lay (panel ALL, or blank)
+ *      counts its pieces as garments.
+ *   3. When the main fabric has no whole-garment lay at all — the body is
+ *      cut panel by panel — a size has as many garments as its scarcest
+ *      panel has pieces: a garment needs every one of its panels.
+ *
+ * Panel lays alongside a whole-garment lay in the main fabric (a separately
+ * cut sleeve, say) are left out rather than guessed at: counting them could
+ * only overstate the plan.
+ */
+function garmentOutput(
+  results: readonly LayResult[],
+  mainFabricHint: string | null | undefined,
+): { mainFabric: string | null; garmentLayIds: string[]; plannedBySize: Record<string, number> } {
+  if (results.length === 0) return { mainFabric: null, garmentLayIds: [], plannedBySize: {} };
+
+  const fabrics = new Map<string, { name: string; wholePieces: number; anyPieces: number; order: number }>();
+  results.forEach((l, i) => {
+    const key = normaliseFabric(l.fabric);
+    const f = fabrics.get(key) ?? { name: l.fabric, wholePieces: 0, anyPieces: 0, order: i };
+    f.anyPieces += l.totalPieces;
+    if (isWholeGarmentPanel(l.panel)) f.wholePieces += l.totalPieces;
+    fabrics.set(key, f);
+  });
+
+  const hint = normaliseFabric(mainFabricHint);
+  let mainKey: string;
+  if (hint && fabrics.has(hint)) {
+    mainKey = hint;
+  } else {
+    const anyWhole = [...fabrics.values()].some((f) => f.wholePieces > 0);
+    const ranked = [...fabrics.entries()].sort(([, a], [, b]) =>
+      (anyWhole ? b.wholePieces - a.wholePieces : b.anyPieces - a.anyPieces) || a.order - b.order);
+    mainKey = ranked[0]![0];
+  }
+
+  const mainLays = results.filter((l) => normaliseFabric(l.fabric) === mainKey);
+  const wholeLays = mainLays.filter((l) => isWholeGarmentPanel(l.panel));
+  const plannedBySize: Record<string, number> = {};
+
+  if (wholeLays.length > 0) {
+    for (const l of wholeLays) {
+      for (const [size, qty] of Object.entries(l.output)) plannedBySize[size] = (plannedBySize[size] ?? 0) + qty;
+    }
+    return { mainFabric: fabrics.get(mainKey)!.name, garmentLayIds: wholeLays.map((l) => l.id), plannedBySize };
+  }
+
+  // Cut panel by panel: pieces per panel per size, then the scarcest panel.
+  const byPanel = new Map<string, Record<string, number>>();
+  for (const l of mainLays) {
+    const key = l.panel.trim().toUpperCase();
+    const out = byPanel.get(key) ?? {};
+    for (const [size, qty] of Object.entries(l.output)) out[size] = (out[size] ?? 0) + qty;
+    byPanel.set(key, out);
+  }
+  const panels = [...byPanel.values()];
+  const sizes = new Set(panels.flatMap((p) => Object.keys(p)));
+  for (const size of sizes) plannedBySize[size] = Math.min(...panels.map((p) => p[size] ?? 0));
+  return { mainFabric: fabrics.get(mainKey)!.name, garmentLayIds: mainLays.map((l) => l.id), plannedBySize };
 }
 
 /**
@@ -214,19 +312,16 @@ export interface MarkerPlanSummary {
 export function computeMarkerPlan(
   lays: readonly LayInput[],
   requiredBySize: Record<string, number>,
+  options: { mainFabric?: string | null } = {},
 ): MarkerPlanSummary {
   const results = lays.map(computeLay);
 
-  const plannedBySize: Record<string, number> = {};
-  for (const l of results) {
-    for (const [size, qty] of Object.entries(l.output)) {
-      plannedBySize[size] = (plannedBySize[size] ?? 0) + qty;
-    }
-  }
+  const { mainFabric, garmentLayIds, plannedBySize } = garmentOutput(results, options.mainFabric);
 
   const allSizes = new Set([...Object.keys(plannedBySize), ...Object.keys(requiredBySize)]);
   const varianceBySize: Record<string, number> = {};
   for (const s of allSizes) varianceBySize[s] = (plannedBySize[s] ?? 0) - (requiredBySize[s] ?? 0);
+  const shortfallTotal = sum(Object.values(varianceBySize).map((v) => (v < 0 ? -v : 0)));
 
   const plannedTotal = sum(Object.values(plannedBySize));
   const requiredTotal = sum(Object.values(requiredBySize));
@@ -248,6 +343,12 @@ export function computeMarkerPlan(
     totalFabricM,
     avgConsumptionPerPieceM: safeDiv(totalFabricM, plannedTotal),
     planEfficiencyPct: safePct(requiredTotal, plannedTotal),
+    mainFabric,
+    garmentLayIds,
+    // Whether an empty requirement counts as covered is the caller's call —
+    // the step and the gate have always answered it differently.
+    coversRequirement: shortfallTotal === 0,
+    shortfallTotal,
   };
 }
 

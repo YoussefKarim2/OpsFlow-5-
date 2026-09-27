@@ -51,6 +51,8 @@ export function PackingSizeGrid({
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['packing', orderId] });
       void qc.invalidateQueries({ queryKey: ['order', orderId] });
+      // The PACKED ledger moved, and the quantity grids read it.
+      void qc.invalidateQueries({ queryKey: ['matrix', orderId] });
       onDone?.();
     },
   });

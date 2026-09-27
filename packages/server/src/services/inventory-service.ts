@@ -20,6 +20,7 @@
  * means deducting it twice by the time it is actually issued.
  */
 
+import { randomUUID } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@prisma/client';
 import {
   MovementType, ReservationStatus, StockStatus,
@@ -286,30 +287,46 @@ async function applyMovement(
 
   // Balance is per (material, location) so two stores cannot overdraw each other.
   const locationId = input.locationId ?? null;
-  const stock = await tx.materialStock.findFirst({
+
+  // The balance row is made to exist first, then moved by a relative update.
+  // Reading the balance and writing back an absolute figure lost updates
+  // under Read Committed: ten receipts of one arriving together each read the
+  // same starting figure, and the shelf ended four up instead of ten. The
+  // insert yields to a row another request created a moment earlier — the
+  // unique indexes, including the partial one for "no location", make that a
+  // no-op rather than a duplicate balance.
+  const findBalance = () => tx.materialStock.findFirst({
     where: { materialId: input.materialId, locationId },
+    select: { id: true },
   });
-  const before = decOr0(stock?.physicalQty);
-  const balanceAfter = qtyAdd(before, signed);
+  let stock = await findBalance();
+  if (!stock) {
+    await tx.$executeRaw`
+      INSERT INTO "material_stock" ("id", "materialId", "locationId", "physicalQty", "updatedAt")
+      VALUES (${randomUUID()}, ${input.materialId}, ${locationId}, 0, now())
+      ON CONFLICT DO NOTHING`;
+    stock = await findBalance();
+  }
+  if (!stock) throw new ConflictError('Someone else changed this stock at the same moment; try again.');
 
   // Physical stock cannot go negative: there is no such thing as minus forty
   // metres on a shelf. A count that finds less is an ADJUSTMENT to the real
-  // figure, not a withdrawal past zero.
-  if (qtyCmp(balanceAfter, 0) < 0) {
+  // figure, not a withdrawal past zero. The check is part of the update
+  // itself, so two withdrawals racing for the last metres cannot both pass it.
+  const moved = await tx.materialStock.updateMany({
+    where: { id: stock.id, ...(signed < 0 ? { physicalQty: { gte: -signed } } : {}) },
+    data: { physicalQty: { increment: signed } },
+  });
+  const after = await tx.materialStock.findUniqueOrThrow({ where: { id: stock.id }, select: { physicalQty: true } });
+  if (moved.count === 0) {
+    const onHand = decOr0(after.physicalQty);
     throw new ConflictError(
-      `That would leave ${material.name} at ${balanceAfter.toLocaleString()} ${material.unit}. ` +
-      `Only ${before.toLocaleString()} ${material.unit} is on hand` +
+      `That would leave ${material.name} at ${qtyAdd(onHand, signed).toLocaleString()} ${material.unit}. ` +
+      `Only ${onHand.toLocaleString()} ${material.unit} is on hand` +
       `${locationId ? ' at this location' : ''}. Record a stock adjustment if the book figure is wrong.`,
     );
   }
-
-  if (stock) {
-    await tx.materialStock.update({ where: { id: stock.id }, data: { physicalQty: balanceAfter } });
-  } else {
-    await tx.materialStock.create({
-      data: { materialId: input.materialId, locationId, physicalQty: balanceAfter },
-    });
-  }
+  const balanceAfter = decOr0(after.physicalQty);
 
   const movement = await tx.materialMovement.create({
     data: {
@@ -431,7 +448,7 @@ export async function reserveForOrder(
     allowPartial?: boolean;
   },
 ): Promise<{ reservation: { id: string; qty: number }; material: MaterialRow; partial: boolean }> {
-  const result = await prisma.$transaction(
+  const result = await withSerializableRetry(() => prisma.$transaction(
     async (tx) => {
       const material = await tx.material.findUnique({
         where: { id: input.materialId },
@@ -454,6 +471,9 @@ export async function reserveForOrder(
         qty = converted;
       }
       if (qty <= 0) throw new ValidationError('Enter a quantity greater than zero.');
+      // What was asked for, in the material's unit — "partial" is judged
+      // against this, not against the figure as typed in some other unit.
+      const requested = qty;
 
       const position = toMaterialRow(material).position;
 
@@ -505,14 +525,14 @@ export async function reserveForOrder(
       return {
         reservationId: reservation.id,
         reservedQty: qty,
-        partial: qtyCmp(qty, quantise(input.qty)) < 0,
+        partial: qtyCmp(qty, requested) < 0,
         materialName: material.name,
         unit: material.unit,
         poNumber: order.poNumber,
       };
     },
     { isolationLevel: 'Serializable' },
-  );
+  ));
 
   await logActivity({
     orderId: input.orderId,
@@ -588,7 +608,7 @@ export async function issueToProduction(
     stage?: string | null; reason?: string | null; batchLot?: string | null; issuedToName?: string | null;
   },
 ): Promise<{ material: MaterialRow; drawnFromReservation: number; drawnFromFree: number }> {
-  const result = await prisma.$transaction(
+  const result = await withSerializableRetry(() => prisma.$transaction(
     async (tx) => {
       const material = await tx.material.findUnique({
         where: { id: input.materialId },
@@ -683,13 +703,17 @@ export async function issueToProduction(
 
       // Keep the BOM line's issued figure in step, so the existing BOM screen
       // and the new inventory screen never disagree about the same event.
+      //
+      // The movement is in the material's unit and the line is read in its
+      // own, so the figure is converted back: 914.4 m leaving the shelf is
+      // 1,000 yd issued against a line measured in yards.
       if (input.bomItemId) {
         const bom = await tx.bomItem.findUnique({ where: { id: input.bomItemId } });
         if (bom) {
           await tx.bomItem.update({
             where: { id: input.bomItemId },
             data: {
-              issuedQty: qtyAdd(decOr0(bom.issuedQty), qty),
+              issuedQty: qtyAdd(decOr0(bom.issuedQty), convertQty(qty, material.unit, bom.unit) ?? qty),
               issuedAt: new Date(),
               issuedByName: actor.name,
               issuedToName: input.issuedToName ?? bom.issuedToName,
@@ -707,7 +731,7 @@ export async function issueToProduction(
       };
     },
     { isolationLevel: 'Serializable', timeout: 20_000 },
-  );
+  ));
 
   const row = await getMaterial(input.materialId);
 
@@ -759,7 +783,7 @@ export async function returnFromProduction(
     bomItemId?: string | null; locationId?: string | null; reason?: string | null;
   },
 ): Promise<MaterialRow> {
-  await prisma.$transaction(async (tx) => {
+  await withSerializableRetry(() => prisma.$transaction(async (tx) => {
     const material = await tx.material.findUnique({ where: { id: input.materialId } });
     if (!material) throw new NotFoundError('Material');
 
@@ -832,11 +856,12 @@ export async function returnFromProduction(
       if (bom) {
         await tx.bomItem.update({
           where: { id: input.bomItemId },
-          data: { issuedQty: Math.max(0, qtySub(decOr0(bom.issuedQty), qty)) },
+          // Back into the line's unit, as on the way out.
+          data: { issuedQty: Math.max(0, qtySub(decOr0(bom.issuedQty), convertQty(qty, material.unit, bom.unit) ?? qty)) },
         });
       }
     }
-  }, { isolationLevel: 'Serializable' });
+  }, { isolationLevel: 'Serializable' }));
 
   const row = await getMaterial(input.materialId);
   await logActivity({
@@ -882,6 +907,9 @@ export async function getOrderMaterialPosition(orderId: string, db: Db = prisma)
       reservedQty,
       issuedQty: decOr0(b.issuedQty),
       availableQty,
+      // Reserved and available are in the material's unit; the calculation
+      // converts them into the line's before comparing.
+      stockUnit: b.material?.unit ?? null,
     };
   });
 
@@ -913,10 +941,13 @@ export async function reserveOrderMaterials(
     if (r.materialId == null) { skipped++; continue; }
 
     if (r.reservableQty > 0) {
+      // The position is stated in the line's unit, so the reservation is
+      // requested in it too and converted to the material's on the way in.
       await reserveForOrder(actor, {
         materialId: r.materialId,
         orderId,
         qty: r.reservableQty,
+        unit: r.unit,
         bomItemId: r.id,
         allowPartial: true,
         notes: 'Reserved automatically when the order was confirmed',
@@ -1019,6 +1050,41 @@ export async function reconcileStock(
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Run a Serializable transaction, retrying when Postgres refuses to serialise it.
+ *
+ * Serializable is what stops two coordinators reserving the same last metres,
+ * and the price is that Postgres aborts one of two overlapping transactions
+ * rather than let both through. That abort is not a fault — the loser simply
+ * has to run again against the winner's result — but surfaced as-is it was a
+ * 500 on an ordinary busy morning. A few quick retries with a little jitter
+ * settle nearly all of them; one still colliding after that is reported as
+ * the conflict it is, and the person can press the button again.
+ */
+async function withSerializableRetry<T>(run: () => Promise<T>, retries = 3): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await run();
+    } catch (err) {
+      if (!isSerializationFailure(err)) throw err;
+      if (attempt >= retries) {
+        throw new ConflictError('Someone else changed this stock at the same moment; try again.');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10 + Math.random() * 40 * (attempt + 1)));
+    }
+  }
+}
+
+function isSerializationFailure(err: unknown): boolean {
+  const e = err as { code?: string; message?: string; meta?: { code?: string } } | null;
+  if (!e) return false;
+  // P2034 is Prisma's name for it; a raw statement inside the transaction
+  // surfaces Postgres's own codes (40001 serialisation, 40P01 deadlock).
+  return e.code === 'P2034'
+    || e.meta?.code === '40001' || e.meta?.code === '40P01'
+    || /could not serialize access|deadlock detected/i.test(e.message ?? '');
+}
 
 /** Local zero test — the shared one takes the same rounding but reads oddly inline. */
 function qtyIsZeroLocal(v: number): boolean {

@@ -18,16 +18,22 @@ import multer from 'multer';
 import ExcelJS from 'exceljs';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
-import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines, sanitiseOverrides } from '@opsflow/shared';
+import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines, sanitiseOverrides, visibleDerivedLines } from '@opsflow/shared';
 import { detectFileKind, FILE_KIND_LABEL } from '../services/import/file-kind.js';
 import { extractFromPdf } from '../services/import/pdf-extractor.js';
 import { extractTabular } from '../services/import/tabular-extractor.js';
 import { buildProformaDraft } from '../services/import/proforma-target.js';
+import { decodeUploadName } from '../util/upload-name.js';
+import { signedFileUrl } from '../services/file-links.js';
 
 /** Same limits as the order importer; a proforma is not a bigger document. */
 const proformaUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    file.originalname = decodeUploadName(file.originalname);
+    cb(null, true);
+  },
 });
 import { prisma } from '../db.js';
 import { requirePermission, currentUser } from '../middleware/auth.js';
@@ -39,7 +45,7 @@ import { sanitiseHtml } from '../util/sanitise-html.js';
 import { getOrderSteps, setStepStatus, markStepStarted } from '../services/step-service.js';
 import { refreshCutOrder } from '../services/cut-order.js';
 import { refreshOrderCache } from '../services/order-service.js';
-import { applyStockRecordsToLedger, orderAxisNames, resolveStockCell } from '../services/stock-sync.js';
+import { applyStockRecordsToLedger, findStockRecordsForCell, orderAxisNames, resolveStockCell } from '../services/stock-sync.js';
 
 export const stepsRouter = Router();
 
@@ -141,6 +147,7 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024, files: 1 },
   fileFilter: (_req, file, cb) => {
+    file.originalname = decodeUploadName(file.originalname);
     // multer's callback is an overload pair: cb(error) rejects, cb(null, true)
     // accepts. Passing both accepts the file regardless of the error.
     if (/[/\\]|\.\./.test(file.originalname)) {
@@ -295,7 +302,11 @@ stepsRouter.post(
         stageKey: attachment.stageKey,
         uploadedByName: attachment.uploadedBy.name,
         createdAt: attachment.createdAt.toISOString(),
-        downloadUrl: await storage.url(attachment.storageKey),
+        // Signed the same way as the attachment list, so the link opens in a
+        // browser tab that cannot send the session token.
+        downloadUrl: storage.name === 's3'
+          ? await storage.url(attachment.storageKey)
+          : signedFileUrl(attachment.storageKey, user.id),
       },
     });
   }),
@@ -505,10 +516,6 @@ stepsRouter.post('/:id/stock', requirePermission('order:edit'), asyncHandler(asy
   const body = stockSchema.parse(req.body);
   const user = currentUser(req);
 
-  const existing = await prisma.stockRecord.findFirst({
-    where: { orderId, colorName: body.colorName, sizeName: body.sizeName },
-  });
-
   // A colour or size that is not on this order names no cell of the matrix, so
   // the stock could never be subtracted from anything. Refusing it here is the
   // difference between a mistake somebody can see and a number that silently
@@ -523,6 +530,14 @@ stepsRouter.post('/:id/stock', requirePermission('order:edit'), asyncHandler(asy
     );
   }
 
+  // The row already recorded for this cell, matched the way the ledger
+  // matches it — "sky blue / 2yxs" is the same cell as "SKY BLUE / 2YXS", so
+  // it replaces that row rather than adding a second one the ledger would sum.
+  // Any duplicates left by the old exact-text lookup go at the same time.
+  const [existing, ...duplicates] = await findStockRecordsForCell(orderId, cell);
+  if (duplicates.length > 0) {
+    await prisma.stockRecord.deleteMany({ where: { id: { in: duplicates.map((d) => d.id) } } });
+  }
   const row = existing
     ? await prisma.stockRecord.update({ where: { id: existing.id }, data: { ...body, recordedAt: new Date() } })
     : await prisma.stockRecord.create({ data: { orderId, ...body } });
@@ -780,8 +795,10 @@ stepsRouter.get('/:id/proforma/export.xlsx', requirePermission('order:read'), as
     ['Consignee', inv.consignee],
     ['Billing address', inv.billingAddress],
     ['Email', inv.email],
+    ['Shipping date', inv.shippingDate ? inv.shippingDate.toISOString().slice(0, 10) : null],
     ['Ship from', inv.shipmentFrom],
     ['Ship to', inv.shipmentTo],
+    ['Consolidator', inv.consolidatingVendor],
     ['Vessel / voyage', inv.vesselVoyage],
     ['Container / seal', inv.containerSeal],
     ['Terms', inv.terms],
@@ -802,23 +819,37 @@ stepsRouter.get('/:id/proforma/export.xlsx', requirePermission('order:read'), as
     c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF3F4F6' } };
   });
 
+  // Quantities are Decimal(14,4): metres of fabric are as common as pieces, and
+  // a whole-number format showed 12.5 m as 13 beside an amount for 12.5.
+  const qtyFormat = '#,##0.####';
   let total = 0;
+  let totalQty = 0;
+  let priced = 0;
+  let unpriced = false;
   for (const l of inv.lines) {
     const qty = l.quantity == null ? null : Number(l.quantity.toString());
     const price = l.unitPrice == null ? null : Number(l.unitPrice.toString());
     const amount = qty != null && price != null ? qty * price : null;
-    if (amount != null) total += amount;
+    if (amount != null) { total += amount; priced += 1; } else unpriced = true;
+    if (qty != null) totalQty += qty;
     const row = ws.addRow([l.description, qty, l.unit, price, amount]);
     row.getCell(4).numFmt = '#,##0.00';
     row.getCell(5).numFmt = '#,##0.00';
-    row.getCell(2).numFmt = '#,##0';
+    row.getCell(2).numFmt = qtyFormat;
   }
 
-  const totalRow = ws.addRow(['', '', '', `Total (${inv.currency})`, total]);
+  // Matches the printed proforma: a total quantity, no total at all when
+  // nothing is priced, and a note whenever the total leaves a line out.
+  const totalRow = ws.addRow([`Total (${inv.currency})`, totalQty, '', '', priced > 0 ? total : null]);
   totalRow.font = { bold: true };
+  totalRow.getCell(2).numFmt = qtyFormat;
   totalRow.getCell(5).numFmt = '#,##0.00';
-  totalRow.getCell(4).border = { top: { style: 'thin' } };
-  totalRow.getCell(5).border = { top: { style: 'thin' } };
+  for (const c of [1, 2, 3, 4, 5]) totalRow.getCell(c).border = { top: { style: 'thin' } };
+  if (unpriced) {
+    const note = ws.addRow(['One or more items have no price. The total above covers only the priced items.']);
+    note.font = { italic: true };
+    ws.mergeCells(note.number, 1, note.number, 5);
+  }
 
   const safe = `PI-${(inv.number ?? inv.order.poNumber).replace(/[^A-Za-z0-9._-]+/g, '-')}.xlsx`;
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -882,20 +913,20 @@ stepsRouter.post('/:id/proforma/send', requirePermission('order:edit'), asyncHan
 
 /** What the production sections currently support, as cost lines. */
 async function deriveFor(orderId: string) {
-  const [bom, external, costing] = await Promise.all([
+  const [bom, external] = await Promise.all([
     prisma.bomItem.findMany({
       where: { orderId },
-      select: { category: true, item: true, requiredQty: true, issuedQty: true, unit: true, unitPriceUsd: true },
+      select: { id: true, category: true, item: true, requiredQty: true, issuedQty: true, unit: true, unitPriceUsd: true },
     }),
     prisma.externalOperation.findMany({
       where: { orderId },
       select: { operationType: true, qty: true, unitPriceUsd: true },
     }),
-    prisma.costingRecord.findUnique({ where: { orderId } }),
   ]);
 
   return deriveCostLines({
     bom: bom.map((b) => ({
+      id: b.id,
       category: b.category,
       item: b.item,
       // The issued quantity is a fact; the required quantity is a plan. An
@@ -910,11 +941,6 @@ async function deriveFor(orderId: string) {
       qty: e.qty,
       unitPriceUsd: e.unitPriceUsd == null ? null : Number(e.unitPriceUsd.toString()),
     })),
-    production: {
-      machineDaysUsed: costing?.machineDaysUsed ?? null,
-      dailyCostEgp: costing?.dailyCostEgp == null ? null : Number(costing.dailyCostEgp.toString()),
-      dollarRate: costing?.dollarRate == null ? null : Number(costing.dollarRate.toString()),
-    },
   });
 }
 
@@ -928,7 +954,8 @@ stepsRouter.get('/:id/costing', requirePermission('costing:read'), asyncHandler(
   res.json({
     data: record && {
       costingDate: record.costingDate?.toISOString() ?? null,
-      dollarRate: Number(record.dollarRate.toString()),
+      // Null until somebody enters one, so the sheet can say it is waiting.
+      dollarRate: record.dollarRate == null ? null : Number(record.dollarRate.toString()),
       dailyCostEgp: record.dailyCostEgp == null ? null : Number(record.dailyCostEgp.toString()),
       machineCount: record.machineCount,
       machineDaysUsed: record.machineDaysUsed,
@@ -952,8 +979,12 @@ stepsRouter.get('/:id/costing', requirePermission('costing:read'), asyncHandler(
       })),
     },
     // Offered separately so the screen can show what the production data says
-    // even before anybody has saved a costing.
-    derived: await deriveFor(orderId),
+    // even before anybody has saved a costing — and so it builds its rows from
+    // the live bill of materials rather than from the snapshot the last save
+    // wrote. Rows somebody removed are left out here, as they are everywhere
+    // else; rows claimed by an edited copy stay in, because the screen reads
+    // the plan beside the edited row from them.
+    derived: visibleDerivedLines(await deriveFor(orderId), [], record?.hiddenCostRefs ?? []),
   });
 }));
 
@@ -981,11 +1012,10 @@ const costingSchema = z.object({
    * coordinator could fill in a whole costing, press Save, and be told about a
    * field they had not reached yet, losing the rest.
    *
-   * Nothing downstream is endangered by allowing it. The derivation already
-   * refuses to convert without a positive rate (`costing-derive.ts`), so an
-   * unset rate produces no labour line rather than a wrong one — and the
-   * upsert below leaves any rate already stored alone rather than replacing it
-   * with the blank.
+   * Nothing downstream is endangered by allowing it. Every conversion goes
+   * through `safeDiv`, so an unset rate leaves those cells uncalculated rather
+   * than wrong — and the upsert below leaves any rate already stored alone
+   * rather than replacing it with the blank.
    */
   dollarRate: z.number().nonnegative().optional(),
   costingDate: z.string().optional().nullable(),
@@ -1021,14 +1051,17 @@ const costingSchema = z.object({
   hiddenCostRefs: z.array(z.string().trim().max(200)).max(500).optional(),
 });
 
-stepsRouter.put('/:id/costing', requirePermission('costing:write'), asyncHandler(async (req, res) => {
+// Read as well as write. The save replaces the whole record — notes, figures,
+// hand-added rows — with what the screen sends, so a caller who could not load
+// the costing first would overwrite it with an empty draft.
+stepsRouter.put('/:id/costing', requirePermission('costing:read'), requirePermission('costing:write'), asyncHandler(async (req, res) => {
   const orderId = await resolveOrderId(req.params.id);
   const body = costingSchema.parse(req.body);
   const user = currentUser(req);
 
   // A blank rate must not overwrite a good one: absent means "not answered",
-  // not "set it to nothing". Omitted from the update entirely, and left to the
-  // column's own default on create.
+  // not "set it to nothing". Omitted from the update entirely, and left unset
+  // on create, so the sheet says it is waiting for one.
   const fields = stripLines(body);
   const { dollarRate, costingDate, overrides, ...rest } =
     fields as typeof fields & { dollarRate?: number };
@@ -1054,19 +1087,22 @@ stepsRouter.put('/:id/costing', requirePermission('costing:write'), asyncHandler
     },
   });
 
-  // Recompute *after* the upsert: the labour derivation reads the dollar rate
-  // and machine-days that this very request may have just changed.
-  //
   // A derived row the coordinator has edited or deleted must not come back. An
   // edited one arrives as a manual line carrying the same `sourceRef` and
   // replaces it; a deleted one is named in `hiddenCostRefs`. Either way the
   // underlying bill of materials is untouched — this is the costing sheet's
-  // view of it, not a rewrite of it.
-  const claimed = new Set(body.manualLines.map((m) => m.sourceRef).filter((r): r is string => !!r));
-  const hidden = new Set(body.hiddenCostRefs ?? []);
-  const derived = (await deriveFor(orderId))
-    .filter((d) => !claimed.has(d.sourceRef) && !hidden.has(d.sourceRef));
-  const record = await prisma.costingRecord.findUniqueOrThrow({ where: { orderId }, select: { id: true } });
+  // view of it, not a rewrite of it. The matching is `visibleDerivedLines`, the
+  // same rule the order detail and the screen apply, so one row's edit reaches
+  // that row alone. Hidden references are read back from the record, so a save
+  // that did not send them still honours the ones stored.
+  const record = await prisma.costingRecord.findUniqueOrThrow({
+    where: { orderId }, select: { id: true, hiddenCostRefs: true },
+  });
+  const derived = visibleDerivedLines(
+    await deriveFor(orderId),
+    body.manualLines.map((m) => m.sourceRef),
+    record.hiddenCostRefs,
+  );
 
   await prisma.$transaction(async (tx) => {
     /**

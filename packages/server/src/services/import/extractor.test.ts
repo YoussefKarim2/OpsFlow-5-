@@ -18,7 +18,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
 
-import { extractWorkbook } from './extractor.js';
+import { extractWorkbook, fabricBomFromLays } from './extractor.js';
 import { AGE_ORDER_V1 } from './profiles.js';
 
 /** PO 13506's own quantity grid, colour by colour. */
@@ -167,5 +167,94 @@ describe('a formula with no cached result is nothing, not “[object Object]”'
     for (const size of order?.sizes ?? []) {
       assert.ok(!size.includes('[object'), `size header "${size}" is a JavaScript object, not a size`);
     }
+  });
+});
+
+/**
+ * The lay plan, found under its real header.
+ *
+ * On the AGE workbook the "Laying fabric instructions" sheet has a "Fabric 1 /
+ * Fabric 2 / Fabric 3 / Fabric Description" block above the table, and the
+ * header anchor "fabric" was matched as a prefix — it stopped at "Fabric 1",
+ * read the rows beneath that caption as lays, and every AGE import came out
+ * with no lay plan at all. Laid out here exactly as the real sheet has it.
+ */
+describe('the lay plan', () => {
+  async function withLayPlan(): Promise<Buffer> {
+    const wb = new ExcelJS.Workbook();
+    for (const name of AGE_ORDER_V1.signature.names) wb.addWorksheet(name);
+    const lay = wb.getWorksheet('Laying fabric instructions_Patr')!;
+    lay.getCell('H7').value = 'Fabric 1';           lay.getCell('K7').value = 'Rosetta';
+    lay.getCell('H8').value = 'Fabric 2';
+    lay.getCell('H9').value = 'Fabric 3';
+    lay.getCell('H10').value = 'Fabric Description';
+    const header = ['fabric', 'Color', 'PANAL', 'SIZE', 'S', 'M', 'Total', 'Layers', 'Total \nLength', 'NEST', 'Marker \nLength'];
+    header.forEach((h, i) => { lay.getCell(13, 3 + i).value = h; });
+    const data = ['Rosetta', 'USA', 'ALL', '(S1)(M1)', 1, 1, 2, 12, 30.5, 2, 2.4];
+    data.forEach((v, i) => { lay.getCell(15, 3 + i).value = v; });
+    lay.getCell(20, 3).value = 'TOTAL';
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  }
+
+  test('a caption that begins with the same word is not the header', async () => {
+    const r = await extractWorkbook(await withLayPlan());
+    assert.deepEqual(r.lays, [{
+      fabric: 'Rosetta', color: 'USA', panel: 'ALL', sizeRatio: '(S1)(M1)',
+      layers: 12, markerLengthM: 2.4, totalLengthM: 30.5, nestPcs: 2,
+    }]);
+  });
+});
+
+/**
+ * The BOM's fabric lines.
+ *
+ * On the real AGE workbook the BOM sheet's header is found, but the rows under
+ * it are a dynamic-array spill — `=ANCHORARRAY('Laying fabric
+ * instructions_Patr'!C46)` — computed from the lay plan, and the file caches
+ * #VALUE! with no spilled values. The section read as empty on every import.
+ * The lines are rebuilt from the lay plan the way that formula builds them.
+ */
+describe('fabric lines on the bill of materials', () => {
+  const lay = (fabric: string, panel: string, color: string, totalLengthM: number | null) => ({
+    fabric, color, panel, sizeRatio: '(S1)', layers: 1, markerLengthM: 1, totalLengthM, nestPcs: 1,
+  });
+
+  test('one line per fabric, panel and colour, with the metres added', () => {
+    const lines = fabricBomFromLays([
+      lay('Rosetta', 'ALL', 'USA', 30.5),
+      lay('Rosetta', 'ALL', 'USA', 10),
+      lay('Rosetta', 'ALL', 'Germany', 20),
+      lay('Mesh', 'Back', 'USA', 0),        // no metres: the formula filters it out
+    ]);
+    assert.deepEqual(lines.map((l) => [l.category, l.position, l.item, l.color, l.requiredQty, l.unit]), [
+      ['Fabric', 'ALL', 'Rosetta', 'USA', 40.5, 'meter'],
+      ['Fabric', 'ALL', 'Rosetta', 'Germany', 20, 'meter'],
+    ]);
+  });
+
+  test('a workbook whose BOM rows are an uncached spill still yields its fabric lines', async () => {
+    const wb = new ExcelJS.Workbook();
+    for (const name of AGE_ORDER_V1.signature.names) wb.addWorksheet(name);
+    const layS = wb.getWorksheet('Laying fabric instructions_Patr')!;
+    ['fabric', 'Color', 'PANAL', 'SIZE', 'Layers', 'Total \nLength'].forEach((h, i) => { layS.getCell(13, 3 + i).value = h; });
+    ['Rosetta', 'USA', 'ALL', '(S1)(M1)', 12, 30.5].forEach((v, i) => { layS.getCell(15, 3 + i).value = v; });
+    layS.getCell(20, 3).value = 'TOTAL';
+
+    const bomS = wb.getWorksheet('Bill Of Matrial_Coord_Warehouse')!;
+    ['Item Sort', 'Position', 'Coms./Piece', 'Item', 'Description', 'Color', 'Order Qty', 'Unit']
+      .forEach((h, i) => { bomS.getCell(16, 3 + i).value = h; });
+    // The spill's anchor, as the real file stores it: a formula whose cached
+    // result is an error, and nothing in the cells it would spill into.
+    bomS.getCell('C17').value = {
+      formula: "_xlfn.ANCHORARRAY('Laying fabric instructions_Patr'!C46)",
+      result: { error: '#VALUE!' },
+    } as ExcelJS.CellValue;
+
+    const r = await extractWorkbook(Buffer.from(await wb.xlsx.writeBuffer()));
+    assert.equal(r.bom.length, 1);
+    assert.deepEqual(
+      [r.bom[0]!.category, r.bom[0]!.position, r.bom[0]!.item, r.bom[0]!.color, r.bom[0]!.requiredQty, r.bom[0]!.unit],
+      ['Fabric', 'ALL', 'Rosetta', 'USA', 30.5, 'meter'],
+    );
   });
 });

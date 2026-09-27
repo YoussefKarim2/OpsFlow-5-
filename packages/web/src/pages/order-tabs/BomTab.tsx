@@ -230,6 +230,10 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
           setIssuing(null);
           void qc.invalidateQueries({ queryKey: ['bom', order.id] });
           void qc.invalidateQueries({ queryKey: ['order', order.id] });
+          // An issue is a cost on the actual costing and may clear a workflow
+          // step; both screens read it.
+          void qc.invalidateQueries({ queryKey: ['costing', order.id] });
+          void qc.invalidateQueries({ queryKey: ['order-steps', order.id] });
         }}
       />
       <AttachmentsPanel

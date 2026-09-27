@@ -121,3 +121,16 @@ export const money = (maxValue = 999_999.9999) =>
 export const requiredDate = z
   .string()
   .refine((v) => !Number.isNaN(new Date(v).getTime()), 'That date could not be understood.');
+
+/**
+ * An optional date in a query string (`?from=`, `?dueBefore=`). Blank means
+ * no filter; anything else must be a date. Unchecked, "garbage" reached Prisma
+ * as an Invalid Date and came back as a 500.
+ */
+export const optionalQueryDate = z
+  .string()
+  .optional()
+  .transform((v) => (v?.trim() ? v.trim() : undefined))
+  .refine((v) => v === undefined || !Number.isNaN(new Date(v).getTime()), {
+    message: 'Enter a valid date (YYYY-MM-DD).',
+  });

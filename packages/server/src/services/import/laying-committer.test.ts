@@ -12,7 +12,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { planMarkerAction, layingRowKey } from './laying-committer.js';
+import { planMarkerAction, layingRowKey, resolveLayingRows, wholeLayers } from './laying-committer.js';
 
 const EXISTING = { id: 'marker-1' };
 
@@ -48,5 +48,49 @@ describe('the key a conflict is matched on', () => {
 
   test('falls back to the row position when the sheet has no marker numbers', () => {
     assert.equal(layingRowKey({ markerNumber: null, rowNumber: 4 }), 'row:4');
+  });
+});
+
+describe('a marker number used more than once in one sheet', () => {
+  const rows = [
+    { markerNumber: 'M1', rowNumber: 1 },
+    { markerNumber: 'M1', rowNumber: 2 },
+    { markerNumber: 'M2', rowNumber: 3 },
+    { markerNumber: 'M1', rowNumber: 4 },
+  ];
+
+  test('each appearance has its own key, so each gets its own Keep/Replace', () => {
+    const keys = resolveLayingRows(rows, []).map((r) => r.key);
+    assert.deepEqual(keys, ['marker:M1', 'marker:M1#2', 'marker:M2', 'marker:M1#3']);
+    assert.equal(new Set(keys).size, keys.length);
+  });
+
+  test('the n-th appearance collides with the n-th existing lay of that number, not the same one each time', () => {
+    const existing = [
+      { id: 'b', markerNumber: 'M1', position: 5 },
+      { id: 'a', markerNumber: 'M1', position: 2 },
+      { id: 'c', markerNumber: 'M2', position: 3 },
+    ];
+    const resolved = resolveLayingRows(rows, existing);
+    assert.deepEqual(resolved.map((r) => r.existing?.id), ['a', 'b', 'c', undefined]);
+  });
+
+  test('a row without a marker number is still matched by position', () => {
+    const resolved = resolveLayingRows([{ markerNumber: null, rowNumber: 2 }], [{ id: 'x', markerNumber: null, position: 1 }]);
+    assert.equal(resolved[0]!.key, 'row:2');
+    assert.equal(resolved[0]!.existing?.id, 'x');
+  });
+});
+
+describe('layer counts the Marker table can hold', () => {
+  test('a fraction is rounded to the nearest whole layer, not truncated', () => {
+    assert.equal(wholeLayers(139.5), 140);
+    assert.equal(wholeLayers(139.4), 139);
+  });
+
+  test('missing or nonsense is zero', () => {
+    assert.equal(wholeLayers(null), 0);
+    assert.equal(wholeLayers(Number.NaN), 0);
+    assert.equal(wholeLayers(-3), 0);
   });
 });

@@ -32,7 +32,14 @@ dashboardRouter.get('/', requirePermission('order:read'), asyncHandler(async (re
     include: ORDER_INCLUDE,
   });
 
-  const summaries = orders.map((o) => buildOrderSummary(o, today));
+  // Derived once and reused below; the action items used to derive every
+  // order a second time.
+  const derived = orders.map((o) => deriveOrder(o, today));
+  const summaries = orders.map((o, i) => buildOrderSummary(o, today, derived[i]));
+  // Shipped or delivered: the goods have gone, so nothing about the order's
+  // schedule is still actionable and it has no place on the triage lists.
+  const isClosed = (status: string) => status === OrderStatus.SHIPPED || status === OrderStatus.COMPLETED;
+  const open = summaries.filter((s) => !isClosed(s.status));
 
   const cards = {
     totalActive: summaries.filter(
@@ -51,13 +58,13 @@ dashboardRouter.get('/', requirePermission('order:read'), asyncHandler(async (re
       (s) => s.status === OrderStatus.IN_PRODUCTION || s.status === OrderStatus.PRODUCTION_DELAYED,
     ).length,
     // §25's triage: the three numbers a coordinator needs before anything else.
-    blocked: summaries.filter((s) => s.blockerCount > 0).length,
-    atRisk: summaries.filter(
+    blocked: open.filter((s) => s.blockerCount > 0).length,
+    atRisk: open.filter(
       (s) => s.blockerCount === 0 && (s.health === 'LATE' || s.alertCounts.critical > 0 || s.alertCounts.warning > 0),
     ).length,
-    onTrack: summaries.filter(
+    onTrack: open.filter(
       (s) => s.blockerCount === 0 && s.alertCounts.critical === 0 && s.alertCounts.warning === 0 &&
-        s.status !== OrderStatus.COMPLETED && s.status !== OrderStatus.CANCELLED,
+        s.status !== OrderStatus.CANCELLED,
     ).length,
     materialShortages: summaries.filter((s) => s.materialShortCount > 0).length,
     waitingMaterials: 0, // filled below from BOM state
@@ -87,9 +94,10 @@ dashboardRouter.get('/', requirePermission('order:read'), asyncHandler(async (re
     mine: boolean; daysRemaining: number | null;
   }> = [];
 
-  for (const o of orders) {
-    const d = deriveOrder(o, today);
-    if (d.bom && !d.bom.fullyIssued && d.status !== OrderStatus.COMPLETED) cards.waitingMaterials++;
+  for (const [i, o] of orders.entries()) {
+    const d = derived[i]!;
+    if (isClosed(d.status)) continue;
+    if (d.bom && !d.bom.fullyIssued) cards.waitingMaterials++;
     if (o.externalOperations.some((op) => op.status !== 'RETURNED' && op.status !== 'CANCELLED')) {
       cards.waitingExternal++;
     }
@@ -143,7 +151,7 @@ dashboardRouter.get('/', requirePermission('order:read'), asyncHandler(async (re
 
   // "Requiring attention": anything with an alert, late, or delayed. Ranked so
   // the worst thing in the factory is the first row on the page.
-  const attention = summaries
+  const attention = open
     .filter(
       (s) =>
         s.alertCounts.critical > 0 || s.alertCounts.warning > 0 ||
@@ -249,6 +257,10 @@ dashboardRouter.get('/follow-up', requirePermission('order:read'), asyncHandler(
 
   for (const order of orders) {
     const d = deriveOrder(order, today);
+    // Once the goods have gone the order's schedule is history. The alert
+    // engine already drops its date and production alerts; its overdue tasks
+    // are dropped here for the same reason.
+    const closed = d.status === OrderStatus.SHIPPED || d.status === OrderStatus.COMPLETED;
 
     // Alerts already carry severity and a next action — reuse them verbatim
     // rather than re-deriving urgency here.
@@ -283,9 +295,11 @@ dashboardRouter.get('/follow-up', requirePermission('order:read'), asyncHandler(
     // Individually actionable overdue tasks, so the coordinator can chase a
     // person rather than a category.
     for (const t of order.tasks) {
-      if (t.status === 'COMPLETED' || !t.dueDate) continue;
+      if (closed || t.status === 'COMPLETED' || !t.dueDate) continue;
       const remaining = daysBetween(today, t.dueDate);
-      if (remaining == null || remaining > 0) continue;
+      // Due today is due, not "0 days overdue" — the same calendar-day rule as
+      // the task's own isOverdue flag.
+      if (remaining == null || remaining >= 0) continue;
       items.push({
         id: `task:${t.id}`,
         kind: 'TASK',

@@ -16,8 +16,17 @@ export interface AqlBand {
   rejectCount: number;
 }
 
-/** Verbatim from Audit_Quality Manger!C11:L16. */
+/**
+ * Verbatim from Audit_Quality Manger!C11:L16, which starts at 16 pieces, with
+ * the two smallest bands of ANSI/ISO 2859-1 general inspection level II added
+ * underneath (code letters A and B). The sheet's columns are the AQL 2.5
+ * column, and at AQL 2.5 both small samples accept on zero defects and reject
+ * on one. Without them an order of fewer than sixteen pieces had no band, its
+ * audit could only ever be PENDING, and the order never left inspection.
+ */
 export const AQL_TABLE: AqlBand[] = [
+  { minQty: 2,     maxQty: 8,         sampleSize: 2,   acceptCount: 0,  rejectCount: 1 },
+  { minQty: 9,     maxQty: 15,        sampleSize: 3,   acceptCount: 0,  rejectCount: 1 },
   { minQty: 16,    maxQty: 25,        sampleSize: 5,   acceptCount: 0,  rejectCount: 1 },
   { minQty: 26,    maxQty: 50,        sampleSize: 8,   acceptCount: 0,  rejectCount: 1 },
   { minQty: 51,    maxQty: 90,        sampleSize: 13,  acceptCount: 0,  rejectCount: 1 },
@@ -31,7 +40,16 @@ export const AQL_TABLE: AqlBand[] = [
 ];
 
 export function lookupAql(availableQty: number): AqlBand | null {
-  return AQL_TABLE.find((b) => availableQty >= b.minQty && availableQty <= b.maxQty) ?? null;
+  if (!Number.isFinite(availableQty) || availableQty < 1) return null;
+  // A single piece is below the standard's smallest lot; it is inspected whole
+  // under the smallest band's rule.
+  const band = availableQty < AQL_TABLE[0]!.minQty
+    ? AQL_TABLE[0]!
+    : AQL_TABLE.find((b) => availableQty >= b.minQty && availableQty <= b.maxQty) ?? null;
+  if (!band) return null;
+  // The standard's rule when the sample is larger than the lot: inspect the
+  // whole lot. Never ask the auditor for more pieces than exist.
+  return band.sampleSize > availableQty ? { ...band, sampleSize: Math.floor(availableQty) } : band;
 }
 
 export const DEFECT_CATEGORIES = [

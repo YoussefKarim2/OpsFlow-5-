@@ -277,6 +277,17 @@ export interface RequirementInput {
   issuedQty: number;
   /** The material's available stock, or null when the line is not linked to one. */
   availableQty: number | null;
+  /**
+   * The unit the linked material is held in, which is what `reservedQty` and
+   * `availableQty` are counted in — reservations and balances live on the
+   * material, not on the BOM line. Omitted or equal to `unit` means both are
+   * already in the line's unit.
+   *
+   * Without it a line needing 1,000 YD against 950 M on the shelf compared
+   * 1,000 with 950 and reported 50 short, when 950 m is 1,039 yd and the line
+   * is covered.
+   */
+  stockUnit?: string | null;
 }
 
 export interface RequirementResult extends RequirementInput {
@@ -298,7 +309,8 @@ export interface RequirementResult extends RequirementInput {
  * The first is a click; the second is a purchase order and a phone call. They
  * are separate outcomes here rather than one undifferentiated "shortage".
  */
-export function computeRequirement(r: RequirementInput): RequirementResult {
+export function computeRequirement(input: RequirementInput): RequirementResult {
+  const r = toRequirementUnit(input);
   const secured = qtyAdd(r.reservedQty, r.issuedQty);
   const outstandingQty = Math.max(0, qtySub(r.requiredQty, secured));
 
@@ -329,6 +341,25 @@ export function computeRequirement(r: RequirementInput): RequirementResult {
       : shortQty > 0 ? 'SHORT'
       : 'RESERVABLE',
   };
+}
+
+/**
+ * Restate a requirement's stock-side figures in the BOM line's own unit, so
+ * every comparison below is like for like and every figure reported back
+ * (short, reservable) is in the unit the line is read in.
+ *
+ * Units that cannot be converted (a packaging unit, or a different dimension)
+ * leave the stock unreadable rather than guessed at: the line is reported as
+ * not checkable against stock, the same as an unlinked one.
+ */
+function toRequirementUnit(r: RequirementInput): RequirementInput {
+  if (!r.stockUnit || r.stockUnit === r.unit) return r;
+  const reservedQty = convertQty(r.reservedQty, r.stockUnit, r.unit);
+  const availableQty = r.availableQty == null ? null : convertQty(r.availableQty, r.stockUnit, r.unit);
+  if (reservedQty == null || (r.availableQty != null && availableQty == null)) {
+    return { ...r, availableQty: null };
+  }
+  return { ...r, reservedQty, availableQty };
 }
 
 export interface MaterialPosition {

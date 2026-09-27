@@ -88,6 +88,26 @@ export async function resolveStockCell(
 }
 
 /**
+ * Every Stock step row that names this cell, however it was spelled.
+ *
+ * The ledger is keyed by cell, and names are matched to cells with
+ * `matchAxis`. Looking a row up by its exact text instead meant "SKY BLUE /
+ * 2YXS" and then "sky blue / 2yxs" made two rows for one cell, and the ledger
+ * — which adds rows landing on one cell together — counted the stock twice.
+ */
+export async function findStockRecordsForCell(
+  orderId: string, cell: { orderColorId: string; orderSizeId: string },
+) {
+  const [records, axes] = await Promise.all([
+    prisma.stockRecord.findMany({ where: { orderId }, orderBy: { recordedAt: 'asc' } }),
+    loadAxes(orderId),
+  ]);
+  return records.filter((r) =>
+    matchAxis(r.colorName, axes.colors)?.id === cell.orderColorId
+    && matchAxis(r.sizeName, axes.sizes)?.id === cell.orderSizeId);
+}
+
+/**
  * Write the Stock step's rows into the STOCK ledger, so the cut order sees
  * them. The rows are the source of truth: a cell whose row was deleted goes
  * back to zero, which is what "the stock is no longer there" has to mean.
@@ -173,11 +193,17 @@ export async function applyLedgerToStockRecords(orderId: string): Promise<number
 
   const colorName = new Map(axes.colors.map((c) => [c.id, c.name]));
   const sizeName = new Map(axes.sizes.map((s) => [s.id, s.name]));
-  const rowFor = new Map<string, typeof records[number]>();
+  // Every row per cell, not the last one seen: two spellings of one cell
+  // ("Sky Blue" and "SKY BLUE") are both stock, and the ledger holds their sum.
+  // Updating one of them to the ledger figure and leaving the other would
+  // count the other twice on the next pass the other way.
+  const rowsFor = new Map<string, Array<typeof records[number]>>();
   for (const r of records) {
     const color = matchAxis(r.colorName, axes.colors);
     const size = matchAxis(r.sizeName, axes.sizes);
-    if (color && size) rowFor.set(`${color.id}:${size.id}`, r);
+    if (!color || !size) continue;
+    const key = `${color.id}:${size.id}`;
+    rowsFor.set(key, [...(rowsFor.get(key) ?? []), r]);
   }
 
   let written = 0;
@@ -185,14 +211,20 @@ export async function applyLedgerToStockRecords(orderId: string): Promise<number
     const cName = colorName.get(cell.orderColorId);
     const sName = sizeName.get(cell.orderSizeId);
     if (!cName || !sName) continue;
-    const row = rowFor.get(`${cell.orderColorId}:${cell.orderSizeId}`);
+    const rows = rowsFor.get(`${cell.orderColorId}:${cell.orderSizeId}`) ?? [];
+    const [row, ...extra] = rows;
+    const recorded = rows.reduce((a, r) => a + r.availableQty, 0);
 
     if (cell.qty > 0) {
       if (row) {
-        if (row.availableQty !== cell.qty) {
+        if (recorded !== cell.qty) {
+          // Folded into the first row: the grid states one figure for the cell.
           await prisma.stockRecord.update({
             where: { id: row.id }, data: { availableQty: cell.qty, recordedAt: new Date() },
           });
+          if (extra.length > 0) {
+            await prisma.stockRecord.deleteMany({ where: { id: { in: extra.map((e) => e.id) } } });
+          }
           written += 1;
         }
       } else {
@@ -204,9 +236,9 @@ export async function applyLedgerToStockRecords(orderId: string): Promise<number
         });
         written += 1;
       }
-    } else if (row) {
-      // The grid says there is none. The step's row said there was.
-      await prisma.stockRecord.delete({ where: { id: row.id } });
+    } else if (rows.length > 0) {
+      // The grid says there is none. The step's rows said there was.
+      await prisma.stockRecord.deleteMany({ where: { id: { in: rows.map((r) => r.id) } } });
       written += 1;
     }
   }

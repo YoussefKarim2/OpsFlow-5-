@@ -24,6 +24,7 @@ import {
   changeRole, setSuperAdmin, updateUserProfile, unlockUser, listRoles,
 } from '../services/user-service.js';
 import { SUPER_ADMIN_EMAILS } from '../config.js';
+import { NotFoundError } from '../errors.js';
 import {
   runBackup, listStoredBackups, lastBackupRun, backupDir, backupRecipients,
 } from '../services/backup/backup-worker.js';
@@ -391,17 +392,16 @@ adminRouter.get('/backups/:filename', requireSuperAdmin, asyncHandler(async (req
   // refused rather than sanitised — no path traversal, no ambiguity.
   const { filename } = req.params;
   const stored = await listStoredBackups();
-  if (!stored.some((b) => b.filename === filename)) {
-    res.status(404).json({ error: { message: 'No such backup.' } });
-    return;
-  }
+  if (!stored.some((b) => b.filename === filename)) throw new NotFoundError('Backup');
   const buffer = await fs.readFile(path.join(backupDir(), filename));
   // Parsed before it is served, so a corrupt file is discovered here rather
   // than on the day someone tries to restore from it.
   const payload = readBackup(buffer);
   res.setHeader('Content-Type', 'application/gzip');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-  res.setHeader('X-Backup-Summary', describeBackup(payload.counts));
+  // A header may only hold latin1, and the summary has an em dash in it —
+  // sent raw, Node threw and every download failed with a 500.
+  res.setHeader('X-Backup-Summary', encodeURIComponent(describeBackup(payload.counts)));
   res.send(buffer);
 }));
 

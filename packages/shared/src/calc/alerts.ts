@@ -51,6 +51,15 @@ export interface AlertContext {
      * strongest possible evidence that it is finished.
      */
     shippedQty?: number;
+    /**
+     * The order has left the building: its status is Shipped or Completed, or
+     * a consignment has reached Shipped or Delivered.
+     *
+     * Date and production alerts describe work still to be done. Once the
+     * goods have gone there is none, and an order shipped a day late must not
+     * go on shouting "overdue" and "behind schedule" on the dashboard forever.
+     */
+    finished?: boolean;
   };
   tasks: readonly TaskLike[];
   bom?: BomSummary | null;
@@ -80,9 +89,10 @@ export function evaluateAlerts(ctx: AlertContext): Alert[] {
   // --- Dates -------------------------------------------------------------
   const daysToDelivery = daysBetween(today, ctx.order.requiredDeliveryDate);
   const daysToShip = daysBetween(today, ctx.order.promisedShippingDate);
-  const complete = ctx.order.orderQty > 0
+  const finished = ctx.order.finished ?? false;
+  const complete = finished || (ctx.order.orderQty > 0
     && (ctx.order.packedQty >= ctx.order.orderQty
-      || (ctx.order.shippedQty ?? 0) >= ctx.order.orderQty);
+      || (ctx.order.shippedQty ?? 0) >= ctx.order.orderQty));
 
   if (daysToDelivery != null && daysToDelivery < 0 && !complete) {
     push({
@@ -129,7 +139,10 @@ export function evaluateAlerts(ctx: AlertContext): Alert[] {
   // A print order split across four colours is one problem, not four. Blocked
   // operations are grouped by operation type so the coordinator sees a single
   // actionable line instead of an alert per colour.
-  const blockedOps = (ctx.externalOps ?? []).filter(
+  // A cancelled operation is not going to happen, so it neither waits on an
+  // approval nor can be late coming back.
+  const liveOps = (ctx.externalOps ?? []).filter((op) => op.status !== ExternalOpStatus.CANCELLED);
+  const blockedOps = liveOps.filter(
     (op) => op.requiresApproval && !op.approvalCleared && op.status !== ExternalOpStatus.RETURNED,
   );
   const blockedByType = new Map<string, typeof blockedOps>();
@@ -150,7 +163,7 @@ export function evaluateAlerts(ctx: AlertContext): Alert[] {
     });
   }
 
-  for (const op of ctx.externalOps ?? []) {
+  for (const op of liveOps) {
     const late = op.expectedReturnDate ? daysBetween(op.expectedReturnDate, today) : null;
     if (!op.actualReturnDate && late != null && late > 0) {
       push({
@@ -264,7 +277,7 @@ export function evaluateAlerts(ctx: AlertContext): Alert[] {
 
   // --- Production --------------------------------------------------------
   const p = ctx.production;
-  if (p?.isBehindSchedule) {
+  if (p?.isBehindSchedule && !finished) {
     const detail =
       p.slipDays != null && p.slipDays > 0
         ? `At ${fmtQty(p.dailyRate)}/day the order finishes ${p.slipDays} day${p.slipDays === 1 ? '' : 's'} after the required date. ${fmtQty(p.requiredDailyRate)}/day is needed.`
@@ -314,6 +327,7 @@ export function evaluateAlerts(ctx: AlertContext): Alert[] {
     ctx.order.producedQty > 0 &&
     ctx.order.packedQty > 0 &&
     ctx.order.packedQty < ctx.order.producedQty &&
+    !finished &&
     daysToShip != null && daysToShip <= SHIP_WARNING_DAYS
   ) {
     push({

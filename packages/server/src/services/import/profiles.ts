@@ -58,7 +58,14 @@ export interface ImportProfile {
   };
   lays?: {
     sheet: string;
+    /** The header's first heading, matched exactly rather than as a prefix. */
     headerAnchor: string;
+    /**
+     * Another heading that must sit on the same row. A lone word like "fabric"
+     * also opens captions above the table ("Fabric 1", "Fabric Description");
+     * the row that is really the header is the one that also says this.
+     */
+    companion: string;
     terminator: string;
   };
   production?: {
@@ -167,7 +174,7 @@ export const AGE_ORDER_V1: ImportProfile = {
   },
 
   external: { sheet: 'External Order_Ex.Op', headerAnchor: 'Color', terminator: 'Totals' },
-  lays:     { sheet: 'Laying fabric instructions_Patr', headerAnchor: 'fabric', terminator: 'TOTAL' },
+  lays:     { sheet: 'Laying fabric instructions_Patr', headerAnchor: 'fabric', companion: 'Layers', terminator: 'TOTAL' },
   production: { sheet: 'Production Follow up', headerAnchor: 'ITEM' },
 
   costing: {

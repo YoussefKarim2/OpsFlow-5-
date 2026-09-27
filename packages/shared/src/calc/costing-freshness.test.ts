@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveCostLines } from './costing-derive.js';
+import { deriveCostLines, visibleDerivedLines, bomSourceRef } from './costing-derive.js';
 import { computeCosting } from './costing.js';
 
 /**
@@ -17,14 +17,13 @@ import { computeCosting } from './costing.js';
  * the inputs must always produce a different answer.
  */
 const bom = (issuedQty: number | null, unitPriceUsd: number | null) => ([{
-  category: 'FABRIC', item: 'Jersey', issuedQty, requiredQty: 600,
+  id: 'jersey', category: 'FABRIC', item: 'Jersey', issuedQty, requiredQty: 600,
   unit: 'MET', unitPriceUsd,
 }]);
 
 const cost = (issued: number | null, price: number | null) => {
   const lines = deriveCostLines({
     bom: bom(issued, price), external: [],
-    production: { machineDaysUsed: null, dailyCostEgp: null, dollarRate: null },
   });
   return computeCosting({
     orderQty: 1000, cutQty: 1000, shippedQty: 1000,
@@ -74,10 +73,8 @@ describe('a change in the bill of materials reaches the costing', () => {
     // carrying the sourceRef of a derived one replaces it rather than doubling.
     const derived = deriveCostLines({
       bom: bom(500, 2), external: [],
-      production: { machineDaysUsed: null, dailyCostEgp: null, dollarRate: null },
     });
-    const claimed = new Set(['bom:FABRIC']);
-    const kept = derived.filter((l) => !claimed.has(l.sourceRef));
+    const kept = visibleDerivedLines(derived, [bomSourceRef('FABRIC', 'jersey')], []);
     assert.equal(kept.length, 0, 'the derived fabric row stands aside for the edited one');
   });
 });

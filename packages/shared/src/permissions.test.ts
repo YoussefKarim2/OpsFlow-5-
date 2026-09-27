@@ -342,4 +342,25 @@ describe('what a coordinator may do', () => {
   });
 });
 
+/**
+ * Writing a costing without reading it is how a warehouse user's first edit
+ * wiped one: the sheet never loaded the record, so the first autosave sent an
+ * empty draft and the server replaced the notes, figures and manual lines with
+ * it. Whoever may write a costing must be able to read it first.
+ */
+describe('costing access', () => {
+  for (const role of ROLE_KEYS) {
+    test(`${role} does not hold costing:write without costing:read`, () => {
+      const perms = ROLE_PERMISSIONS[role] as readonly Permission[];
+      if (perms.includes('costing:write')) {
+        assert.ok(perms.includes('costing:read'), `${role} can write the costing but not read it`);
+      }
+    });
+  }
 
+  test('the warehouse can read and write the actual costing', () => {
+    const perms = ROLE_PERMISSIONS.WAREHOUSE as readonly Permission[];
+    assert.ok(perms.includes('costing:read'));
+    assert.ok(perms.includes('costing:write'));
+  });
+});

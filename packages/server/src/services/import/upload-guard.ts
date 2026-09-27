@@ -9,6 +9,7 @@
 
 import multer from 'multer';
 import { BadRequestError } from '../../errors.js';
+import { decodeUploadName } from '../../util/upload-name.js';
 
 /** MIME types a browser or Excel actually sends for a workbook. */
 const WORKBOOK_MIME_TYPES = new Set([
@@ -28,6 +29,7 @@ export const workbookUpload = multer({
   fileFilter: (_req, file, cb) => {
     // multer's callback is an overload pair: cb(error) to reject, or
     // cb(null, true) to accept. Passing both an error and a flag is invalid.
+    file.originalname = decodeUploadName(file.originalname);
 
     // A filename is attacker-controlled: reject any path separator or traversal
     // before it can reach a storage key.

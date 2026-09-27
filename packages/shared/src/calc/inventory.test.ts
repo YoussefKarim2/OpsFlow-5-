@@ -212,6 +212,28 @@ describe('requirements and shortages', () => {
     assert.equal(r.shortQty, 0);
   });
 
+  test('a line in yards against stock held in metres is compared in one unit', () => {
+    // 950 m is 1,038.93 yd — enough for 1,000 yd. Compared raw it read "short 50".
+    const r = computeRequirement(req({ unit: 'YD', requiredQty: 1000, availableQty: 950, stockUnit: 'M' }));
+    assert.equal(r.status, 'RESERVABLE');
+    assert.equal(r.shortQty, 0);
+    assert.equal(r.reservableQty, 1000);
+    assert.ok(Math.abs((r.availableQty ?? 0) - 1038.9326) < 0.001);
+  });
+
+  test('a reservation held in metres counts toward a line in yards at its converted size', () => {
+    // 914.4 m reserved is exactly 1,000 yd.
+    const r = computeRequirement(req({ unit: 'YD', requiredQty: 1000, reservedQty: 914.4, availableQty: 0, stockUnit: 'M' }));
+    assert.equal(r.outstandingQty, 0);
+    assert.equal(r.status, 'COVERED');
+  });
+
+  test('stock in a unit that cannot be converted is not read as the line’s unit', () => {
+    const r = computeRequirement(req({ unit: 'KG', requiredQty: 10, availableQty: 950, stockUnit: 'M' }));
+    assert.equal(r.status, 'UNLINKED');
+    assert.equal(r.reservableQty, 0);
+  });
+
   test('position roll-up separates short from merely unreserved', () => {
     const p = computeMaterialPosition([
       req({ id: 'a', requiredQty: 1676, availableQty: 1200 }),                 // short 476

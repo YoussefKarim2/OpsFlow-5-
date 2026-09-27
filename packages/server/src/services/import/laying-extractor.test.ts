@@ -150,3 +150,31 @@ describe('laying sheets exported as CSV', () => {
     assert.equal(r.rows[0]!.markerLengthM, 2.61);
   });
 });
+
+describe('a layer count that is not a whole number', () => {
+  test('is rounded to the nearest layer and the row is named in a warning', async () => {
+    // The Marker table holds whole layers; 139.5 used to be truncated to 139
+    // by the database at commit, with nothing on screen to say so.
+    const r = await extractLayingMarking(await sheet([
+      ['Marker No', 'Fabric', 'Size Ratio', 'Layers', 'Marker Length'],
+      ['M1', 'Rosetta', '(S1)', 139.5, 2.61],
+      ['M2', 'Rosetta', '(M1)', 120, 2.61],
+    ]));
+    assert.equal(r.rows[0]!.layers, 140);
+    assert.equal(r.rows[1]!.layers, 120);
+    const warnings = r.issues.filter((i) => i.field === 'layers');
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0]!.message, /139\.5.*imported as 140/);
+  });
+});
+
+describe('a column assigned by hand', () => {
+  test('is read with the override, so the commit can re-read what the preview showed', async () => {
+    const r = await extractLayingMarking(await sheet([
+      ['Marker No', 'Fabric', 'Size Ratio', 'Plies?', 'Marker Length'],
+      ['M1', 'Rosetta', '(S1)', 140, 2.61],
+      ['M2', 'Rosetta', '(M1)', 177, 2.41],
+    ]), { overrides: { 3: 'LAYERS' as never } });
+    assert.deepEqual(r.rows.map((x) => x.layers), [140, 177]);
+  });
+});

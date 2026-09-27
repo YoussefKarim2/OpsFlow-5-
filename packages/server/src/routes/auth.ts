@@ -20,6 +20,10 @@ const loginLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { error: 'Too many sign-in attempts. Try again in 15 minutes.', code: 'RATE_LIMITED' },
+  // Only failures count. A factory signs in from one address at shift start,
+  // and counting successes locked the eleventh person out; guessing is
+  // already stopped per account by the lockout.
+  skipSuccessfulRequests: true,
 });
 
 const loginSchema = z.object({
@@ -151,21 +155,27 @@ authRouter.post('/change-password', authenticate, requestContextMiddleware, asyn
   const { currentPassword, newPassword } = passwordSchema.parse(req.body);
 
   const user = await prisma.user.findUniqueOrThrow({ where: { id: u.id } });
+  // A 400, not a 401: the session is fine, only the answer was wrong, and the
+  // client treats any 401 as an expired session and signs the person out.
   if (!(await argon2.verify(user.passwordHash, currentPassword))) {
-    throw new UnauthorizedError('Current password is incorrect.');
+    throw new ValidationError('Current password is incorrect.');
   }
 
   if (currentPassword === newPassword) {
     throw new ValidationError('The new password must be different from the current one.');
   }
 
+  // The change ends every older session, this one included, so the person
+  // making it is handed a new token. The change is stamped at the start of a
+  // whole second, which keeps that new token's `iat` from falling before it.
+  const changedAt = new Date(Math.floor(Date.now() / 1000) * 1000);
   await prisma.user.update({
     where: { id: u.id },
     data: {
       passwordHash: await argon2.hash(newPassword),
       // Clears the block put in place by an administrator's reset.
       mustChangePassword: false,
-      passwordChangedAt: new Date(),
+      passwordChangedAt: changedAt,
       failedLoginCount: 0,
       lockedUntil: null,
     },
@@ -177,7 +187,7 @@ authRouter.post('/change-password', authenticate, requestContextMiddleware, asyn
     entityType: 'User', entityId: u.id,
   });
 
-  res.json({ ok: true });
+  res.json({ ok: true, token: signToken(u.id, user.email) });
 }));
 
 /** The one shape the client receives for "who am I". */

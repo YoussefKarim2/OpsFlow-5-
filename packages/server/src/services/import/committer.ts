@@ -9,7 +9,7 @@
 
 import type { PrismaClient, Prisma } from '@prisma/client';
 import { computeCutMatrix, isValidDate, type QtyCell, type AxisRef } from '@opsflow/shared';
-import type { ExtractionResult } from './extractor.js';
+import type { ExtractionResult, ExtractedMatrix } from './extractor.js';
 import { materialiseWorkflow } from '../workflow-service.js';
 import { logActivity } from '../activity-service.js';
 import { ValidationError } from '../../errors.js';
@@ -50,6 +50,46 @@ const BOM_CATEGORY_MAP: Record<string, string> = {
 function mapBomCategory(raw: string | null): string {
   if (!raw) return 'OTHER';
   return BOM_CATEGORY_MAP[raw.trim().toLowerCase()] ?? 'OTHER';
+}
+
+/**
+ * The key two spellings of one colour or size share.
+ *
+ * The reference lookups below are case-insensitive, so "Navy" and "navy" find
+ * the same colour — and creating an order colour for each then broke the
+ * order's own one-row-per-colour rule, failing the whole file on a unique
+ * violation. Folding them together first is what the lookup already assumed.
+ */
+export function axisKey(name: string): string {
+  return name.trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+/**
+ * A matrix with each colour and each size once.
+ *
+ * Rows and sizes that differ only in case or spacing are merged, their cells
+ * added — the same colour on two rows is more of that colour, just as a long
+ * table's split rows are. The first spelling seen is the one kept.
+ */
+export function mergeMatrixAxes(matrix: Pick<ExtractedMatrix, 'sizes' | 'rows'>): Pick<ExtractedMatrix, 'sizes' | 'rows'> {
+  const sizeName = new Map<string, string>();
+  for (const s of matrix.sizes) {
+    if (!sizeName.has(axisKey(s))) sizeName.set(axisKey(s), s.trim());
+  }
+
+  const rows = new Map<string, ExtractedMatrix['rows'][number]>();
+  for (const row of matrix.rows) {
+    const key = axisKey(row.color);
+    const merged = rows.get(key) ?? { color: row.color.trim(), cells: {}, total: 0 };
+    for (const [size, qty] of Object.entries(row.cells)) {
+      const name = sizeName.get(axisKey(size)) ?? size.trim();
+      if (!sizeName.has(axisKey(size))) sizeName.set(axisKey(size), name);
+      merged.cells[name] = (merged.cells[name] ?? 0) + qty;
+      merged.total += qty;
+    }
+    rows.set(key, merged);
+  }
+  return { sizes: [...sizeName.values()], rows: [...rows.values()] };
 }
 
 /** Find or create reference rows, so an import never fails on an unseen colour. */
@@ -163,7 +203,8 @@ export async function commitImport(
     throw new ValidationError(`PO ${poNumber} already exists in the system.`, { orderId: clash.id });
   }
 
-  const stockMatrix = extraction.matrices.find((m) => m.ledger === 'STOCK');
+  const stockFound = extraction.matrices.find((m) => m.ledger === 'STOCK');
+  const stockMatrix = stockFound ? mergeMatrixAxes(stockFound) : undefined;
 
   /**
    * An order with no readable quantity grid is still an order.
@@ -177,8 +218,9 @@ export async function commitImport(
    * colours, no sizes, no quantity cells, no cut order — and the coordinator
    * enters them on the order, where every one of those is editable anyway.
    */
-  const orderMatrix = extraction.matrices.find((m) => m.ledger === 'ORDER')
+  const orderFound = extraction.matrices.find((m) => m.ledger === 'ORDER')
     ?? { ledger: 'ORDER', sizes: [], rows: [], sheetTotal: null, computedTotal: 0 };
+  const orderMatrix = { ...orderFound, ...mergeMatrixAxes(orderFound) };
 
   // `f.poDate` reaches here from the extractor, which now returns only valid
   // dates or null — but this is the one place that does *arithmetic* on it, and
@@ -189,7 +231,10 @@ export async function commitImport(
   const shipDate = isValidDate(f.promisedShippingDate)
     ? f.promisedShippingDate
     : new Date(poDate.getTime() + 30 * 86_400_000);
-  const cutPct = typeof f.cutPercentage === 'number' ? f.cutPercentage : 0.05;
+  // Same reasoning for the delivery date, which used to be cast straight to a
+  // Date: a cleared or unreadable one reached Prisma as an Invalid Date.
+  const deliveryDate = isValidDate(f.requiredDeliveryDate) ? f.requiredDeliveryDate : shipDate;
+  const cutPct = typeof f.cutPercentage === 'number' && Number.isFinite(f.cutPercentage) ? f.cutPercentage : 0.05;
 
   const result = await prisma.$transaction(async (tx) => {
     const clientId = await upsertClient(
@@ -216,13 +261,18 @@ export async function commitImport(
         fit: f.fit ? String(f.fit) : null,
         blockPattern: f.blockPattern ? String(f.blockPattern) : null,
         fabric: f.fabric ? String(f.fabric) : null,
+        // Both are read from customer files and shown on the review screen;
+        // leaving them off here meant the preview promised what was dropped.
+        fabricDescription: f.fabricDescription ? String(f.fabricDescription) : null,
+        externalReference: f.externalReference ? String(f.externalReference) : null,
         shippingMethod: f.shippingMethod ? String(f.shippingMethod) : null,
         pricePerPieceUsd: typeof f.pricePerPieceUsd === 'number' ? f.pricePerPieceUsd : null,
         cutPercentage: cutPct,
-        accessoryPercentage: typeof f.accessoryPercentage === 'number' ? f.accessoryPercentage : 0.05,
+        accessoryPercentage:
+          typeof f.accessoryPercentage === 'number' && Number.isFinite(f.accessoryPercentage) ? f.accessoryPercentage : 0.05,
         poDate,
         promisedShippingDate: shipDate,
-        requiredDeliveryDate: (f.requiredDeliveryDate as Date) ?? shipDate,
+        requiredDeliveryDate: deliveryDate,
         externalWorkSort: f.externalWorkSort ? String(f.externalWorkSort) : null,
         externalWorkType: f.externalWorkType ? String(f.externalWorkType) : null,
         shippingAddress: f.shippingAddress ? String(f.shippingAddress) : null,
@@ -231,53 +281,65 @@ export async function commitImport(
     });
 
     // ── Axes ──────────────────────────────────────────────────────────────
-    const colorIds = new Map<string, string>();
+    const colorIds = new Map<string, { id: string; name: string }>();
     for (const [i, row] of orderMatrix.rows.entries()) {
       const refId = await upsertRefColor(tx, row.color, i);
       const oc = await tx.orderColor.create({
         data: { orderId: order.id, colorId: refId, position: i },
       });
-      colorIds.set(row.color, oc.id);
+      colorIds.set(axisKey(row.color), { id: oc.id, name: row.color });
     }
 
-    const sizeIds = new Map<string, string>();
+    const sizeIds = new Map<string, { id: string; name: string }>();
     for (const [i, name] of orderMatrix.sizes.entries()) {
       const refId = await upsertRefSize(tx, name, i);
       const os = await tx.orderSize.create({ data: { orderId: order.id, sizeId: refId, position: i } });
-      sizeIds.set(name, os.id);
+      sizeIds.set(axisKey(name), { id: os.id, name });
     }
 
     // ── Quantities ────────────────────────────────────────────────────────
     const qtyRows: Prisma.StageQuantityCreateManyInput[] = [];
 
     for (const row of orderMatrix.rows) {
-      const orderColorId = colorIds.get(row.color);
+      const orderColorId = colorIds.get(axisKey(row.color))?.id;
       if (!orderColorId) continue;
       for (const [size, qty] of Object.entries(row.cells)) {
-        const orderSizeId = sizeIds.get(size);
+        const orderSizeId = sizeIds.get(axisKey(size))?.id;
         if (!orderSizeId || qty <= 0) continue;
         qtyRows.push({ orderId: order.id, orderColorId, orderSizeId, ledger: 'ORDER', qty: Math.round(qty) });
       }
     }
 
+    const stockRows: Prisma.StockRecordCreateManyInput[] = [];
     for (const row of stockMatrix?.rows ?? []) {
-      const orderColorId = colorIds.get(row.color);
-      if (!orderColorId) continue;
+      const color = colorIds.get(axisKey(row.color));
+      if (!color) continue;
       for (const [size, qty] of Object.entries(row.cells)) {
-        const orderSizeId = sizeIds.get(size);
-        if (!orderSizeId || qty <= 0) continue;
-        qtyRows.push({ orderId: order.id, orderColorId, orderSizeId, ledger: 'STOCK', qty: Math.round(qty) });
+        const orderSize = sizeIds.get(axisKey(size));
+        if (!orderSize || Math.round(qty) <= 0) continue;
+        qtyRows.push({
+          orderId: order.id, orderColorId: color.id, orderSizeId: orderSize.id, ledger: 'STOCK', qty: Math.round(qty),
+        });
+        stockRows.push({ orderId: order.id, colorName: color.name, sizeName: orderSize.name, availableQty: Math.round(qty) });
       }
     }
 
     if (qtyRows.length > 0) await tx.stageQuantity.createMany({ data: qtyRows });
 
+    // The Stock step's rows are the source of truth for the STOCK ledger (see
+    // stock-sync.ts): a ledger cell with no row behind it is read as stock that
+    // is no longer there and zeroed. Imported stock written only to the ledger
+    // was therefore wiped the first time anyone recorded one row on the Stock
+    // step, and the cut order jumped back up by all of it. Writing the rows
+    // alongside the cells keeps the two the same fact from the start.
+    if (stockRows.length > 0) await tx.stockRecord.createMany({ data: stockRows });
+
     // The cut order is recomputed, never imported: a stored cut figure in the
     // file may predate the last change to the order or the stock.
     let cutCells: QtyCell[] = [];
     if (options.generateCutOrder !== false) {
-      const axesColors: AxisRef[] = [...colorIds.entries()].map(([name, id], i) => ({ id, name, position: i }));
-      const axesSizes: AxisRef[] = [...sizeIds.entries()].map(([name, id], i) => ({ id, name, position: i }));
+      const axesColors: AxisRef[] = [...colorIds.values()].map(({ id, name }, i) => ({ id, name, position: i }));
+      const axesSizes: AxisRef[] = [...sizeIds.values()].map(({ id, name }, i) => ({ id, name, position: i }));
       const cells: QtyCell[] = qtyRows.map((q) => ({
         colorId: q.orderColorId, sizeId: q.orderSizeId, ledger: q.ledger as 'ORDER' | 'STOCK', qty: q.qty ?? 0,
       }));
@@ -330,7 +392,10 @@ export async function commitImport(
     // ── Markers ───────────────────────────────────────────────────────────
     let markerCount = 0;
     for (const [i, lay] of extraction.lays.entries()) {
-      if (!lay.sizeRatio || !lay.layers) continue;
+      // Layers and pieces are whole numbers in the database; a sheet that
+      // computes them can hand back 11.9999. Rounded here rather than refused.
+      const layers = lay.layers == null ? 0 : Math.round(lay.layers);
+      if (!lay.sizeRatio || layers <= 0) continue;
       await tx.marker.create({
         data: {
           orderId: order.id,
@@ -338,13 +403,45 @@ export async function commitImport(
           fabricColor: lay.color,
           panel: lay.panel ?? 'ALL',
           sizeRatio: lay.sizeRatio,
-          layers: lay.layers,
+          layers,
           markerLengthM: lay.markerLengthM ?? 0,
-          nestPcs: lay.nestPcs,
+          // Stored, not derived — see the schema: it carries the end loss that
+          // layers × length leaves out.
+          totalLengthM: lay.totalLengthM,
+          nestPcs: lay.nestPcs == null ? null : Math.round(lay.nestPcs),
           position: i,
         },
       });
       markerCount++;
+    }
+
+    // ── External operations ───────────────────────────────────────────────
+    //
+    // The External Order sheet states, per colour, how many pieces go out for
+    // outside work. It was read and shown on the preview, then never written,
+    // so the External step started empty on every imported order. One
+    // operation per colour, as the sheet lays it out, pinned to that colour.
+    let externalCount = 0;
+    for (const ext of extraction.externalColors) {
+      const qty = Math.round(ext.qty);
+      if (!ext.color.trim() || !(qty > 0)) continue;
+      const color = colorIds.get(axisKey(ext.color));
+      await tx.externalOperation.create({
+        data: {
+          orderId: order.id,
+          externalFactoryId,
+          operationType: f.externalWorkType ? String(f.externalWorkType) : 'External work',
+          operationSort: f.externalWorkSort ? String(f.externalWorkSort) : null,
+          qty,
+          unitRate: ext.rate,
+          colorIds: color ? [color.id] : [],
+          // A colour the order matrix does not have still names the work; it
+          // is kept in the note rather than dropped.
+          notes: color ? null : `Colour on the external order sheet: ${ext.color.trim()}`,
+          status: 'NOT_SENT',
+        },
+      });
+      externalCount++;
     }
 
     // ── Costing ───────────────────────────────────────────────────────────
@@ -352,7 +449,9 @@ export async function commitImport(
       await tx.costingRecord.create({
         data: {
           orderId: order.id,
-          dollarRate: extraction.costing.dollarRate ?? 48.5,
+          // Only a rate the workbook states. A made-up 48.5 looked like a real
+          // figure and hid the "waiting for the dollar rate" state from costing.
+          dollarRate: extraction.costing.dollarRate ?? null,
           dailyCostEgp: extraction.costing.dailyCostEgp,
           machineCount: extraction.costing.machineCount ? Math.round(extraction.costing.machineCount) : null,
           machineDaysUsed: extraction.costing.machineDaysUsed ? Math.round(extraction.costing.machineDaysUsed) : null,
@@ -371,7 +470,8 @@ export async function commitImport(
       action: 'ORDER_IMPORTED',
       summary:
         `imported ${poNumber} from Excel — ${orderMatrix.computedTotal.toLocaleString()} pcs across ` +
-        `${orderMatrix.rows.length} colours, ${bomCount} BOM lines, ${markerCount} lays`,
+        `${orderMatrix.rows.length} colours, ${bomCount} BOM lines, ${markerCount} lays, `
+        + `${externalCount} external operation${externalCount === 1 ? '' : 's'}`,
       entityType: 'Order', entityId: order.id,
       meta: { profile: extraction.profileKey, confidence: extraction.confidence },
     }, tx);

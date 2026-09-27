@@ -136,8 +136,11 @@ export function QuantityTab({
   // Finished stock already covers part of the order and is not cut again, so
   // the figure above the grid is netted exactly the way the grid itself is.
   // With nothing in stock this is simply the order quantity.
-  const stockQty = ledgerTotal(withEdits, QtyLedger.STOCK);
   const cuttableQty = computeCuttableQty(withEdits, colors, sizes);
+  // The stock that actually covers an ordered cell, not everything on the
+  // shelf: spare pieces of a size nobody ordered do not reduce the cut, so
+  // showing them in the subtraction would make the arithmetic not add up.
+  const stockQty = mainOrderQty - cuttableQty;
   const pctText = pctDraft ?? String(Number((order.cutPercentage * 100).toFixed(4)));
   const pctParsed = Number(pctText);
   const pctValid = Number.isFinite(pctParsed) && pctParsed >= 0 && pctParsed <= 50;

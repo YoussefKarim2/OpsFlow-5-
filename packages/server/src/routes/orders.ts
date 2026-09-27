@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { z } from 'zod';
 import {
   QtyLedger, LEDGER_LABEL, ChangeCategory, NotificationPriority,
@@ -6,7 +6,7 @@ import {
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import {
-  relationId, requiredRelationId, optionalDate, optionalNumber, shortText, longText, money,
+  relationId, requiredRelationId, optionalDate, optionalNumber, shortText, longText, money, optionalQueryDate,
 } from '../util/form-input.js';
 import { storage } from '../services/storage/index.js';
 import { authenticate, requirePermission, requireSuperAdmin, currentUser } from '../middleware/auth.js';
@@ -33,6 +33,8 @@ ordersRouter.use(authenticate);
 ordersRouter.get('/', requirePermission('order:read'), asyncHandler(async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1);
   const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize) || 25));
+  const dueBefore = optionalQueryDate.parse(req.query.dueBefore);
+  const dueAfter = optionalQueryDate.parse(req.query.dueAfter);
 
   const { data, total } = await listOrders(
     {
@@ -45,8 +47,8 @@ ordersRouter.get('/', requirePermission('order:read'), asyncHandler(async (req, 
       factoryId: req.query.factoryId as string,
       shippingMethod: req.query.shippingMethod as string,
       priority: req.query.priority as string,
-      dueBefore: req.query.dueBefore as string,
-      dueAfter: req.query.dueAfter as string,
+      dueBefore,
+      dueAfter,
       includeCancelled: req.query.includeCancelled === 'true',
     },
     page, pageSize,
@@ -81,8 +83,23 @@ ordersRouter.get('/search', requirePermission('order:read'), asyncHandler(async 
 
 // ── Read one ────────────────────────────────────────────────────────────────
 
+/**
+ * The order as this caller may see it.
+ *
+ * Every role reads orders; only some may see what one cost and what it made.
+ * The costing block is withheld rather than trimmed, so nothing in it can leak
+ * by being forgotten. The price per piece stays: the proforma and the invoice
+ * are built on it. Every route here that answers with the order goes through
+ * this, so an edit does not hand back what a read would have withheld.
+ */
+export async function orderDetailFor(req: Request, orderId: string) {
+  const detail = await getOrderDetail(orderId);
+  const canSeeCosting = currentUser(req).permissions.includes('costing:read');
+  return canSeeCosting ? detail : { ...detail, costing: null };
+}
+
 ordersRouter.get('/:id', requirePermission('order:read'), asyncHandler(async (req, res) => {
-  res.json(await getOrderDetail(req.params.id));
+  res.json(await orderDetailFor(req, req.params.id));
 }));
 
 // ── Create ──────────────────────────────────────────────────────────────────
@@ -243,7 +260,7 @@ ordersRouter.post('/', requirePermission('order:create'), asyncHandler(async (re
   });
 
   await refreshOrderCache(order.id);
-  res.status(201).json(await getOrderDetail(order.id));
+  res.status(201).json(await orderDetailFor(req, order.id));
 }));
 
 // ── Update ──────────────────────────────────────────────────────────────────
@@ -345,7 +362,7 @@ ordersRouter.patch('/:id', requirePermission('order:edit'), asyncHandler(async (
   });
 
   await refreshOrderCache(order.id);
-  res.json(await getOrderDetail(order.id));
+  res.json(await orderDetailFor(req, order.id));
 }));
 
 // ── Quantity matrix ─────────────────────────────────────────────────────────
@@ -457,7 +474,7 @@ ordersRouter.put('/:id/matrix', requirePermission('order:edit'), asyncHandler(as
   }
 
   await refreshOrderCache(order.id);
-  res.json(await getOrderDetail(order.id));
+  res.json(await orderDetailFor(req, order.id));
 }));
 
 /** The order's total for one ledger, for before/after comparison. */
@@ -518,7 +535,7 @@ ordersRouter.post('/:id/matrix/generate-cut', requirePermission('cutting:write')
   }
 
   await refreshOrderCache(order.id);
-  res.json(await getOrderDetail(order.id));
+  res.json(await orderDetailFor(req, order.id));
 }));
 
 // ── Sub-resources ───────────────────────────────────────────────────────────

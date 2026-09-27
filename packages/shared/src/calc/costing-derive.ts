@@ -15,9 +15,9 @@
  * screen renders those differently. Every division goes through `safeDiv`.
  *
  * **Traceable.** Every derived line carries a `sourceRef` naming the section and
- * the grouping it came from — `bom:FABRIC`, `external:PRINTING` — so a number
- * on the costing screen can be followed back to the row that produced it, and a
- * figure nobody can explain does not appear.
+ * the row or grouping it came from — `bom:FABRIC:<bom item id>`,
+ * `external:PRINTING` — so a number on the costing screen can be followed back
+ * to the row that produced it, and a figure nobody can explain does not appear.
  *
  * Nothing here reads a database or writes anything. It takes the production
  * facts and returns proposed lines, which is what makes it testable by value.
@@ -30,6 +30,13 @@ import type { CostGroup } from './costing.js';
 
 /** A BOM row, as far as costing is concerned. */
 export interface DerivableBomItem {
+  /**
+   * The BOM row's own id. Part of the line's `sourceRef`, because the costing
+   * sheet edits and removes derived rows by that reference: with only the
+   * category in it, editing one fabric row claimed every fabric row, and
+   * deleting one hid them all.
+   */
+  id: string;
   category: string;
   item: string;
   /**
@@ -51,18 +58,9 @@ export interface DerivableExternalOp {
   unitPriceUsd: number | null;
 }
 
-export interface DerivableProduction {
-  /** Machine-days actually worked, from the production follow-up. */
-  machineDaysUsed: number | null;
-  /** The factory's daily running cost, in EGP. */
-  dailyCostEgp: number | null;
-  dollarRate: number | null;
-}
-
 export interface DerivableInputs {
   bom: readonly DerivableBomItem[];
   external: readonly DerivableExternalOp[];
-  production: DerivableProduction;
 }
 
 export interface DerivedLine {
@@ -73,8 +71,48 @@ export interface DerivedLine {
   unitPriceUsd: number | null;
   /** What was planned, for the screen to show beside the actual. Not costed. */
   estimatedQty?: number | null;
-  /** `section:grouping` — what this was computed from. */
+  /** `section:grouping[:row]` — what this was computed from. */
   sourceRef: string;
+}
+
+/** The reference a BOM row's cost line carries: `bom:<CATEGORY>:<bom item id>`. */
+export function bomSourceRef(category: string, bomItemId: string): string {
+  return `bom:${category}:${bomItemId}`;
+}
+
+/**
+ * Whether a stored reference — a hidden row, or the `sourceRef` an edited
+ * manual line claims — covers a derived line.
+ *
+ * Normally that is plain equality. The one exception is the reference BOM
+ * lines carried before they named their row: `bom:<CATEGORY>` alone. Costings
+ * saved then still hold it, and it meant every row of that category, so it goes
+ * on meaning exactly that. Reading it as matching nothing would bring rows
+ * somebody deleted back onto a saved costing; new edits and deletions name a
+ * single row and cannot reach its neighbours.
+ */
+export function sourceRefCovers(stored: string, ref: string): boolean {
+  if (stored === ref) return true;
+  const parts = stored.split(':');
+  return parts.length === 2 && parts[0] === 'bom' && ref.startsWith(`${stored}:`);
+}
+
+/**
+ * The derived lines still left to the derivation, once the rows somebody
+ * edited (claimed by a manual line's `sourceRef`) or removed (named in the
+ * costing's hidden references) are taken out.
+ *
+ * One function for the save route, the order detail and the costing screen, so
+ * the three cannot disagree about which rows the sheet is showing.
+ */
+export function visibleDerivedLines<T extends { sourceRef: string }>(
+  derived: readonly T[],
+  claimed: Iterable<string | null | undefined>,
+  hidden: Iterable<string>,
+): T[] {
+  const refs = [...claimed, ...hidden].filter((r): r is string => !!r);
+  if (refs.length === 0) return [...derived];
+  return derived.filter((d) => !refs.some((r) => sourceRefCovers(r, d.sourceRef)));
 }
 
 /**
@@ -92,14 +130,13 @@ export function bomGroupFor(category: string): CostGroup {
 /**
  * Propose the cost lines the production data already supports.
  *
- * Items of the same category are summed into one line rather than listed
- * individually: the costing sheet reports "fabric" as a figure, and forty rows
- * of it would be the bill of materials again rather than a costing. The
- * `sourceRef` says which category, so the detail is still reachable.
+ * Materials come one line per BOM row, outside work one line per operation;
+ * the comments below say why each is shaped the way it is.
  *
- * A category is only summed when *every* contributing row has both a quantity
- * and a price. A partial sum reads as a complete one and is worse than nothing:
- * it would show a fabric cost that is quietly missing two of its five fabrics.
+ * Production labour is not derived. The sheet's cut-and-make row (`cmCostUsd`
+ * in `computeCosting`) is that cost, worked out from the machine figures; a
+ * machine-days × daily-cost line beside it was never added to the total, yet
+ * the screen listed it with a cost and a share of a total it was not part of.
  */
 export function deriveCostLines(input: DerivableInputs): DerivedLine[] {
   const lines: DerivedLine[] = [];
@@ -131,7 +168,7 @@ export function deriveCostLines(input: DerivableInputs): DerivedLine[] {
       unit: b.unit,
       unitPriceUsd: b.unitPriceUsd,
       estimatedQty: b.requiredQty,
-      sourceRef: `bom:${b.category}`,
+      sourceRef: bomSourceRef(b.category, b.id),
     });
   }
 
@@ -169,23 +206,6 @@ export function deriveCostLines(input: DerivableInputs): DerivedLine[] {
       // even when two batches went out at different prices.
       unitPriceUsd: qty > 0 ? cost / qty : null,
       sourceRef: `external:${op}`,
-    });
-  }
-
-  // ── Production labour ───────────────────────────────────────────────────
-  //
-  // The workbook's own CM formula: machine-days worked × the daily running
-  // cost, converted at the recorded dollar rate. Requires all three, and says
-  // nothing when any is missing rather than inventing a rate.
-  const { machineDaysUsed, dailyCostEgp, dollarRate } = input.production;
-  if (machineDaysUsed != null && dailyCostEgp != null && dollarRate != null && dollarRate > 0) {
-    lines.push({
-      group: 'LABOUR',
-      label: 'Production (machine-days × daily cost)',
-      quantity: machineDaysUsed,
-      unit: 'DAY',
-      unitPriceUsd: dailyCostEgp / dollarRate,
-      sourceRef: 'production:machine-days',
     });
   }
 

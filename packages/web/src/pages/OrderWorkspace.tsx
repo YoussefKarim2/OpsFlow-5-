@@ -36,6 +36,7 @@ import { ExternalTab } from './order-tabs/ExternalTab';
 import { QualityTab } from './order-tabs/QualityTab';
 import { PackingTab } from './order-tabs/PackingTab';
 import { CostingTab } from './order-tabs/CostingTab';
+import { ErrorBoundary } from '../components/ErrorBoundary';
 import { ActivityTab } from './order-tabs/ActivityTab';
 import { CustomerReferenceTab } from './order-tabs/CustomerReferenceTab';
 import { InstructionsTab } from './order-tabs/InstructionsTab';
@@ -279,6 +280,11 @@ export function OrderWorkspacePage() {
             </div>
           )}
 
+          {/* Tabs live in ?tab=, not the path, so the app-level boundary
+              (keyed on the path) caught a broken tab by replacing the whole
+              workspace, tab bar included, and re-crashed on every retry. This
+              one is keyed on the tab, so switching tabs recovers. */}
+          <ErrorBoundary key={tab} label="This tab">
           {tab === 'overview'     && <OverviewTab order={order} onJump={setTab} />}
           {tab === 'reference'    && <CustomerReferenceTab orderId={order.id} />}
           {tab === 'details'      && <DetailsTab order={order} />}
@@ -307,6 +313,7 @@ export function OrderWorkspacePage() {
           {tab === 'costing'      && <CostingTab order={order} />}
           {tab === 'documents'    && <DocumentsTab orderId={order.id} />}
           {tab === 'activity'     && <ActivityTab orderId={order.id} />}
+          </ErrorBoundary>
         </div>
       </div>
 

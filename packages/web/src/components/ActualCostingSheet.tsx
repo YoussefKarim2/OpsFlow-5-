@@ -29,7 +29,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Cloud, CloudOff, Lock, Pencil, Plus, Printer, Trash2 } from 'lucide-react';
 import {
-  computeCosting, rowCost, applyRowEdit, sanitiseOverrides,
+  computeCosting, rowCost, applyRowEdit, sanitiseOverrides, visibleDerivedLines, outsideWorkKind,
   fmtMoney, fmtNumber, fmtPct, NOT_CALCULATED,
   type CostLineInput, type CostingResult, type OrderDetailDto,
   type OverrideKey, type RowField,
@@ -99,6 +99,24 @@ const asNumber = (s: string): number | null => {
   return Number.isFinite(n) ? n : null;
 };
 
+/**
+ * The stored figures that are counts — machines and days — and are kept as
+ * whole numbers. The server refuses a fraction for any of them, and because a
+ * save carries the whole draft, one "5.5" used to fail every autosave after it.
+ */
+const WHOLE_FIELDS = ['machineCount', 'lineMachineQty', 'daysInLine', 'machineDaysUsed'] as const;
+
+/**
+ * A count as typed: the number, null when blank, or undefined when it is not a
+ * whole number. Undefined is left out of the save entirely, so the rest of the
+ * draft is written and the stored count stays as it was until it is fixed.
+ */
+const asWhole = (s: string): number | null | undefined => {
+  const n = asNumber(s);
+  if (n == null) return s.trim() === '' ? null : undefined;
+  return Number.isInteger(n) && n >= 0 ? n : undefined;
+};
+
 function storedFrom(record: CostingDto | null): Stored {
   return {
     costingDate: record?.costingDate?.slice(0, 10) ?? '',
@@ -120,15 +138,32 @@ function overridesFrom(record: CostingDto | null): Record<string, string> {
   return out;
 }
 
+/**
+ * The costing table's rows: what the production sections say now, and what
+ * somebody typed.
+ *
+ * The derived rows come from the live derivation, never from the lines the last
+ * save stored. Those are a snapshot, so the sheet went stale the moment the
+ * warehouse issued more fabric, while the reports and the order detail — which
+ * derive afresh — moved on. Only the hand-entered rows are read from the
+ * record, and the derived rows they replace or that were removed are taken out
+ * by the same rule the server applies, so the sheet and the stored costing
+ * cannot disagree.
+ */
 function rowsFrom(record: CostingDto | null, derived: CostLineDto[]): RowDraft[] {
-  const stored = record?.lines ?? [];
+  const manual = (record?.lines ?? []).filter((l) => l.source === 'MANUAL');
   // The plan lives on the bill of materials, not on the costing, so it is
   // matched back on by where the row came from rather than stored twice.
-  const planned = new Map(derived.map((d) => [`${d.sourceRef}|${d.label}`, d.estimatedQty ?? null]));
-  // Before the first save there is nothing stored, so the table shows what the
-  // production sections would contribute — the screen is demonstrably working
-  // rather than empty, and saving is what commits those rows.
-  const source = stored.length > 0 ? stored : derived.map((d) => ({ ...d, source: 'DERIVED' as const }));
+  const planned = new Map(derived.map((d) => [d.sourceRef ?? '', d.estimatedQty ?? null]));
+  const live = visibleDerivedLines(
+    derived.map((d) => ({ ...d, sourceRef: d.sourceRef ?? '' })),
+    manual.map((l) => l.sourceRef),
+    record?.hiddenCostRefs ?? [],
+  );
+  const source = [
+    ...live.map((d) => ({ ...d, source: 'DERIVED' as const })),
+    ...manual,
+  ];
   return source.map((l, i) => ({
     key: l.id ?? `${l.sourceRef ?? 'row'}-${i}`,
     group: l.group,
@@ -138,23 +173,48 @@ function rowsFrom(record: CostingDto | null, derived: CostLineDto[]): RowDraft[]
     unitPrice: numText(l.unitPriceUsd),
     cost: numText(rowCost({ quantity: l.quantity, unitPriceUsd: l.unitPriceUsd })),
     derivedField: l.quantity != null && l.unitPriceUsd != null ? 'cost' : null,
-    estimatedQty: l.estimatedQty ?? planned.get(`${l.sourceRef}|${l.label}`) ?? null,
+    estimatedQty: l.estimatedQty ?? (l.sourceRef ? planned.get(l.sourceRef) : null) ?? null,
     sourceRef: l.sourceRef ?? null,
     derived: l.source !== 'MANUAL',
   }));
 }
 
 export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
-  const c = order.costing;
+  const { can } = useAuth();
+  // The server withholds the costing from a role without costing:read, and
+  // the sheet must not so much as load for one: it could never show the
+  // record, so anything it saved would be an empty draft over the real one.
+  if (!can('costing:read') || order.costing == null) {
+    return (
+      <div className="p-5">
+        <div className="flex items-start gap-2.5 rounded-md border border-ink-200 bg-ink-50 px-4 py-3">
+          <Lock className="mt-0.5 h-4 w-4 shrink-0 text-ink-500" />
+          <p className="text-xs leading-relaxed text-ink-700">
+            Your role cannot see this order's costing. That needs the
+            <strong> costing:read </strong> permission.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return <CostingSheet order={order} c={order.costing} />;
+}
+
+function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult }) {
   const { can } = useAuth();
   const qc = useQueryClient();
-  const editable = can('costing:write');
 
   const costing = useQuery({
     queryKey: ['costing', order.id],
     queryFn: () => api.steps.costing(order.id),
-    enabled: can('costing:read'),
   });
+
+  // Writing needs the record loaded first. A role that could write but not
+  // read — or anyone, in the moment before the record arrives — would
+  // otherwise autosave a blank draft, and the server would replace the notes,
+  // the figures and every hand-added row with it.
+  const mayWrite = can('costing:read') && can('costing:write');
+  const editable = mayWrite && costing.isSuccess;
 
   const record = costing.data?.data ?? null;
   const derivedLines = useMemo(() => costing.data?.derived ?? [], [costing.data]);
@@ -203,7 +263,15 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
     // cannot interrupt them, because by definition they have stopped typing.
     const idle = currentRef.current === sentRef.current;
     if (editingRef.current && !idle) return;
-    setStored(s); setOver(o); setRows(r); setHidden(h);
+    // A count that is not a whole number was never sent, so the server's copy
+    // still holds the old one. Keep what was typed on screen, marked, rather
+    // than silently putting the old figure back under the person's cursor.
+    setStored((prev) => {
+      const next = { ...s };
+      for (const k of WHOLE_FIELDS) if (asWhole(prev[k]) === undefined) next[k] = prev[k];
+      return next;
+    });
+    setOver(o); setRows(r); setHidden(h);
   }, [serverState]);
 
   /** The draft, as one comparable string. Changing it is what "unsaved" means. */
@@ -217,10 +285,12 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
       costingDate: stored.costingDate || null,
       dollarRate: asNumber(stored.dollarRate) ?? undefined,
       dailyCostEgp: asNumber(stored.dailyCostEgp),
-      machineCount: asNumber(stored.machineCount),
-      lineMachineQty: asNumber(stored.lineMachineQty),
-      daysInLine: asNumber(stored.daysInLine),
-      machineDaysUsed: asNumber(stored.machineDaysUsed),
+      // Undefined — a count that is not a whole number — is dropped from the
+      // request, so the rest of the draft still saves.
+      machineCount: asWhole(stored.machineCount),
+      lineMachineQty: asWhole(stored.lineMachineQty),
+      daysInLine: asWhole(stored.daysInLine),
+      machineDaysUsed: asWhole(stored.machineDaysUsed),
       sublimationCostUsd: asNumber(stored.sublimationCostUsd),
       embroideryCostUsd: asNumber(stored.embroideryCostUsd),
       notes: stored.notes || null,
@@ -303,10 +373,11 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
     notes: stored.notes || null,
     dollarRate: asNumber(stored.dollarRate),
     dailyCostEgp: asNumber(stored.dailyCostEgp),
-    machineCount: asNumber(stored.machineCount),
-    machineDaysUsed: asNumber(stored.machineDaysUsed),
-    daysInLine: asNumber(stored.daysInLine),
-    lineMachineQty: asNumber(stored.lineMachineQty),
+    // Only what would be saved, so the figures on screen are the ones stored.
+    machineCount: asWhole(stored.machineCount) ?? null,
+    machineDaysUsed: asWhole(stored.machineDaysUsed) ?? null,
+    daysInLine: asWhole(stored.daysInLine) ?? null,
+    lineMachineQty: asWhole(stored.lineMachineQty) ?? null,
     sublimationCostUsd: asNumber(stored.sublimationCostUsd),
     embroideryCostUsd: asNumber(stored.embroideryCostUsd),
     overrides: sanitiseOverrides(over),
@@ -348,15 +419,21 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
   );
 
   /** A field backed by its own stored column. */
-  const plain = (label: string, key: keyof Stored, hint?: string) => (
-    <StoredField
-      label={label}
-      editing={editing}
-      value={stored[key]}
-      hint={hint}
-      onChange={setField(key)}
-    />
-  );
+  const plain = (label: string, key: keyof Stored, hint?: string) => {
+    const whole = (WHOLE_FIELDS as readonly string[]).includes(key);
+    return (
+      <StoredField
+        label={label}
+        editing={editing}
+        value={stored[key]}
+        hint={hint}
+        invalid={whole && asWhole(stored[key]) === undefined
+          ? 'A whole number — this one is not saved until it is'
+          : undefined}
+        onChange={setField(key)}
+      />
+    );
+  };
 
   /** A label or unit change: no arithmetic, just the row's description. */
   const editRow = (key: string, patch: Partial<RowDraft>) =>
@@ -390,7 +467,8 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
   const deleteRow = (row: RowDraft) => {
     setRows((rs) => rs.filter((r) => r.key !== row.key));
     // A derived row would be recreated by the next recomputation unless the
-    // costing remembers it was removed.
+    // costing remembers it was removed. The reference names this BOM row
+    // alone, so removing one fabric leaves the others where they were.
     if (row.sourceRef) setHidden((h) => (h.includes(row.sourceRef!) ? h : [...h, row.sourceRef!]));
   };
 
@@ -404,7 +482,18 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
 
   const fabricRows = rows.filter((r) => r.group === 'FABRIC');
   const accessoryRows = rows.filter((r) => r.group === 'ACCESSORY');
-  const otherRows = rows.filter((r) => r.group !== 'FABRIC' && r.group !== 'ACCESSORY');
+  /**
+   * Sublimation and embroidery are totalled on their own rows below, by the
+   * same `outsideWorkKind` split the engine uses. A derived line for either is
+   * therefore not listed again here — it was, and the same cost appeared twice
+   * with shares adding past 100%. A hand-added one stays listed, so it can
+   * still be edited or removed, but says where it is counted instead of
+   * claiming a share of its own.
+   */
+  const kindOf = (r: RowDraft) =>
+    r.group === 'EXTERNAL' ? outsideWorkKind({ label: r.label, sourceRef: r.sourceRef }) : null;
+  const otherRows = rows.filter((r) =>
+    r.group !== 'FABRIC' && r.group !== 'ACCESSORY' && !(r.derived && kindOf(r) != null));
 
   /** What a row currently costs, from the same helper the engine uses. */
   const costOf = (r: RowDraft): number | null =>
@@ -421,7 +510,7 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
 
   return (
     <div className="print-document space-y-4 p-5">
-      {!editable && (
+      {!mayWrite && (
         <div className="no-print flex items-start gap-2.5 rounded-md border border-amber-200 bg-amber-50 px-4 py-3">
           <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
           <p className="text-xs leading-relaxed text-amber-900">
@@ -594,12 +683,16 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
                 label="Embroidery" cost={live.embroideryCostUsd} total={total} editing={editing}
                 value={stored.embroideryCostUsd} onChange={setField('embroideryCostUsd')}
               />
-              {otherRows.map((r) => (
-                <EditableRow
-                  key={r.key} row={r} total={total} editing={editing}
-                  onEdit={editRow} onEditNumber={editRowNumber} onDelete={deleteRow} cost={costOf(r)}
-                />
-              ))}
+              {otherRows.map((r) => {
+                const kind = kindOf(r);
+                return (
+                  <EditableRow
+                    key={r.key} row={r} total={total} editing={editing}
+                    onEdit={editRow} onEditNumber={editRowNumber} onDelete={deleteRow} cost={costOf(r)}
+                    countedIn={kind === 'SUBLIMATION' ? 'Sublimation' : kind === 'EMBROIDERY' ? 'Embroidery' : undefined}
+                  />
+                );
+              })}
               {editing && (
                 <tr className="no-print">
                   <td className="td" />
@@ -814,9 +907,11 @@ function RowBlock({
 }
 
 function EditableRow({
-  caption, row, total, editing, onEdit, onEditNumber, onDelete, cost,
+  caption, row, total, editing, onEdit, onEditNumber, onDelete, cost, countedIn,
 }: {
   caption?: string;
+  /** The dedicated row this one's cost is totalled on, when it is not its own. */
+  countedIn?: string;
   row: RowDraft;
   total: number | null;
   editing: boolean;
@@ -871,7 +966,11 @@ function EditableRow({
           onChange={(v) => onEditNumber(row.key, 'cost', v)}
         />
       </td>
-      <td className="td tnum text-right">{fmtPct(pctOf(cost, total), 1)}</td>
+      <td className="td tnum text-right">
+        {countedIn
+          ? <span className="text-2xs text-ink-400" title={`Counted in the ${countedIn} row`}>in {countedIn}</span>
+          : fmtPct(pctOf(cost, total), 1)}
+      </td>
       {editing && (
         <td className="td text-right">
           <button
@@ -889,7 +988,10 @@ function EditableRow({
   );
 }
 
-/** "bom:FABRIC" → "the bill of materials · fabric". */
+/**
+ * "bom:FABRIC:<row id>" → "the bill of materials · fabric". Only the first two
+ * segments are read: the row id is for matching, not for people.
+ */
 function explain(ref: string): string {
   const [section, detail] = ref.split(':');
   const name = section === 'bom' ? 'the bill of materials'

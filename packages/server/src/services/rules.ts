@@ -87,6 +87,23 @@ export function assertShippableQuantity(opts: {
 }
 
 /**
+ * Pieces committed to consignments once a shipment is recorded or changed.
+ *
+ * The shipped-versus-produced rule is about the order, not one consignment:
+ * checking each new row on its own let five shipments of 900 go out against
+ * 1,000 produced. So the check is made against the running total — every other
+ * consignment plus this one. When a row is being edited it is left out of the
+ * others, or its old quantity would be counted alongside its new one.
+ */
+export function shipmentTotalAfter(
+  shipments: readonly { id: string; qty: number }[],
+  qty: number,
+  editingId?: string | null,
+): number {
+  return shipments.reduce((a, s) => (s.id === editingId ? a : a + s.qty), 0) + qty;
+}
+
+/**
  * The approval gate. An external operation that requires customer approval
  * cannot leave NOT_SENT until an APPROVED approval exists.
  */
@@ -191,7 +208,11 @@ export async function assertTaskCompletable(
         where: { orderId: task.orderId, requiresApproval: true },
         include: { approval: true },
       });
-      const blocked = ops.filter((o) => o.approval?.status !== 'APPROVED');
+      // A cancelled operation is not being sent and a returned one has already
+      // been, so neither can hold this task up.
+      const blocked = ops.filter(
+        (o) => o.approval?.status !== 'APPROVED' && o.status !== 'RETURNED' && o.status !== 'CANCELLED',
+      );
       if (blocked.length > 0) {
         throw new ApprovalRequiredError(blocked[0]!.operationType);
       }

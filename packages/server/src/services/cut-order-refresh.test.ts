@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { QtyLedger } from '@opsflow/shared';
-import { CUT_ORDER_INPUT_LEDGERS } from '../services/cut-order.js';
+import { CUT_ORDER_INPUT_LEDGERS, shouldRefreshCutOrder } from '../services/cut-order.js';
 
 /**
  * The cut order is a stored snapshot of a calculation. It was generated once,
@@ -34,5 +34,21 @@ describe('which quantity ledgers make the cut order stale', () => {
         `${downstream} must not trigger a cut-order rewrite`,
       );
     }
+  });
+});
+
+describe('whether an order has a cut order to refresh', () => {
+  test('never generated and no rows: nothing to refresh', () => {
+    assert.equal(shouldRefreshCutOrder({ generatedAt: null, cutRowCount: 0 }), false);
+  });
+
+  test('generated, and stock since covered every cell so no rows are left: still refreshed', () => {
+    // 105 to cut → stock 100 → 0 to cut → stock removed → must come back to 105,
+    // not stay at 0 because the empty sheet looked never-generated.
+    assert.equal(shouldRefreshCutOrder({ generatedAt: new Date(), cutRowCount: 0 }), true);
+  });
+
+  test('rows with no generation time (imported, or from before it was recorded) still count', () => {
+    assert.equal(shouldRefreshCutOrder({ generatedAt: null, cutRowCount: 4 }), true);
   });
 });

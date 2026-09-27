@@ -42,6 +42,9 @@ export function CustomerReferenceTab({ orderId }: { orderId: string }) {
   const { data, isLoading } = useQuery({
     queryKey: ['attachments', orderId],
     queryFn: () => api.orders.attachments(orderId),
+    // The download links in the list are signed for 15 minutes; refreshing
+    // inside that keeps a tab left open from offering links that have expired.
+    refetchInterval: 10 * 60_000,
   });
 
   const refresh = () => {

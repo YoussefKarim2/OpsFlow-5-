@@ -10,13 +10,14 @@ import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
 import { NotFoundError, BadRequestError } from '../errors.js';
-import { extractWorkbook, type ExtractionResult } from '../services/import/extractor.js';
+import { extractWorkbook, applyFieldOverrides, type ExtractionResult } from '../services/import/extractor.js';
 import { extractTabular, type TabularAnalysis } from '../services/import/tabular-extractor.js';
-import { commitImport } from '../services/import/committer.js';
+import { commitImport, mergeMatrixAxes } from '../services/import/committer.js';
 import { announceChange } from '../services/change-service.js';
 import { PROFILES } from '../services/import/profiles.js';
 import { storage } from '../services/storage/index.js';
-import { getOrderDetail, refreshOrderCache } from '../services/order-service.js';
+import { refreshOrderCache } from '../services/order-service.js';
+import { orderDetailFor } from './orders.js';
 import { reserveOrderMaterials } from '../services/inventory-service.js';
 import { workbookUpload as upload } from '../services/import/upload-guard.js';
 import { detectFileKind } from '../services/import/file-kind.js';
@@ -46,13 +47,26 @@ async function runExtraction(
     sheetName?: string;
     overrides?: Record<number, ImportConcept>;
     fieldOverrides?: Record<string, string | number | null>;
+    /** The import job, which names a PDF's stand-in PO number the same on every read. */
+    job?: { id: string; createdAt: Date };
   } = {},
 ): Promise<ExtractionResult & { analysis?: TabularAnalysis }> {
   // A PDF has no sheets and no profile, so neither Excel reader applies. It
   // produces the same ExtractionResult, which is what lets everything after
   // this point — preview, review, commit — stay exactly as it is.
+  //
+  // The review screen's values are applied on every path, not only the generic
+  // one: "Apply changes" on a PDF or a recognised workbook used to change
+  // nothing on the preview, while the commit applied them anyway — so what was
+  // approved and what was written were not the same order.
   const kind = detectFileKind(buffer);
-  if (kind === 'pdf') return extractFromPdf(buffer);
+  if (kind === 'pdf') {
+    const pdf = await extractFromPdf(buffer, {
+      placeholderPoNumber: options.job ? placeholderPoFor(options.job) : undefined,
+    });
+    applyFieldOverrides(pdf, options.fieldOverrides);
+    return pdf;
+  }
 
   // A CSV has no named sheets and no profile to match, so the anchor-based
   // reader cannot apply — it goes straight to the generic one.
@@ -60,7 +74,10 @@ async function runExtraction(
     const profiled = await extractWorkbook(buffer);
     // A recognised profile wins: it reads the BOM, the lay plan and the costing
     // too, which the generic reader cannot infer from a flat table.
-    if (profiled.profileKey) return profiled;
+    if (profiled.profileKey) {
+      applyFieldOverrides(profiled, options.fieldOverrides);
+      return profiled;
+    }
   }
 
   // Look for a mapping a coordinator has already corrected for this shape.
@@ -98,6 +115,20 @@ async function runExtraction(
 }
 
 /**
+ * The stand-in PO number for a document that states none.
+ *
+ * Derived from the job rather than drawn at random, because the preview and
+ * the commit each read the file afresh: a random one meant the order was
+ * created under a different number from the one on the screen the coordinator
+ * approved.
+ */
+function placeholderPoFor(job: { id: string; createdAt: Date }): string {
+  const day = job.createdAt.toISOString().slice(0, 10);
+  const tag = createHash('sha1').update(job.id).digest('hex').slice(0, 6).toUpperCase();
+  return `IMPORT-${day}-${tag}`;
+}
+
+/**
  * A stable key for "a file shaped like this".
  *
  * Sorted, so a customer who reorders their columns still matches; normalised,
@@ -109,7 +140,10 @@ function headerFingerprint(headers: readonly string[]): string {
 }
 
 function buildPreview(extraction: ExtractionResult) {
-  const orderMatrix = extraction.matrices.find((m) => m.ledger === 'ORDER');
+  const found = extraction.matrices.find((m) => m.ledger === 'ORDER');
+  // Shown as the commit will create it: "Navy" and "navy" are one colour there,
+  // so they are one row here.
+  const orderMatrix = found ? { ...found, ...mergeMatrixAxes(found) } : undefined;
   return {
     order: Object.fromEntries(
       Object.entries(extraction.fields).map(([k, v]) => [
@@ -271,7 +305,7 @@ importRouter.post('/upload', requirePermission('import:run'), upload.single('fil
     data: { fileName: req.file.originalname, storageKey: key, uploadedById: actor.id, status: 'UPLOADED' },
   });
 
-  const result = await runExtraction(req.file.buffer);
+  const result = await runExtraction(req.file.buffer, { job });
   await persistJob(job.id, result);
 
   res.json({ jobId: job.id, fileName: job.fileName, ...toResponse(result) });
@@ -311,6 +345,7 @@ importRouter.post('/:jobId/remap', requirePermission('import:run'), asyncHandler
     sheetName: input.sheetName,
     overrides,
     fieldOverrides: input.fieldOverrides,
+    job,
   });
 
   await persistJob(job.id, result);
@@ -337,14 +372,18 @@ importRouter.post('/:jobId/save-mapping', requirePermission('import:run'), async
   const job = await prisma.importJob.findUnique({ where: { id: req.params.jobId } });
   if (!job) throw new NotFoundError('Import job');
 
-  const buffer = await storage.get(job.storageKey);
-  const result = await runExtraction(buffer, { forceTabular: true });
-  if (!result.analysis) throw new BadRequestError('This file was read with a fixed profile, so there is no column mapping to save.');
+  // Saved from the analysis the job last showed — the one every remap writes
+  // back — not from a fresh read. Re-reading the file here, with none of the
+  // coordinator's corrections and on the default sheet, saved the automatic
+  // guess they had just finished fixing, for whichever sheet happened to rank
+  // first, and offered it back to them next month.
+  const analysis = (job.preview as { analysis?: TabularAnalysis | null } | null)?.analysis ?? null;
+  if (!analysis) throw new BadRequestError('This file was read with a fixed profile, so there is no column mapping to save.');
 
-  const mapping = toSavedMapping(result.analysis.columns);
+  const mapping = toSavedMapping(analysis.columns);
   if (Object.keys(mapping).length === 0) throw new BadRequestError('There is nothing to save — no columns were mapped.');
 
-  const fingerprint = headerFingerprint(result.analysis.columns.map((c) => c.header));
+  const fingerprint = headerFingerprint(analysis.columns.map((c) => c.header));
   const label = input.label ?? `${job.fileName} layout`;
 
   // Not a plain `upsert`: `clientId` is nullable, and Prisma's compound-unique
@@ -422,6 +461,30 @@ const commitSchema = z.object({
   reserveMaterials: z.boolean().default(false),
 });
 
+/**
+ * How long a commit may hold its claim on a job before another attempt may
+ * take over. Far longer than the commit's own 30-second transaction, so it only
+ * ever frees a job whose server died mid-commit — never one still running.
+ */
+const COMMIT_CLAIM_MS = 5 * 60_000;
+
+/**
+ * Run one of the steps after the order exists, without letting it undo that.
+ *
+ * Everything after the commit is follow-up — reserving stock, refreshing a
+ * cache, announcing it. None of it can make the order not exist, so none of it
+ * may mark the job FAILED: that told the coordinator to try again, and trying
+ * again created the order a second time.
+ */
+async function afterCommit<T>(what: string, step: () => Promise<T>): Promise<T | null> {
+  try {
+    return await step();
+  } catch (err) {
+    console.error(`[import] the order was created, but ${what} failed:`, err);
+    return null;
+  }
+}
+
 /** Step 5: commit. One transaction, all or nothing. */
 importRouter.post('/:jobId/commit', requirePermission('import:run'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
@@ -442,87 +505,100 @@ importRouter.post('/:jobId/commit', requirePermission('import:run'), asyncHandle
     columnOverrides[Number(index)] = concept as ImportConcept;
   }
 
+  // The review screen's values are applied inside, by the same reader the
+  // preview used — a value that cannot be read is refused here, by name,
+  // before anything is claimed or written.
   const extraction = await runExtraction(buffer, {
     forceTabular: job.profile === GENERIC_PROFILE,
     sheetName: input.sheetName,
     overrides: columnOverrides,
     fieldOverrides: input.overrides,
+    job,
   });
 
-  if (input.overrides) {
-    for (const [field, value] of Object.entries(input.overrides)) {
-      if (value === null) { extraction.fields[field] = null; continue; }
-      const spec = PROFILES.flatMap((p) => p.fields).find((s) => s.field === field);
-      extraction.fields[field] =
-        spec?.type === 'date' ? new Date(String(value))
-        : spec?.type === 'number' || spec?.type === 'percent' ? Number(value)
-        : String(value);
-    }
-    // Overrides can satisfy a previously-failing required field.
-    extraction.issues = extraction.issues.filter(
-      (i) => !(i.level === 'ERROR' && i.field != null && i.field in input.overrides!),
-    );
+  // Claim the job before creating anything. The status check above is a read,
+  // and two clicks — or two tabs — both pass it; each then created its own
+  // order from the same file. A conditional update lets exactly one through.
+  // `committedAt` doubles as the claim, since it is only ever set here.
+  const claim = await prisma.importJob.updateMany({
+    where: {
+      id: job.id,
+      status: { not: 'COMMITTED' },
+      OR: [{ committedAt: null }, { committedAt: { lt: new Date(Date.now() - COMMIT_CLAIM_MS) } }],
+    },
+    data: { committedAt: new Date() },
+  });
+  if (claim.count === 0) {
+    throw new BadRequestError('This file is already being imported. Refresh in a moment to see the order.');
   }
 
+  let result: Awaited<ReturnType<typeof commitImport>>;
   try {
-    const result = await commitImport(prisma, extraction, {
+    result = await commitImport(prisma, extraction, {
       actorId: actor.id, actorName: actor.name, generateCutOrder: input.generateCutOrder,
     });
-
-    await prisma.importJob.update({
-      where: { id: job.id },
-      data: { status: 'COMMITTED', createdOrderId: result.orderId, committedAt: new Date() },
-    });
-
-    // The customer's own paperwork, filed against the order it produced, so it
-    // can be opened from Customer Reference for as long as the order exists.
-    await attachImportedDocument(result.orderId, job, buffer, actor);
-
-    // §10: reserving on confirmation is what turns a BOM into a stock
-    // commitment. Partial by design — securing what exists and reporting the
-    // rest is more useful than refusing because one trim is missing.
-    let reservation: Awaited<ReturnType<typeof reserveOrderMaterials>> | null = null;
-    if (input.reserveMaterials) {
-      reservation = await reserveOrderMaterials(actor, result.orderId);
-    }
-
-    await refreshOrderCache(result.orderId);
-
-    // One announcement for the whole file. `commitImport` suppressed the
-    // per-row events, so this is the only thing the factory hears — which is
-    // the right amount of news for "an order arrived".
-    await announceChange({
-      entityType: 'Order',
-      entityId: result.orderId,
-      action: 'CREATE',
-      category: ChangeCategory.ORDER,
-      summary: `Order PO ${result.poNumber} imported from a spreadsheet`,
-      subject: `PO ${result.poNumber}`,
-      priority: NotificationPriority.NORMAL,
-      orderId: result.orderId,
-      link: `/orders/${result.orderId}`,
-      fields: [
-        { label: 'Colours', oldValue: null, newValue: String(result.created.colors) },
-        { label: 'Sizes', oldValue: null, newValue: String(result.created.sizes) },
-        { label: 'Quantity cells', oldValue: null, newValue: String(result.created.quantityCells) },
-        { label: 'BOM lines', oldValue: null, newValue: String(result.created.bomItems) },
-      ],
-      actorId: actor.id,
-      actorName: actor.name,
-    });
-
-    res.status(201).json({
-      ...result,
-      reservation,
-      order: await getOrderDetail(result.orderId),
-    });
   } catch (err) {
+    // Nothing was written — the commit is one transaction — so the claim is
+    // released and the job can be corrected and tried again.
     await prisma.importJob.update({
       where: { id: job.id },
-      data: { status: 'FAILED', errorMessage: err instanceof Error ? err.message : 'Unknown error' },
+      data: {
+        status: 'FAILED', committedAt: null,
+        errorMessage: err instanceof Error ? err.message : 'Unknown error',
+      },
     });
     throw err;
   }
+
+  // From here on the order exists. Nothing below may mark the job FAILED.
+  await afterCommit('recording the import as done', () => prisma.importJob.update({
+    where: { id: job.id },
+    data: { status: 'COMMITTED', createdOrderId: result.orderId, committedAt: new Date(), errorMessage: null },
+  }));
+
+  // The customer's own paperwork, filed against the order it produced, so it
+  // can be opened from Customer Reference for as long as the order exists.
+  await attachImportedDocument(result.orderId, job, buffer, actor);
+
+  // §10: reserving on confirmation is what turns a BOM into a stock
+  // commitment. Partial by design — securing what exists and reporting the
+  // rest is more useful than refusing because one trim is missing.
+  const reservation = input.reserveMaterials
+    ? await afterCommit('reserving materials', () => reserveOrderMaterials(actor, result.orderId))
+    : null;
+
+  await afterCommit('refreshing the order summary', () => refreshOrderCache(result.orderId));
+
+  // One announcement for the whole file. `commitImport` suppressed the
+  // per-row events, so this is the only thing the factory hears — which is
+  // the right amount of news for "an order arrived".
+  await afterCommit('announcing the new order', () => announceChange({
+    entityType: 'Order',
+    entityId: result.orderId,
+    action: 'CREATE',
+    category: ChangeCategory.ORDER,
+    summary: `Order PO ${result.poNumber} imported from a spreadsheet`,
+    subject: `PO ${result.poNumber}`,
+    priority: NotificationPriority.NORMAL,
+    orderId: result.orderId,
+    link: `/orders/${result.orderId}`,
+    fields: [
+      { label: 'Colours', oldValue: null, newValue: String(result.created.colors) },
+      { label: 'Sizes', oldValue: null, newValue: String(result.created.sizes) },
+      { label: 'Quantity cells', oldValue: null, newValue: String(result.created.quantityCells) },
+      { label: 'BOM lines', oldValue: null, newValue: String(result.created.bomItems) },
+    ],
+    actorId: actor.id,
+    actorName: actor.name,
+  }));
+
+  res.status(201).json({
+    ...result,
+    reservation,
+    // Through the same gate as GET /orders/:id, so the import response does not
+    // hand costing to a role that cannot read it anywhere else.
+    order: await afterCommit('loading the new order', () => orderDetailFor(req, result.orderId)),
+  });
 }));
 
 importRouter.get('/', requirePermission('import:run'), asyncHandler(async (req, res) => {

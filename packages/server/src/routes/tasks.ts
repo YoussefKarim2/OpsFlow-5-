@@ -1,10 +1,10 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { daysBetween, STAGE_META, DEPARTMENT_LABEL, type StageKey } from '@opsflow/shared';
+import { daysBetween, STAGE_META, DEPARTMENT_LABEL, TaskStatus, Department, type StageKey } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
-import { NotFoundError, ForbiddenError } from '../errors.js';
+import { NotFoundError, ForbiddenError, BadRequestError } from '../errors.js';
 import { completeTask, startTask, assignTask } from '../services/workflow-service.js';
 import { refreshOrderCache } from '../services/order-service.js';
 import { logActivity } from '../services/activity-service.js';
@@ -82,19 +82,42 @@ tasksRouter.get('/mine', requirePermission('task:read'), asyncHandler(async (req
   res.json({ data: tasks.map((t) => toDto(t)) });
 }));
 
+/**
+ * The list filters, checked. An unknown status or department used to reach
+ * Prisma as-is and come back as a 500, which reads as the server breaking
+ * rather than the link being wrong.
+ */
+const listQuerySchema = z.object({
+  orderId: z.string().optional(),
+  department: z.nativeEnum(Department).optional(),
+  status: z.nativeEnum(TaskStatus).optional(),
+  assigneeId: z.string().optional(),
+  overdue: z.string().optional(),
+  limit: z.string().optional(),
+});
+
+/** Midnight UTC today — the calendar-day boundary `daysBetween` counts from. */
+function startOfUtcDay(d = new Date()): Date {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+
 tasksRouter.get('/', requirePermission('task:read'), asyncHandler(async (req, res) => {
+  const q = listQuerySchema.parse(req.query);
   const tasks = await prisma.task.findMany({
     where: {
       order: { cancelled: false },
-      ...(req.query.orderId ? { orderId: req.query.orderId as string } : {}),
-      ...(req.query.department ? { department: req.query.department as never } : {}),
-      ...(req.query.status ? { status: req.query.status as never } : { status: { not: 'COMPLETED' } }),
-      ...(req.query.assigneeId ? { assigneeId: req.query.assigneeId as string } : {}),
-      ...(req.query.overdue === 'true' ? { dueDate: { lt: new Date() }, status: { not: 'COMPLETED' } } : {}),
+      ...(q.orderId ? { orderId: q.orderId } : {}),
+      ...(q.department ? { department: q.department } : {}),
+      ...(q.status ? { status: q.status } : { status: { not: 'COMPLETED' } }),
+      ...(q.assigneeId ? { assigneeId: q.assigneeId } : {}),
+      // Overdue by calendar day, as every other screen counts it: a task due
+      // today is due, not overdue. Comparing with "now" disagreed with the
+      // task's own isOverdue flag for the whole of its due date.
+      ...(q.overdue === 'true' ? { dueDate: { lt: startOfUtcDay() }, status: { not: 'COMPLETED' } } : {}),
     },
     include: TASK_INCLUDE,
     orderBy: [{ dueDate: 'asc' }],
-    take: Math.min(300, Number(req.query.limit) || 100),
+    take: Math.min(300, Number(q.limit) || 100),
   });
   res.json({ data: tasks.map((t) => toDto(t)) });
 }));
@@ -178,7 +201,10 @@ tasksRouter.post('/:id/assign', requirePermission('task:assign'), asyncHandler(a
 }));
 
 const patchSchema = z.object({
-  dueDate: z.string().nullable().optional(),
+  // A real date or nothing; "garbage" used to reach Prisma as Invalid Date.
+  dueDate: z.string()
+    .refine((v) => !Number.isNaN(new Date(v).getTime()), 'The due date is not a valid date.')
+    .nullable().optional(),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).optional(),
   notes: z.string().nullable().optional(),
   status: z.enum(['NOT_STARTED', 'IN_PROGRESS', 'WAITING', 'BLOCKED']).optional(),
@@ -190,10 +216,22 @@ tasksRouter.patch('/:id', requirePermission('task:assign'), asyncHandler(async (
   const task = await prisma.task.findUnique({ where: { id: req.params.id } });
   if (!task) throw new NotFoundError('Task');
 
+  // Moving a completed task to another status here kept its completion date
+  // and who completed it, so it read as done and not done at once. Reopening
+  // clears both, and is its own action.
+  if (task.status === 'COMPLETED' && input.status) {
+    throw new BadRequestError(
+      'This task is completed. Reopen it first (POST /api/tasks/:id/reopen), then change its status.',
+    );
+  }
+  // A reason for being blocked stops being true the moment the task is not.
+  const leavingBlocked = input.status !== undefined && input.status !== 'BLOCKED' && task.status === 'BLOCKED';
+
   await prisma.task.update({
     where: { id: task.id },
     data: {
       ...input,
+      ...(leavingBlocked ? { blockedReason: null } : {}),
       dueDate: input.dueDate === undefined ? undefined : input.dueDate ? new Date(input.dueDate) : null,
     },
   });

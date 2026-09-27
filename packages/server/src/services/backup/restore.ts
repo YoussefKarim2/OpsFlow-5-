@@ -9,9 +9,9 @@
  * means computing that order and keeping it right forever; instead the whole
  * restore runs with `session_replication_role = replica`, which suspends
  * triggers and FK checks for this session only. Postgres's own `pg_restore`
- * does the same thing for the same reason. Constraints are enforced again the
- * moment the transaction ends, so a dump with a genuinely broken reference
- * fails at COMMIT rather than being quietly accepted.
+ * does the same thing for the same reason. Postgres does not re-check the rows
+ * afterwards, so a dump with a broken reference would be accepted as it is —
+ * which is why `createBackup` reads every table from one snapshot.
  *
  * It is all one transaction. A restore that half-succeeds leaves a database
  * that is neither the old one nor the new one, which is worse than the failure
@@ -98,7 +98,9 @@ export async function restoreBackup(buffer: Buffer): Promise<RestoreResult> {
     for (const [table, tableRows] of Object.entries(payload.tables)) {
       if (!present.has(table)) continue;
       for (const raw of tableRows as Array<Record<string, unknown>>) {
-        const entries = Object.entries(raw);
+        // A column dropped since the dump was taken is skipped, the same way a
+        // dropped table is; otherwise one renamed field fails the whole restore.
+        const entries = Object.entries(raw).filter(([k]) => casts.has(`${table}.${k}`));
         if (entries.length === 0) continue;
         const columns = entries.map(([k]) => `"${k}"`).join(', ');
         const params = entries

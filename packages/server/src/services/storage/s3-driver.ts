@@ -6,6 +6,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { StorageDriver, PutOptions } from './index.js';
 import { NotFoundError } from '../../errors.js';
+import { contentDisposition } from '../../util/upload-name.js';
 
 export interface S3Config {
   bucket: string;
@@ -81,7 +82,7 @@ export class S3Driver implements StorageDriver {
         ContentType: options.mimeType,
         // Kept so a browser handed a presigned URL saves the file under the
         // name somebody uploaded, rather than under a UUID.
-        ContentDisposition: `inline; filename="${options.fileName.replace(/"/g, '')}"`,
+        ContentDisposition: contentDisposition('inline', options.fileName),
       }),
     );
     return key;

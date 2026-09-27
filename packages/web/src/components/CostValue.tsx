@@ -131,13 +131,15 @@ export function CostField({
 
 /** A figure stored in its own column rather than typed over a calculation. */
 export function StoredField({
-  label, editing, value, onChange, hint, type = 'decimal',
+  label, editing, value, onChange, hint, invalid, type = 'decimal',
 }: {
   label: string;
   editing: boolean;
   value: string;
   onChange: (v: string) => void;
   hint?: string;
+  /** Why what was typed cannot be stored, when it cannot. Shown under the field. */
+  invalid?: string;
   type?: 'decimal' | 'date';
 }) {
   return (
@@ -152,10 +154,14 @@ export function StoredField({
             />
           ) : (
             <input
-              type="text" inputMode="decimal" className="input tnum text-right" value={value}
+              type="text" inputMode="decimal"
+              className={clsx('input tnum text-right', invalid && 'border-red-400 ring-1 ring-red-400')}
+              value={value}
+              aria-invalid={invalid ? true : undefined}
               onChange={(e) => { if (isTypeableNumber(e.target.value)) onChange(e.target.value); }}
             />
           )}
+          {invalid && <p className="mt-1 text-2xs text-red-700">{invalid}</p>}
           {hint && <p className="mt-1 text-2xs text-ink-500">{hint}</p>}
         </>
       ) : (

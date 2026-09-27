@@ -222,6 +222,11 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
     onError: (e) => toast.error(e),
   });
 
+  const exportXlsx = useMutation({
+    mutationFn: () => api.steps.downloadProformaXlsx(orderId),
+    onError: (e) => toast.error(e),
+  });
+
   const send = useMutation({
     mutationFn: () => api.steps.sendProforma(orderId),
     onSuccess: () => { refresh(); setConfirmSend(false); toast.success('Marked as sent to the customer'); },
@@ -346,15 +351,15 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
               <Upload className="h-3.5 w-3.5" />
               {importFile.isPending ? 'Reading…' : 'Import from file'}
             </button>
-            <a
+            <button
+              type="button"
               className="btn-secondary btn-sm"
-              href={`/api${api.steps.proformaExportUrl(orderId)}`}
               title={invoice ? undefined : 'Save the invoice first'}
-              aria-disabled={!invoice}
-              onClick={(e) => { if (!invoice) e.preventDefault(); }}
+              disabled={!invoice || exportXlsx.isPending}
+              onClick={() => exportXlsx.mutate()}
             >
-              <Download className="h-3.5 w-3.5" /> Export Excel
-            </a>
+              <Download className="h-3.5 w-3.5" /> {exportXlsx.isPending ? 'Exporting…' : 'Export Excel'}
+            </button>
             <button
               type="button"
               className="btn-secondary btn-sm"

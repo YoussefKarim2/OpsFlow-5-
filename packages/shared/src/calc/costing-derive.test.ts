@@ -17,12 +17,12 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { deriveCostLines, bomGroupFor, type DerivableInputs } from './costing-derive.js';
+import {
+  deriveCostLines, bomGroupFor, bomSourceRef, sourceRefCovers, visibleDerivedLines,
+  type DerivableInputs,
+} from './costing-derive.js';
 
-const EMPTY: DerivableInputs = {
-  bom: [], external: [],
-  production: { machineDaysUsed: null, dailyCostEgp: null, dollarRate: null },
-};
+const EMPTY: DerivableInputs = { bom: [], external: [] };
 
 describe('deriving cost lines from the production sections', () => {
   test('nothing recorded means nothing claimed', () => {
@@ -34,7 +34,7 @@ describe('deriving cost lines from the production sections', () => {
     // issued arrives blank, with its planned figure alongside.
     const [line] = deriveCostLines({
       ...EMPTY,
-      bom: [{ category: 'FABRIC', item: 'Jersey', issuedQty: 0, requiredQty: 500, unit: 'M', unitPriceUsd: 2 }],
+      bom: [{ id: 'b1', category: 'FABRIC', item: 'Jersey', issuedQty: 0, requiredQty: 500, unit: 'M', unitPriceUsd: 2 }],
     });
     assert.equal(line!.quantity, null, 'nothing issued is not a consumption');
     assert.equal(line!.estimatedQty, 500, 'but the plan is there to measure against');
@@ -46,8 +46,8 @@ describe('deriving cost lines from the production sections', () => {
     const lines = deriveCostLines({
       ...EMPTY,
       bom: [
-        { category: 'FABRIC', item: 'Jersey', issuedQty: 100, requiredQty: 100, unit: 'M', unitPriceUsd: 2 },
-        { category: 'FABRIC', item: 'Rib', issuedQty: 50, requiredQty: 50, unit: 'M', unitPriceUsd: 1 },
+        { id: 'b2', category: 'FABRIC', item: 'Jersey', issuedQty: 100, requiredQty: 100, unit: 'M', unitPriceUsd: 2 },
+        { id: 'b3', category: 'FABRIC', item: 'Rib', issuedQty: 50, requiredQty: 50, unit: 'M', unitPriceUsd: 1 },
       ],
     });
     assert.equal(lines.length, 2);
@@ -56,7 +56,10 @@ describe('deriving cost lines from the production sections', () => {
     assert.equal(jersey.quantity, 100);
     assert.equal(jersey.unit, 'M');
     assert.equal(jersey.unitPriceUsd, 2);
-    assert.equal(jersey.sourceRef, 'bom:FABRIC');   // follow it back
+    // Follow it back — to the row, not only the category, so the sheet can
+    // edit or remove this fabric without touching the other one.
+    assert.equal(jersey.sourceRef, bomSourceRef('FABRIC', 'b2'));
+    assert.notEqual(lines[0]!.sourceRef, lines[1]!.sourceRef);
   });
 
   test('an unpriced material is shown, with no price rather than a zero', () => {
@@ -66,8 +69,8 @@ describe('deriving cost lines from the production sections', () => {
     const lines = deriveCostLines({
       ...EMPTY,
       bom: [
-        { category: 'FABRIC', item: 'Jersey', issuedQty: 100, requiredQty: 100, unit: 'M', unitPriceUsd: 2 },
-        { category: 'FABRIC', item: 'Mesh', issuedQty: 20, requiredQty: 20, unit: 'M', unitPriceUsd: null },
+        { id: 'b4', category: 'FABRIC', item: 'Jersey', issuedQty: 100, requiredQty: 100, unit: 'M', unitPriceUsd: 2 },
+        { id: 'b5', category: 'FABRIC', item: 'Mesh', issuedQty: 20, requiredQty: 20, unit: 'M', unitPriceUsd: null },
       ],
     });
     assert.equal(lines.length, 2);
@@ -79,7 +82,7 @@ describe('deriving cost lines from the production sections', () => {
   test('a missing quantity leaves the consumption blank, not zero', () => {
     const [line] = deriveCostLines({
       ...EMPTY,
-      bom: [{ category: 'LABEL', item: 'Neck label', issuedQty: null, requiredQty: null, unit: 'PCS', unitPriceUsd: 0.1 }],
+      bom: [{ id: 'b6', category: 'LABEL', item: 'Neck label', issuedQty: null, requiredQty: null, unit: 'PCS', unitPriceUsd: 0.1 }],
     });
     assert.equal(line!.quantity, null);
     assert.equal(line!.group, 'ACCESSORY');
@@ -134,34 +137,67 @@ describe('deriving cost lines from the production sections', () => {
     assert.equal(line!.quantity, 200, 'the quantity that went out is still known');
   });
 
-  test('production labour follows the workbook: machine-days × daily cost, converted', () => {
-    const [line] = deriveCostLines({
-      ...EMPTY,
-      production: { machineDaysUsed: 10, dailyCostEgp: 4850, dollarRate: 48.5 },
+  test('no production labour line is derived; the C.M row is that cost', () => {
+    // computeCosting never totalled a LABOUR line, yet the sheet listed it
+    // with a cost and a share of a total it was not part of — $5,004 at 2175%
+    // of a $230 costing. The cut-and-make row replaced it.
+    const lines = deriveCostLines({
+      bom: [{ id: 'x', category: 'FABRIC', item: 'Jersey', issuedQty: 10, requiredQty: 10, unit: 'M', unitPriceUsd: 2 }],
+      external: [{ operationType: 'PRINTING', qty: 10, unitPriceUsd: 1 }],
     });
-    assert.equal(line!.group, 'LABOUR');
-    assert.equal(line!.quantity, 10);
-    assert.equal(line!.unitPriceUsd, 100);           // 4850 / 48.5
-    assert.equal(line!.sourceRef, 'production:machine-days');
-  });
-
-  test('an incomplete production record invents no rate', () => {
-    for (const p of [
-      { machineDaysUsed: 10, dailyCostEgp: null, dollarRate: 48.5 },
-      { machineDaysUsed: null, dailyCostEgp: 4850, dollarRate: 48.5 },
-      { machineDaysUsed: 10, dailyCostEgp: 4850, dollarRate: 0 },
-    ]) {
-      assert.deepEqual(deriveCostLines({ ...EMPTY, production: p }), []);
-    }
+    assert.ok(lines.every((l) => l.group !== 'LABOUR'));
+    assert.ok(lines.every((l) => !l.sourceRef.startsWith('production:')));
   });
 
   test('every derived line says where it came from', () => {
     const lines = deriveCostLines({
-      bom: [{ category: 'FABRIC', item: 'Jersey', issuedQty: 10, requiredQty: 10, unit: 'M', unitPriceUsd: 2 }],
+      bom: [{ id: 'b7', category: 'FABRIC', item: 'Jersey', issuedQty: 10, requiredQty: 10, unit: 'M', unitPriceUsd: 2 }],
       external: [{ operationType: 'PRINTING', qty: 10, unitPriceUsd: 1 }],
-      production: { machineDaysUsed: 2, dailyCostEgp: 970, dollarRate: 48.5 },
     });
-    assert.equal(lines.length, 3);
-    for (const l of lines) assert.match(l.sourceRef, /^(bom|external|production):.+/);
+    assert.equal(lines.length, 2);
+    for (const l of lines) assert.match(l.sourceRef, /^(bom|external):.+/);
+  });
+});
+
+describe('editing or removing one derived row', () => {
+  const lines = deriveCostLines({
+    ...EMPTY,
+    bom: [
+      { id: 'f1', category: 'FABRIC', item: 'Jersey', issuedQty: 100, requiredQty: 100, unit: 'M', unitPriceUsd: 2 },
+      { id: 'f2', category: 'FABRIC', item: 'Rib', issuedQty: 50, requiredQty: 50, unit: 'M', unitPriceUsd: 1 },
+      { id: 'a1', category: 'LABEL', item: 'Neck label', issuedQty: 10, requiredQty: 10, unit: 'PCS', unitPriceUsd: 0.1 },
+    ],
+    external: [{ operationType: 'PRINTING', qty: 10, unitPriceUsd: 1 }],
+  });
+  const labels = (ls: readonly { label: string }[]) => ls.map((l) => l.label).sort();
+
+  test('editing one fabric row leaves the other fabric rows alone', () => {
+    // Every fabric row used to carry `bom:FABRIC`, so the edited copy claimed
+    // all of them and the rest vanished from the costing.
+    const kept = visibleDerivedLines(lines, [bomSourceRef('FABRIC', 'f1')], []);
+    assert.deepEqual(labels(kept), ['Neck label', 'Printing', 'Rib']);
+  });
+
+  test('deleting one fabric row hides only that row', () => {
+    const kept = visibleDerivedLines(lines, [], [bomSourceRef('FABRIC', 'f2')]);
+    assert.deepEqual(labels(kept), ['Jersey', 'Neck label', 'Printing']);
+  });
+
+  test('a reference saved before rows were named still means the whole category', () => {
+    // Existing costings hold `bom:FABRIC`; what they meant must not change.
+    assert.deepEqual(labels(visibleDerivedLines(lines, [], ['bom:FABRIC'])), ['Neck label', 'Printing']);
+    assert.deepEqual(labels(visibleDerivedLines(lines, ['bom:FABRIC'], [])), ['Neck label', 'Printing']);
+  });
+
+  test('the category rule does not leak into other categories or sections', () => {
+    assert.ok(!sourceRefCovers('bom:FAB', bomSourceRef('FABRIC', 'f1')));
+    assert.ok(!sourceRefCovers('bom', bomSourceRef('FABRIC', 'f1')));
+    assert.ok(!sourceRefCovers(bomSourceRef('FABRIC', 'f1'), bomSourceRef('FABRIC', 'f10')));
+    assert.ok(sourceRefCovers('external:PRINTING', 'external:PRINTING'));
+    assert.ok(!sourceRefCovers('external:PRINT', 'external:PRINTING'));
+  });
+
+  test('nothing claimed or hidden leaves every line', () => {
+    assert.equal(visibleDerivedLines(lines, [null, undefined, ''], []).length, lines.length);
   });
 });

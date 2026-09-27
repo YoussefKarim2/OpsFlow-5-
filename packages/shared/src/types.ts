@@ -136,6 +136,12 @@ export interface OrderDetailDto {
   cutVariance: CutVariance;
   stockDeduction: StockDeduction;
   production: ProductionAnalytics;
+  /**
+   * Pieces produced, as the rest of the order counts them: the in-line ledger
+   * or the sewing records, whichever is further along. `production.producedQty`
+   * is sewing only; this is the figure the shipment limit is checked against.
+   */
+  producedQty: number;
   bom: BomSummary | null;
   /** Requirements against real stock: reserved, reservable, genuinely short. */
   materials: MaterialPosition | null;
@@ -147,11 +153,14 @@ export interface OrderDetailDto {
   /** Expected against actual consumption, per material with a known rate. */
   consumption: ConsumptionVariance[];
   /**
-   * Always present. `hasRecord` says whether anybody has entered the factory's
-   * own figures yet; everything derivable from the order itself is filled in
-   * either way.
+   * `hasRecord` says whether anybody has entered the factory's own figures yet;
+   * everything derivable from the order itself is filled in either way.
+   *
+   * Null for a caller without `costing:read`. The block carries the unit cost,
+   * the profit and the margin, which the costing permission exists to guard,
+   * and the order detail is readable by every role.
    */
-  costing: CostingResult;
+  costing: CostingResult | null;
   qualityPassPct: number | null;
 
   counts: {

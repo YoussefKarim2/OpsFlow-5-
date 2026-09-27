@@ -21,6 +21,7 @@
  */
 
 import { gzipSync, gunzipSync } from 'node:zlib';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../../db.js';
 
 /** What a dump file contains, once un-gzipped. */
@@ -99,6 +100,16 @@ export async function createBackup(): Promise<{
         Object.fromEntries(Object.entries(row).map(([k, v]) => [k, encode(v)])));
       counts[table] = rows.length;
     }
+  }, {
+    // Every table is read from one snapshot. Under the default READ COMMITTED
+    // each SELECT saw the database as it was at that moment, so a carton
+    // written between two tables could leave a dump whose references do not
+    // resolve — and restore, with triggers off, would accept it silently.
+    isolationLevel: Prisma.TransactionIsolationLevel.RepeatableRead,
+    // The default five seconds is a query budget, not a dump budget; a
+    // database with its files stored in it outgrows that long before it is big.
+    timeout: 10 * 60_000,
+    maxWait: 30_000,
   });
 
   const payload: BackupPayload = {

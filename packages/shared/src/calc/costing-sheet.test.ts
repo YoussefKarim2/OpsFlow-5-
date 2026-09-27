@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeCosting, type CostingInput, type CostLineInput } from './costing.js';
+import { computeCosting, outsideWorkKind, type CostingInput, type CostLineInput } from './costing.js';
 import { fmtMoney, fmtPct, fmtNumber, NOT_CALCULATED } from './num.js';
 import { sanitiseOverrides } from './costing-overrides.js';
 
@@ -402,5 +402,56 @@ describe('actual costing — what may be stored as an override', () => {
     for (const junk of [null, undefined, 'string', 42, [], [1, 2]]) {
       assert.deepEqual(sanitiseOverrides(junk), {});
     }
+  });
+});
+
+describe('actual costing — why productivity is missing', () => {
+  test('zero work days is named as such, not as a missing cut quantity', () => {
+    // No machine-days on a known machine count gives zero work days, and no
+    // rate can be worked out per day of nothing. The cut quantity was there.
+    const r = computeCosting({ ...BASE, lineMachineQty: 0, daysInLine: 11 });
+    assert.equal(r.workDays, 0);
+    assert.equal(r.productivityRate, null);
+    assert.doesNotMatch(r.waiting.productivityRate ?? '', /cut quantity/);
+    assert.match(r.waiting.productivityRate ?? '', /work days/);
+  });
+
+  test('unknown work days still asks for the work days', () => {
+    const r = computeCosting({ ...BASE, lineMachineQty: null, daysInLine: null, machineDaysUsed: null });
+    assert.equal(r.waiting.productivityRate, 'Waiting for the work days');
+  });
+});
+
+describe('actual costing — outside work has one row each', () => {
+  test('sublimation and embroidery lines belong to their own rows', () => {
+    assert.equal(outsideWorkKind({ label: 'Sublimation', sourceRef: 'external:SUBLIMATION' }), 'SUBLIMATION');
+    assert.equal(outsideWorkKind({ label: 'Embroidery', sourceRef: 'external:EMBROIDERY' }), 'EMBROIDERY');
+    assert.equal(outsideWorkKind({ label: 'Sublimation embroidery', sourceRef: null }), 'SUBLIMATION');
+    assert.equal(outsideWorkKind({ label: 'Printing', sourceRef: 'external:PRINTING' }), null);
+  });
+
+  test('only the others are listed among the other outside work', () => {
+    const r = computeCosting({
+      ...BASE,
+      lines: [
+        line('EXTERNAL', 'Sublimation', 100, 'PCS', 1, 'external:SUBLIMATION'),
+        line('EXTERNAL', 'Printing', 100, 'PCS', 0.5, 'external:PRINTING'),
+      ],
+    });
+    assert.deepEqual(r.groups.external.lines.map((l) => l.label), ['Printing']);
+    assert.equal(r.sublimationCostUsd, 100);
+  });
+});
+
+describe('actual costing — the dollar rate', () => {
+  test('an unset rate is named as missing, not assumed', () => {
+    const r = computeCosting({ ...BASE, dollarRate: null });
+    assert.equal(r.dollarRate, null);
+    assert.equal(r.waiting.dollarRate, 'Waiting for the dollar rate');
+    assert.equal(r.cmCostUsd, null);
+  });
+
+  test('a recorded rate asks for nothing', () => {
+    assert.equal(computeCosting(BASE).waiting.dollarRate, undefined);
   });
 });

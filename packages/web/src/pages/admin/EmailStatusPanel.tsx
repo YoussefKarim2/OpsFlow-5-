@@ -15,6 +15,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, CheckCircle2, Clock, Mail, RefreshCw, Send } from 'lucide-react';
 import { fmtDate } from '@opsflow/shared';
 import { api } from '../../lib/api';
+import { useAuth } from '../../lib/auth';
 import { Card, CardHeader, Spinner, EmptyState, clsx, useToast } from '../../components/ui';
 
 const STATUS_STYLE: Record<string, { chip: string; Icon: typeof Mail }> = {
@@ -24,6 +25,7 @@ const STATUS_STYLE: Record<string, { chip: string; Icon: typeof Mail }> = {
 };
 
 export function EmailStatusPanel() {
+  const { isSuperAdmin } = useAuth();
   const qc = useQueryClient();
   const toast = useToast();
   const [filter, setFilter] = useState<string>('');
@@ -70,14 +72,17 @@ export function EmailStatusPanel() {
             <button className="btn-ghost btn-sm" onClick={refresh}>
               <RefreshCw className="h-3.5 w-3.5" /> Refresh
             </button>
-            <button
+            {/* Sending and retrying are super-administrator actions on the
+                server; an administrator who can read this panel was shown
+                buttons that only ever answered 403. */}
+            {isSuperAdmin && <button
               className="btn-secondary btn-sm"
               disabled={!data.configured || test.isPending}
               onClick={() => test.mutate()}
               title={data.configured ? undefined : 'Configure Microsoft 365 first'}
             >
               <Send className="h-3.5 w-3.5" /> {test.isPending ? 'Sending…' : 'Send me a test'}
-            </button>
+            </button>}
           </div>
         }
       />
@@ -135,13 +140,15 @@ export function EmailStatusPanel() {
             {data.counts.PENDING} message{data.counts.PENDING === 1 ? '' : 's'} waiting. They retry
             automatically.
           </span>
-          <button
-            className="btn-ghost btn-sm ml-auto"
-            disabled={retry.isPending}
-            onClick={() => retry.mutate()}
-          >
-            Try now
-          </button>
+          {isSuperAdmin && (
+            <button
+              className="btn-ghost btn-sm ml-auto"
+              disabled={retry.isPending}
+              onClick={() => retry.mutate()}
+            >
+              Try now
+            </button>
+          )}
         </div>
       )}
 

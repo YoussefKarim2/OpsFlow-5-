@@ -15,6 +15,7 @@ import { asyncHandler } from '../util/async-handler.js';
 import { ForbiddenError, GoneError, NotFoundError, UnauthorizedError } from '../errors.js';
 import { verifyFileToken } from '../services/file-links.js';
 import { verifySessionToken } from '../middleware/auth.js';
+import { contentDisposition } from '../util/upload-name.js';
 
 export const filesRouter = Router();
 
@@ -73,9 +74,8 @@ filesRouter.get('/:key', asyncHandler(async (req, res) => {
   }
 
   res.setHeader('Content-Type', attachment.mimeType);
-  // Quoting is not enough on its own — a filename containing a quote would
-  // break out of the header, so the raw quotes are stripped.
-  res.setHeader('Content-Disposition', `inline; filename="${attachment.fileName.replace(/["\\]/g, '')}"`);
+  // The name may hold quotes or Arabic; contentDisposition makes either safe.
+  res.setHeader('Content-Disposition', contentDisposition('inline', attachment.fileName));
   res.setHeader('X-Content-Type-Options', 'nosniff');
   // A signed link is already scoped and short-lived; letting a shared cache
   // keep the bytes would outlive both properties.

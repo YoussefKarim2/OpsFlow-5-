@@ -18,7 +18,7 @@ import {
   resolveShippedQty, furthestShipmentStatus, recordedCutQty,
   computeProductionAnalytics, computeBomSummary, computeCosting, computeQualityPassPct,
   computeMaterialPosition, computeStockPosition, computeConsumptionVariance,
-  computeMarkerPlan, evaluateAllGates, sanitiseOverrides, deriveCostLines,
+  computeMarkerPlan, evaluateAllGates, sanitiseOverrides, deriveCostLines, visibleDerivedLines,
   ledgerTotals, buildMatrix, daysBetween, sum, qtyAdd, qtySub,
   type QtyCell, type AxisRef, type TaskLike, type OrderDetailDto, type OrderSummaryDto,
   type TaskDto, type BomItemInput, type CostLineInput, type ProductionEntry, type Alert,
@@ -179,6 +179,9 @@ function toRequirementInputs(order: FullOrder): RequirementInput[] {
       reservedQty,
       issuedQty: Number(b.issuedQty.toString()),
       availableQty,
+      // Reservations and balances are counted in the material's unit; the
+      // calculation converts them to the line's before comparing.
+      stockUnit: b.material?.unit ?? null,
     };
   });
 }
@@ -288,6 +291,8 @@ export interface DerivedOrder {
   costing: ReturnType<typeof computeCosting>;
   /** Pieces shipped, from whichever record holds the answer. */
   shippedQty: number;
+  /** In-line ledger or sewing records, whichever is further along. */
+  producedQty: number;
   daysRemaining: number | null;
 }
 
@@ -314,11 +319,10 @@ export interface DerivedOrder {
 function costingLines(order: FullOrder): CostLineInput[] {
   const cr = order.costing;
   const manual = (cr?.lines ?? []).filter((l) => l.source === 'MANUAL');
-  const claimed = new Set(manual.map((l) => l.sourceRef).filter((r): r is string => !!r));
-  const hidden = new Set(cr?.hiddenCostRefs ?? []);
 
-  const derived = deriveCostLines({
+  const derived = visibleDerivedLines(deriveCostLines({
     bom: order.bomItems.map((b) => ({
+      id: b.id,
       category: b.category,
       item: b.item,
       issuedQty: dec(b.issuedQty),
@@ -331,12 +335,7 @@ function costingLines(order: FullOrder): CostLineInput[] {
       qty: e.qty,
       unitPriceUsd: dec(e.unitPriceUsd),
     })),
-    production: {
-      machineDaysUsed: cr?.machineDaysUsed ?? null,
-      dailyCostEgp: dec(cr?.dailyCostEgp),
-      dollarRate: cr == null ? null : Number(cr.dollarRate.toString()),
-    },
-  }).filter((l) => !claimed.has(l.sourceRef) && !hidden.has(l.sourceRef));
+  }), manual.map((l) => l.sourceRef), cr?.hiddenCostRefs ?? []);
 
   return [
     ...derived.map<CostLineInput>((l) => ({
@@ -391,6 +390,12 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     (a) => a.status === 'PENDING' && a.blocking,
   );
   const latestPackingList = order.packingLists.at(-1) ?? null;
+  const shipmentStatus = furthestShipmentStatus(order.shipments);
+  // The verdict that stands is the most recent decided inspection.
+  const latestDecidedAudit = order.qualityAudits
+    .filter((a) => a.result !== 'PENDING')
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+    .at(-1);
 
   const status = deriveOrderStatus({
     cancelled: order.cancelled,
@@ -398,12 +403,13 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     // The furthest any consignment has reached, not whichever row came back
     // last: an order with one shipment gone and another being prepared has
     // shipped, and the answer must not depend on row order.
-    shipmentStatus: furthestShipmentStatus(order.shipments),
+    shipmentStatus,
     orderQty: totals[QtyLedger.ORDER] ?? 0,
     producedQty,
     packedQty,
     shippedQty,
     qualityPassedQty: totals[QtyLedger.OUT_LINE] ?? 0,
+    qualityAuditPassed: !openQualityFailure && latestDecidedAudit?.result === 'PASS',
     packingApproved: latestPackingList?.approved ?? false,
     materialsFullyIssued: bom?.fullyIssued ?? false,
     hasPendingBlockingApproval: pendingBlockingApproval,
@@ -435,6 +441,7 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
             cells.filter((c) => c.sizeId === s.id && c.ledger === QtyLedger.CUT).reduce((a, c) => a + c.qty, 0),
           ]),
         ),
+        { mainFabric: order.fabric },
       )
     : null;
 
@@ -460,14 +467,17 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
         ((materials?.shortCount ?? 0) > 1 ? `, and ${(materials!.shortCount - 1)} other material${materials!.shortCount === 2 ? '' : 's'} are short too.` : '.')
       : null,
     hasMarkers: order.markers.length > 0,
-    markerCoversRequirement: markerPlan ? markerPlan.varianceTotal >= 0 : false,
-    markerShortfall: markerPlan?.varianceTotal ?? 0,
+    // Every size, not the total: a surplus of XLs does not cover missing smalls.
+    markerCoversRequirement: markerPlan ? markerPlan.coversRequirement : false,
+    markerShortfall: markerPlan ? -markerPlan.shortfallTotal : 0,
     hasPendingBlockingApproval: !!blockingApproval,
     pendingApprovalLabel: blockingApproval
       ? `${blockingApproval.type.replace(/_/g, ' ').toLowerCase()} approval`
       : null,
+    // A cancelled operation is never going to be sent, so it waits on nothing.
     externalOpsBlocked: order.externalOperations.filter(
-      (op) => op.requiresApproval && op.approval?.status !== 'APPROVED' && op.status !== 'RETURNED',
+      (op) => op.requiresApproval && op.approval?.status !== 'APPROVED'
+        && op.status !== 'RETURNED' && op.status !== 'CANCELLED',
     ).length,
     hasOpenQualityFailure: openQualityFailure,
     qualityInspected: order.qualityAudits.some((a) => a.result !== 'PENDING'),
@@ -493,6 +503,12 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
       packedQty,
       producedQty,
       shippedQty,
+      // Once the goods have gone, date and production alerts describe work
+      // nobody can still do. The furthest consignment is checked as well as
+      // the status because a quality block outranks Shipped in the status.
+      finished:
+        status === 'SHIPPED' || status === 'COMPLETED'
+        || shipmentStatus === 'SHIPPED' || shipmentStatus === 'DELIVERED',
     },
     tasks,
     bom,
@@ -554,7 +570,7 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     orderQty: totals[QtyLedger.ORDER] ?? 0,
     cutQty: totals[QtyLedger.CUT] ?? 0,
     shippedQty: shippedQty > 0 ? shippedQty : null,
-    dollarRate: cr == null ? null : Number(cr.dollarRate.toString()),
+    dollarRate: dec(cr?.dollarRate),
     dailyCostEgp: dec(cr?.dailyCostEgp),
     machineCount: cr?.machineCount ?? null,
     machineDaysUsed: cr?.machineDaysUsed ?? null,
@@ -578,7 +594,7 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     currentStageKey: stage?.stageKey ?? null,
     status, health,
     nextAction: deriveNextAction(stages),
-    alerts, production, bom, costing, shippedQty, daysRemaining,
+    alerts, production, bom, costing, shippedQty, producedQty, daysRemaining,
     materials,
     blockers: gates.blockers,
     warnings: gates.warnings,
@@ -676,9 +692,14 @@ export async function getOrderDetail(orderId: string, today = new Date()): Promi
       // sum. Taking the last row silently discarded every other lay, and a
       // Laying & Marking import writes rows with no quantity at all.
       recordedCutQty(order.cuttingRecords),
+      // The axes let stock be netted per cell, the way the cut order nets it.
+      // Without them the plan was netted on totals and disagreed with the cut
+      // order the Quantity tab generates.
+      d.colors, d.sizes,
     ),
-    stockDeduction: computeStockDeduction(d.cells, cutPct),
+    stockDeduction: computeStockDeduction(d.cells, cutPct, d.colors, d.sizes),
     production: d.production,
+    producedQty: d.producedQty,
     bom: d.bom,
     materials: d.materials,
     blockers: d.blockers,
@@ -710,8 +731,14 @@ function userDto(u: { id: string; name: string; email: string; department: strin
   };
 }
 
-export function buildOrderSummary(order: FullOrder, today = new Date()): OrderSummaryDto {
-  const d = deriveOrder(order, today);
+export function buildOrderSummary(
+  order: FullOrder,
+  today = new Date(),
+  // A caller that has already derived the order passes it in, so the whole
+  // derivation — alerts, gates, costing — is not run twice per order.
+  derived?: DerivedOrder,
+): OrderSummaryDto {
+  const d = derived ?? deriveOrder(order, today);
   const counts = countBySeverity(d.alerts);
   return {
     id: order.id,
@@ -726,7 +753,7 @@ export function buildOrderSummary(order: FullOrder, today = new Date()): OrderSu
     fabric: order.fabric,
     shippingMethod: order.shippingMethod,
     orderQty: d.totals[QtyLedger.ORDER] ?? 0,
-    producedQty: Math.max(d.totals[QtyLedger.IN_LINE] ?? 0, d.production.producedQty),
+    producedQty: d.producedQty,
     packedQty: d.totals[QtyLedger.PACKED] ?? 0,
     shippedQty: d.shippedQty,
     currentStage: d.currentStageKey,

@@ -83,6 +83,12 @@ export function LayingMarkingImportWizard({
       );
       qc.invalidateQueries({ queryKey: ['markers', orderId] });
       qc.invalidateQueries({ queryKey: ['laying-import-history', orderId] });
+      // The import moves more than the lay list: the order's marker figures
+      // and blockers, the workflow steps that read them, and the laying
+      // sheet itself, which is filed as an attachment.
+      qc.invalidateQueries({ queryKey: ['order', orderId] });
+      qc.invalidateQueries({ queryKey: ['order-steps', orderId] });
+      qc.invalidateQueries({ queryKey: ['attachments', orderId] });
       onClose();
     },
     onError: (e) => toast.error(e),

@@ -1,13 +1,12 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { QtyLedger, ledgerTotals } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 import { ORDER_INCLUDE, deriveOrder, refreshOrderCache } from '../services/order-service.js';
 import { logActivity, logAndNotify } from '../services/activity-service.js';
-import { assertShippableQuantity } from '../services/rules.js';
+import { assertShippableQuantity, shipmentTotalAfter } from '../services/rules.js';
 import { getRequestContext } from '../request-context.js';
 import { ledgerDeltas } from '../services/import/carton-ledger.js';
 
@@ -49,6 +48,10 @@ packingRouter.get('/:orderId', requirePermission('packing:read'), asyncHandler(a
         cartonSize: c.cartonSize,
         colorName: c.orderColor?.color.name ?? null,
         sizeName: c.orderSize?.size.name ?? null,
+        // The ids behind the names, so an editor can open a single-size carton
+        // on its own size rather than guessing the first one.
+        orderColorId: c.orderColorId,
+        orderSizeId: c.orderSizeId,
         qty: c.qty,
         grossWeightKg: dec(c.grossWeightKg),
         netWeightKg: dec(c.netWeightKg),
@@ -149,7 +152,10 @@ const cartonLineSchema = z.object({
  */
 packingRouter.put('/cartons/:cartonId/lines', requirePermission('packing:write'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
-  const rows = z.array(cartonLineSchema).parse(req.body.lines);
+  // An empty list is refused rather than read as "this carton holds nothing":
+  // saving it zeroed the carton and took its pieces off the packed ledger. A
+  // carton that should go is deleted, not emptied.
+  const rows = z.array(cartonLineSchema).min(1, 'A carton needs at least one size.').parse(req.body.lines);
 
   const carton = await prisma.carton.findUnique({
     where: { id: req.params.cartonId },
@@ -407,7 +413,9 @@ const shipmentSchema = z.object({
 });
 
 /**
- * Create or update a shipment.
+ * Record a new shipment. Moving an existing one along — booked, shipped,
+ * delivered — is the PATCH below, not a second row: two rows for one
+ * consignment were counted twice as shipped.
  *
  * Enforces the brief's rule that shipped quantity may not exceed produced
  * quantity without an admin override — and when overridden, the reason is
@@ -420,22 +428,24 @@ packingRouter.post('/:orderId/shipments', requirePermission('shipment:write'), a
   const order = await prisma.order.findUnique({ where: { id: req.params.orderId }, include: ORDER_INCLUDE });
   if (!order) throw new NotFoundError('Order');
 
-  const d = deriveOrder(order);
-  const totals = ledgerTotals(d.cells);
-  const producedQty = Math.max(totals[QtyLedger.IN_LINE] ?? 0, d.production.producedQty);
+  // Produced as the rest of the order counts it: in-line ledger or sewing,
+  // whichever is further along.
+  const producedQty = deriveOrder(order).producedQty;
   const reason = getRequestContext()?.reason ?? null;
   const hasOverride = actor.permissions.includes('shipment:override');
+  // Every consignment already recorded plus this one, not this one alone.
+  const shippedTotal = shipmentTotalAfter(order.shipments, input.qty);
 
   if (input.qty > 0) {
     assertShippableQuantity({
-      shippedQty: input.qty,
+      shippedQty: shippedTotal,
       producedQty,
       hasOverridePermission: hasOverride,
       overrideReason: reason,
     });
   }
 
-  const overrode = input.qty > producedQty;
+  const overrode = input.qty > 0 && shippedTotal > producedQty;
 
   const shipment = await prisma.shipment.create({
     data: {
@@ -468,4 +478,101 @@ packingRouter.post('/:orderId/shipments', requirePermission('shipment:write'), a
 
   await refreshOrderCache(order.id);
   res.status(201).json({ id: shipment.id, overrideApplied: overrode });
+}));
+
+/** A real calendar date, or a 400 — never an Invalid Date handed to Prisma. */
+const dateInput = z.string().refine((v) => !Number.isNaN(new Date(v).getTime()), 'Not a valid date.');
+
+const shipmentPatchSchema = z.object({
+  status: z.enum(['NOT_READY', 'READY', 'BOOKED', 'SHIPPED', 'DELIVERED']).optional(),
+  qty: z.number().int().nonnegative().optional(),
+  actualShippingDate: dateInput.nullable().optional(),
+  deliveredDate: dateInput.nullable().optional(),
+  trackingNumber: z.string().nullable().optional(),
+  carrier: z.string().nullable().optional(),
+  awbNumber: z.string().nullable().optional(),
+  finalDestination: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+});
+
+/**
+ * Move a consignment along, or correct it.
+ *
+ * A consignment is one row for its whole life. Before this existed the only
+ * way to say "it arrived" was to record a second, Delivered shipment beside
+ * the Shipped one, and the shipped total — which counts both — doubled.
+ *
+ * The produced limit is checked against the running total with this row's old
+ * quantity left out, so editing a shipment is judged on what it becomes.
+ */
+packingRouter.patch('/shipments/:id', requirePermission('shipment:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const input = shipmentPatchSchema.parse(req.body ?? {});
+
+  const shipment = await prisma.shipment.findUnique({ where: { id: req.params.id } });
+  if (!shipment) throw new NotFoundError('Shipment');
+
+  const order = await prisma.order.findUnique({ where: { id: shipment.orderId }, include: ORDER_INCLUDE });
+  if (!order) throw new NotFoundError('Order');
+
+  const qty = input.qty ?? shipment.qty;
+  const status = input.status ?? shipment.status;
+  const producedQty = deriveOrder(order).producedQty;
+  const reason = getRequestContext()?.reason ?? null;
+  const shippedTotal = shipmentTotalAfter(order.shipments, qty, shipment.id);
+
+  // Only re-checked when the quantity grows: a status change on a consignment
+  // that was accepted (or overridden) when it was recorded is not a new claim.
+  if (qty > shipment.qty) {
+    assertShippableQuantity({
+      shippedQty: shippedTotal,
+      producedQty,
+      hasOverridePermission: actor.permissions.includes('shipment:override'),
+      overrideReason: reason,
+    });
+  }
+  const overrode = qty > shipment.qty && shippedTotal > producedQty;
+
+  const parse = (v: string | null | undefined, current: Date | null): Date | null =>
+    v === undefined ? current : v === null ? null : new Date(v);
+  let actualShippingDate = parse(input.actualShippingDate, shipment.actualShippingDate);
+  let deliveredDate = parse(input.deliveredDate, shipment.deliveredDate);
+  // A consignment that has gone has a departure date, and a delivered one an
+  // arrival date. When nobody typed one, the day it was marked is the best
+  // record there is — better than a gap the invoice step then waits on.
+  const now = new Date();
+  if ((status === 'SHIPPED' || status === 'DELIVERED') && !actualShippingDate) actualShippingDate = now;
+  if (status === 'DELIVERED' && !deliveredDate) deliveredDate = now;
+
+  await prisma.shipment.update({
+    where: { id: shipment.id },
+    data: {
+      status,
+      qty,
+      actualShippingDate,
+      deliveredDate,
+      ...(input.trackingNumber !== undefined ? { trackingNumber: input.trackingNumber } : {}),
+      ...(input.carrier !== undefined ? { carrier: input.carrier } : {}),
+      ...(input.awbNumber !== undefined ? { awbNumber: input.awbNumber } : {}),
+      ...(input.finalDestination !== undefined ? { finalDestination: input.finalDestination } : {}),
+      ...(input.notes !== undefined ? { notes: input.notes } : {}),
+      ...(overrode ? { overrideApproved: true, overrideReason: reason } : {}),
+    },
+  });
+
+  const statusText = (v: string) => v.toLowerCase().replace('_', ' ');
+  await logActivity({
+    orderId: order.id, actorId: actor.id, actorName: actor.name,
+    action: 'SHIPMENT_UPDATED',
+    summary:
+      (status !== shipment.status
+        ? `moved a shipment of ${qty.toLocaleString()} pcs from ${statusText(shipment.status)} to ${statusText(status)}`
+        : `updated a shipment of ${qty.toLocaleString()} pcs`) +
+      (overrode ? ` (override: ${reason})` : ''),
+    entityType: 'Shipment', entityId: shipment.id,
+    meta: { qty, previousQty: shipment.qty, status, previousStatus: shipment.status, overrode },
+  });
+
+  await refreshOrderCache(order.id);
+  res.json({ id: shipment.id, overrideApplied: overrode });
 }));

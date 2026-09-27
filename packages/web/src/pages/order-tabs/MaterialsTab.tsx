@@ -66,6 +66,9 @@ export function MaterialsTab({ order }: { order: OrderDetailDto }) {
       materialId: r.materialId!,
       orderId: order.id,
       qty: r.reservableQty,
+      // The position is stated in the BOM line's unit; the server converts it
+      // to the unit the material is held in.
+      unit: r.unit,
       bomItemId: r.id,
       allowPartial: true,
     }),
@@ -329,6 +332,8 @@ function IssueModal({
       materialId: requirement!.materialId!,
       orderId,
       qty: Number(qty),
+      // Typed in the line's unit, as the field's label says.
+      unit: requirement!.unit,
       bomItemId: requirement!.id,
       stage: 'PRODUCTION_FOLLOW_UP',
       issuedToName: issuedToName || undefined,
@@ -391,6 +396,7 @@ function ReturnModal({
       materialId: requirement!.materialId!,
       orderId,
       qty: Number(qty),
+      unit: requirement!.unit,
       bomItemId: requirement!.id,
       reason: reason || undefined,
     }),

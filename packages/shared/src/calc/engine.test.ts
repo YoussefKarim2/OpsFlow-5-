@@ -399,6 +399,62 @@ describe('materials — marker plan reproduces the Laying sheet', () => {
     assert.equal(plan.varianceBySize['YXS'], -1);
     assert.equal(plan.varianceBySize['YS'], 0);
     assert.equal(plan.varianceBySize['L'], 0);
+    // +6 overall, but YXS is one short — so the plan does not cover the order.
+    assert.equal(plan.coversRequirement, false);
+    assert.equal(plan.shortfallTotal, 1);
+  });
+
+  test('a surplus in one size does not make up a shortage in another', () => {
+    const plan = computeMarkerPlan(
+      [{ id: '1', fabric: 'Rosetta', color: 'White', panel: 'ALL', ratio: '(S2)', layers: 100, markerLengthM: 2 }],
+      { S: 100, M: 50 },
+    );
+    assert.equal(plan.varianceTotal, 50);
+    assert.equal(plan.coversRequirement, false);
+    assert.equal(plan.shortfallTotal, 50);
+  });
+
+  test('a trim fabric or lining lay is not counted as more garments', () => {
+    const plan = computeMarkerPlan(
+      [
+        { id: 'body', fabric: 'Rosetta', color: 'White', panel: 'ALL', ratio: '(S1)', layers: 100, markerLengthM: 2 },
+        { id: 'rib', fabric: 'Rib', color: 'White', panel: 'Collar', ratio: '(S1)', layers: 100, markerLengthM: 1 },
+        { id: 'lining', fabric: 'Mesh', color: 'White', panel: 'ALL', ratio: '(S1)', layers: 60, markerLengthM: 2 },
+      ],
+      { S: 150 },
+      { mainFabric: 'rosetta' },
+    );
+    assert.equal(plan.plannedBySize['S'], 100);
+    assert.deepEqual(plan.garmentLayIds, ['body']);
+    assert.equal(plan.mainFabric, 'Rosetta');
+    assert.equal(plan.coversRequirement, false);
+    // Fabric is still totalled across every lay — all of it has to be bought.
+    assert.equal(plan.totalLayers, 260);
+  });
+
+  test('with no order fabric to go by, the fabric with the most whole-garment pieces is the main one', () => {
+    const plan = computeMarkerPlan(
+      [
+        { id: 'a', fabric: 'Mesh', color: 'W', panel: 'ALL', ratio: '(S1)', layers: 10, markerLengthM: 1 },
+        { id: 'b', fabric: 'Rosetta', color: 'W', panel: 'ALL', ratio: '(S1)', layers: 90, markerLengthM: 1 },
+      ],
+      { S: 90 },
+    );
+    assert.equal(plan.mainFabric, 'Rosetta');
+    assert.equal(plan.plannedBySize['S'], 90);
+    assert.equal(plan.coversRequirement, true);
+  });
+
+  test('a body cut panel by panel makes as many garments as its scarcest panel', () => {
+    const plan = computeMarkerPlan(
+      [
+        { id: 'f', fabric: 'Rosetta', color: 'W', panel: 'Front', ratio: '(S1)', layers: 100, markerLengthM: 1 },
+        { id: 'b', fabric: 'Rosetta', color: 'W', panel: 'Back', ratio: '(S1)', layers: 80, markerLengthM: 1 },
+      ],
+      { S: 100 },
+    );
+    assert.equal(plan.plannedBySize['S'], 80);
+    assert.equal(plan.shortfallTotal, 20);
   });
 });
 
@@ -484,7 +540,24 @@ describe('quality — AQL table from Audit!C11:L16', () => {
     assert.equal(lookupAql(2084)?.sampleSize, 125);
     assert.equal(lookupAql(2084)?.rejectCount, 8);
     assert.equal(lookupAql(50000)?.sampleSize, 315);
-    assert.equal(lookupAql(5), null);
+    assert.equal(lookupAql(0), null, 'nothing to inspect');
+  });
+
+  test('a lot under sixteen pieces still has a sampling plan (ISO 2859-1 level II, A and B)', () => {
+    assert.deepEqual(
+      [lookupAql(5)?.sampleSize, lookupAql(5)?.acceptCount, lookupAql(5)?.rejectCount], [2, 0, 1]);
+    assert.equal(lookupAql(2)?.sampleSize, 2);
+    assert.equal(lookupAql(8)?.sampleSize, 2);
+    assert.equal(lookupAql(9)?.sampleSize, 3);
+    assert.equal(lookupAql(15)?.sampleSize, 3);
+    assert.equal(lookupAql(16)?.sampleSize, 5, 'the printed table takes over at 16');
+    assert.equal(lookupAql(1)?.sampleSize, 1, 'a lot smaller than the sample is inspected whole');
+
+    // The regression: a ten-piece order used to stay PENDING for ever.
+    const clean = computeAudit({ availableQty: 10, defects: [] });
+    assert.equal(clean.result, 'PASS');
+    const bad = computeAudit({ availableQty: 10, defects: [{ category: 'TRIMMING', qty: 1 }] });
+    assert.equal(bad.result, 'FAIL');
   });
 
   test('defects below the reject count pass', () => {

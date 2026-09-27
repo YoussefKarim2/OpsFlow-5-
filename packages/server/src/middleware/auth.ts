@@ -53,10 +53,16 @@ export function signToken(userId: string, email: string): string {
  * meant to be pasted into an address bar must never be able to act as a login.
  */
 export function verifySessionToken(token: string): string | null {
+  return readSessionToken(token)?.userId ?? null;
+}
+
+/** The user id and issue time (seconds) of a session token, or null. */
+function readSessionToken(token: string): { userId: string; issuedAt: number | null } | null {
   try {
-    const payload = jwt.verify(token, config.JWT_SECRET) as Partial<JwtPayload> & { typ?: string };
+    const payload = jwt.verify(token, config.JWT_SECRET) as Partial<JwtPayload> & { typ?: string; iat?: number };
     if (payload.typ === 'file') return null;
-    return typeof payload.sub === 'string' ? payload.sub : null;
+    if (typeof payload.sub !== 'string') return null;
+    return { userId: payload.sub, issuedAt: typeof payload.iat === 'number' ? payload.iat : null };
   } catch {
     return null;
   }
@@ -67,15 +73,24 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
     const header = req.headers.authorization;
     if (!header?.startsWith('Bearer ')) throw new UnauthorizedError();
 
-    const userId = verifySessionToken(header.slice(7));
-    if (!userId) throw new UnauthorizedError('Session expired or invalid. Please sign in again.');
+    const session = readSessionToken(header.slice(7));
+    if (!session) throw new UnauthorizedError('Session expired or invalid. Please sign in again.');
 
     const user = await prisma.user.findUnique({
-      where: { id: userId },
+      where: { id: session.userId },
       include: { role: true },
     });
 
     if (!user) throw new UnauthorizedError('Session expired or invalid. Please sign in again.');
+
+    // A password change ends every session opened before it. Otherwise a
+    // stolen token kept working for its full twelve hours after the victim
+    // changed the password precisely to lock the thief out. `iat` is in whole
+    // seconds, so the change is compared at the same resolution.
+    if (user.passwordChangedAt && session.issuedAt != null
+      && session.issuedAt < Math.floor(user.passwordChangedAt.getTime() / 1000)) {
+      throw new UnauthorizedError('Your password was changed. Please sign in again.');
+    }
 
     // The token was valid, so the holder already knows this account exists —
     // saying plainly that it was switched off is useful, not a disclosure.

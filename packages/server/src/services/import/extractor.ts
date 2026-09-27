@@ -9,10 +9,14 @@
 
 import ExcelJS from 'exceljs';
 import type { ImportProfile, FieldSpec, MatrixSpec } from './profiles.js';
-import { detectProfile } from './profiles.js';
+import { detectProfile, PROFILES } from './profiles.js';
 import type { ImportIssue, ImportSheetInfo, ImportFieldMapping } from '@opsflow/shared';
-import { safeDate, toIsoDateOrNull, toIsoDayOrNull, isValidDate, parseSpreadsheetDate, ImportConcept } from '@opsflow/shared';
+import {
+  safeDate, toIsoDateOrNull, toIsoDayOrNull, isValidDate, parseSpreadsheetDate, ImportConcept, CONCEPT_META,
+} from '@opsflow/shared';
 import { openWorkbook } from './open-workbook.js';
+import { ValidationError } from '../../errors.js';
+import { assertValidPercentage } from '../rules.js';
 
 export interface ExtractedMatrix {
   ledger: string;
@@ -230,6 +234,37 @@ function findAnchor(sheet: ExcelJS.Worksheet, anchor: string, maxRow = 200, maxC
 }
 
 /**
+ * Locate a table's header row: a cell reading exactly `anchor` on a row that
+ * also carries a `companion` heading.
+ *
+ * `findAnchor`'s prefix match is right for a label with a colon after it and
+ * wrong for a one-word column heading. The lay plan's header begins "fabric",
+ * and the same sheet has a "Fabric 1 / Fabric 2 / Fabric Description" block
+ * above it — the prefix match stopped there, read the rows beneath a caption
+ * as lays, found none, and every AGE workbook imported with no lay plan at all.
+ * Requiring the exact word, on a row that also has the table's other heading,
+ * is what tells the table apart from a caption that happens to share a word.
+ */
+function findHeaderRow(
+  sheet: ExcelJS.Worksheet, anchor: string, companion: string, maxRow = 200, maxCol = 80,
+): Found | null {
+  const target = norm(anchor);
+  const also = norm(companion);
+  if (!target) return null;
+  const lastCol = Math.min(sheet.columnCount || maxCol, maxCol);
+  for (let r = 1; r <= Math.min(sheet.rowCount || maxRow, maxRow); r++) {
+    const row = sheet.getRow(r);
+    for (let c = 1; c <= lastCol; c++) {
+      if (norm(cellValue(row.getCell(c))) !== target) continue;
+      for (let k = c + 1; k <= lastCol; k++) {
+        if (norm(cellValue(row.getCell(k))).startsWith(also)) return { row: r, col: c };
+      }
+    }
+  }
+  return null;
+}
+
+/**
  * Read the value at an anchor + offset. When the immediate cell is blank
  * (merged cells report only in their top-left), scan a little further right,
  * which is what a human reading the sheet does.
@@ -433,8 +468,10 @@ function extractBom(sheet: ExcelJS.Worksheet, headerAnchor: string, columns: Rec
 
 // ── Lay reader ──────────────────────────────────────────────────────────────
 
-function extractLays(sheet: ExcelJS.Worksheet, headerAnchor: string, terminator: string): ExtractedLay[] {
-  const header = findAnchor(sheet, headerAnchor);
+function extractLays(
+  sheet: ExcelJS.Worksheet, headerAnchor: string, companion: string, terminator: string,
+): ExtractedLay[] {
+  const header = findHeaderRow(sheet, headerAnchor, companion);
   if (!header) return [];
 
   const wanted = ['fabric', 'color', 'panal', 'size', 'total', 'layers', 'total  length', 'nest', 'marker  length'];
@@ -468,6 +505,141 @@ function extractLays(sheet: ExcelJS.Worksheet, headerAnchor: string, terminator:
     });
   }
   return lays;
+}
+
+// ── Review-screen overrides ─────────────────────────────────────────────────
+
+type OverrideType = FieldSpec['type'];
+
+/** How a field typed on the review screen is read, and what it is called. */
+function overrideSpec(field: string): { type: OverrideType; label: string } {
+  // The profile knows percentages, which the concept table does not.
+  const spec = PROFILES.flatMap((p) => p.fields).find((s) => s.field === field);
+  if (spec) return { type: spec.type, label: spec.label };
+  const meta = Object.values(CONCEPT_META).find((m) => m.field === field);
+  if (meta) return { type: meta.type, label: meta.label };
+  return { type: 'string', label: field };
+}
+
+/**
+ * A number as somebody types it into a box.
+ *
+ * The file reader's `toNumber`, plus the one thing it cannot know: "5,50" in a
+ * box is five and a half written the European way, never five hundred and
+ * fifty. A thousands separator always has three digits after it, so a comma
+ * followed by one or two is taken as the decimal point.
+ */
+function typedNumber(text: string): number | null {
+  const t = text.trim();
+  return toNumber(/^-?\d+,\d{1,2}$/.test(t) ? t.replace(',', '.') : t);
+}
+
+/**
+ * One value typed on the review screen, read as the field it is for.
+ *
+ * These used to go through `new Date()` and `Number()` unchecked. A cleared
+ * delivery date or a typed "13/09/2026" became an Invalid Date that Prisma
+ * refused with a 500 — and as a PO date the same text quietly became today.
+ * A cut percentage typed as 5 was stored as 500%. They now go through the same
+ * readers the file does, the same "above 1 means a whole percentage" rule the
+ * workbook gets, and the same bounds the order form enforces. Anything still
+ * unreadable is refused by name, because a value somebody typed deliberately
+ * must not be dropped quietly.
+ */
+export function parseFieldOverride(field: string, value: string | number | null): string | number | Date | null {
+  if (value == null) return null;
+  const text = String(value).trim();
+  if (text === '') return null;
+
+  const { type, label } = overrideSpec(field);
+  switch (type) {
+    case 'date': {
+      const read = parseSpreadsheetDate(value);
+      if (read.value) return read.value;
+      // "TBC" and friends mean no date; only genuinely unreadable text is refused.
+      if (read.problem) {
+        throw new ValidationError(
+          `${label}: “${text}” could not be read as a date. Enter it as e.g. 13/09/2026 or 2026-09-13.`,
+          { field },
+        );
+      }
+      return null;
+    }
+    case 'number': {
+      const n = typedNumber(text);
+      if (n == null) throw new ValidationError(`${label}: “${text}” is not a number.`, { field });
+      return n;
+    }
+    case 'percent': {
+      const hasSign = /%\s*$/.test(text);
+      const n = typedNumber(text.replace(/%\s*$/, ''));
+      if (n == null) throw new ValidationError(`${label}: “${text}” is not a percentage.`, { field });
+      // "5%" and "5" both mean five per cent; "0.05" is already a fraction.
+      const fraction = hasSign || n > 1 ? n / 100 : n;
+      assertValidPercentage(fraction, label);
+      return fraction;
+    }
+    default:
+      return text;
+  }
+}
+
+/**
+ * Apply the review screen's values on top of an extraction, in place.
+ *
+ * Shared by every reader, so "Apply changes" means the same thing for a PDF or
+ * a recognised workbook as it does for a generic table — and the preview the
+ * coordinator approves is built from exactly what the commit will write. An
+ * issue about a field somebody has now filled in is answered, and is dropped.
+ */
+export function applyFieldOverrides(
+  extraction: Pick<ExtractionResult, 'fields' | 'issues'>,
+  overrides: Record<string, string | number | null> | undefined,
+): void {
+  if (!overrides) return;
+  const answered = new Set<string>();
+  for (const [field, value] of Object.entries(overrides)) {
+    const parsed = parseFieldOverride(field, value);
+    extraction.fields[field] = parsed;
+    if (parsed != null) answered.add(field);
+  }
+  extraction.issues = extraction.issues.filter(
+    (i) => i.level === 'INFO' || i.field == null || !answered.has(i.field),
+  );
+}
+
+// ── Fabric lines from the lay plan ──────────────────────────────────────────
+
+/**
+ * The BOM's fabric lines, as the AGE workbook derives them.
+ *
+ * Its BOM sheet shows them through `ANCHORARRAY('Laying fabric
+ * instructions_Patr'!C46)`, and C46 is a LET over the lay plan: one line per
+ * distinct fabric, panel and colour whose lays use any metres, with the metres
+ * summed. Mirrored here column for column — Item Sort "Fabric", Position the
+ * panel, Item the fabric, Color the colour, Order Qty the metres, Unit
+ * "meter". Two columns are not copied: the formula writes the word "meter"
+ * into Coms./Piece, which is not a consumption, and a fixed "100% Polyester"
+ * into Description, which is a constant rather than anything the order says.
+ */
+export function fabricBomFromLays(lays: readonly ExtractedLay[]): ExtractedBomLine[] {
+  const lines = new Map<string, ExtractedBomLine>();
+  for (const lay of lays) {
+    const fabric = (lay.fabric ?? '').trim();
+    const color = (lay.color ?? '').trim();
+    const metres = lay.totalLengthM ?? 0;
+    if (!fabric || !color || !(metres > 0)) continue;
+    const panel = (lay.panel ?? '').trim();
+    const key = `${fabric}|${panel}|${color}`;
+    const line = lines.get(key) ?? {
+      category: 'Fabric', position: panel || null, consumptionPerPiece: null,
+      item: fabric, description: null, color, requiredQty: 0, unit: 'meter',
+      issuedQty: 0, issuedBy: null, issuedTo: null,
+    };
+    line.requiredQty = (line.requiredQty ?? 0) + metres;
+    lines.set(key, line);
+  }
+  return [...lines.values()];
 }
 
 // ── Main entry ──────────────────────────────────────────────────────────────
@@ -624,7 +796,17 @@ export async function extractWorkbook(buffer: Buffer, forcedProfile?: ImportProf
   const bom = bomSheet && profile.bom ? extractBom(bomSheet, profile.bom.headerAnchor, profile.bom.columns) : [];
 
   const laySheet = profile.lays ? wb.getWorksheet(profile.lays.sheet) : null;
-  const lays = laySheet && profile.lays ? extractLays(laySheet, profile.lays.headerAnchor, profile.lays.terminator) : [];
+  const lays = laySheet && profile.lays ? extractLays(laySheet, profile.lays.headerAnchor, profile.lays.companion, profile.lays.terminator) : [];
+
+  // The workbook's fabric lines are not typed into the BOM sheet: they spill
+  // there from a formula over the lay plan, and a spill carries no values the
+  // reader can see unless Excel cached them — on the real AGE file it cached
+  // #VALUE!, so the section read as empty. The same lines are rebuilt from the
+  // lay plan the way that formula builds them. Only when the sheet yielded no
+  // fabric of its own, so a file whose spill *was* cached is not read twice.
+  if (!bom.some((l) => (l.category ?? '').trim().toLowerCase() === 'fabric')) {
+    bom.push(...fabricBomFromLays(lays));
+  }
 
   // External operation quantities per colour.
   const externalColors: ExtractionResult['externalColors'] = [];

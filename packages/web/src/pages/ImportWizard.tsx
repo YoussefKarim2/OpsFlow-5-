@@ -130,7 +130,10 @@ export function ImportWizardPage() {
       {step === 'analyse' && result && (
         <AnalyseStep
           result={result}
-          onSheetChange={(sheetName) => remap.mutate({ sheetName })}
+          // Column corrections are indexes into one sheet's columns. Carried to
+          // another sheet they point at different columns, and the commit —
+          // which sends them — wrote an order unlike the preview just approved.
+          onSheetChange={(sheetName) => { setColumnMapping({}); remap.mutate({ sheetName }); }}
           busy={remap.isPending}
           // A PDF and a recognised profile both arrive without a column
           // analysis, and there is nothing to map without columns — sending

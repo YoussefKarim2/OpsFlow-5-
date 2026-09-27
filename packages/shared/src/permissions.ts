@@ -135,7 +135,11 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
 
   PRODUCTION_MANAGER: [...READ_ONLY, 'production:write', 'task:complete'],
 
-  WAREHOUSE: [...READ_ONLY, 'material:issue', 'material:edit', 'task:complete', 'costing:write'],
+  // Reads the costing as well as writing it: the warehouse records the
+  // materials actually issued on the Actual Costing sheet, and a sheet that can
+  // be written but not loaded autosaved an empty draft over the real one,
+  // wiping the notes, figures and hand-added rows.
+  WAREHOUSE: [...READ_ONLY, 'material:issue', 'material:edit', 'task:complete', 'costing:read', 'costing:write'],
 
   QUALITY: [...READ_ONLY, 'quality:audit', 'task:complete', 'task:assign'],
 

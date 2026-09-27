@@ -197,9 +197,15 @@ export async function extractLayingMarking(
 
   const rows: LayingRow[] = [];
   const poNumbers = new Set<string>();
+  const fractionalLayers: Array<{ rowNumber: number; read: number; kept: number }> = [];
 
   for (const row of table.rows) {
-    const layers = toNumber(cellAt(row, ImportConcept.LAYERS));
+    const layersRead = toNumber(cellAt(row, ImportConcept.LAYERS));
+    // A lay is a whole number of plies and the Marker table stores an
+    // integer, so a fractional count (139.5) is rounded here — where the
+    // review screen shows it and a warning names the row — rather than
+    // truncated silently by the database at commit.
+    const layers = layersRead == null ? null : Math.round(layersRead);
     const markerLengthM = toNumber(cellAt(row, ImportConcept.MARKER_LENGTH));
     const fabricName = toText(cellAt(row, ImportConcept.FABRIC))
       ?? toText(cellAt(row, ImportConcept.MATERIAL));
@@ -208,6 +214,10 @@ export async function extractLayingMarking(
 
     const po = toText(cellAt(row, ImportConcept.PO_NUMBER));
     if (po) poNumbers.add(po);
+
+    if (layersRead != null && layers !== layersRead) {
+      fractionalLayers.push({ rowNumber: rows.length + 1, read: layersRead, kept: layers! });
+    }
 
     rows.push({
       rowNumber: rows.length + 1,
@@ -244,6 +254,12 @@ export async function extractLayingMarking(
     issues.push({
       level: 'WARNING', field: null, sheet: table.sheetName, cell: null,
       message: 'The columns were identified but no data rows were found under them.',
+    });
+  }
+  for (const f of fractionalLayers) {
+    issues.push({
+      level: 'WARNING', field: 'layers', sheet: table.sheetName, cell: `data row ${f.rowNumber}`,
+      message: `Data row ${f.rowNumber}: layer count ${f.read} is not a whole number; it will be imported as ${f.kept}.`,
     });
   }
   for (const row of rows) {

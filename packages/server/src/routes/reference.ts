@@ -12,7 +12,8 @@ import { ROLE_LABEL, OrderStatus, QtyLedger } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
-import { NotFoundError, ValidationError } from '../errors.js';
+import { ForbiddenError, NotFoundError, ValidationError } from '../errors.js';
+import { optionalQueryDate } from '../util/form-input.js';
 import { ORDER_INCLUDE, buildOrderSummary, deriveOrder } from '../services/order-service.js';
 import { storage } from '../services/storage/index.js';
 import { signedFileUrl } from '../services/file-links.js';
@@ -207,17 +208,27 @@ referenceRouter.get('/orders/:orderId/attachments', requirePermission('order:rea
 
 // ── Reports — the brief's section 36 ────────────────────────────────────────
 
+const reportQuery = z.object({ from: optionalQueryDate, to: optionalQueryDate });
+
 referenceRouter.get('/reports/:kind', requirePermission('report:read'), asyncHandler(async (req, res) => {
   const kind = req.params.kind;
   const today = new Date();
+  const { from, to } = reportQuery.parse(req.query);
+
+  // Every role can read reports, but selling price, cost and profit are
+  // costing information; this report answered them to roles the Costing tab
+  // itself refuses.
+  if (kind === 'costing' && !currentUser(req).permissions.includes('costing:read')) {
+    throw new ForbiddenError('The costing report needs permission to read costing.');
+  }
 
   const where = {
     cancelled: false,
-    ...(req.query.from || req.query.to
+    ...(from || to
       ? {
           requiredDeliveryDate: {
-            ...(req.query.from ? { gte: new Date(req.query.from as string) } : {}),
-            ...(req.query.to ? { lte: new Date(req.query.to as string) } : {}),
+            ...(from ? { gte: new Date(from) } : {}),
+            ...(to ? { lte: new Date(to) } : {}),
           },
         }
       : {}),

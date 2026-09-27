@@ -1,28 +1,47 @@
+import { lazy, Suspense, type ComponentType } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { Permission } from '@opsflow/shared';
 import { AuthProvider, useAuth } from './lib/auth';
 import { AppShell } from './components/AppShell';
 import { Spinner, ToastProvider, EmptyState } from './components/ui';
 import { ErrorBoundary } from './components/ErrorBoundary';
 
-import { DashboardPage } from './pages/Dashboard';
 import { OrdersPage } from './pages/Orders';
-import { OrderWorkspacePage } from './pages/OrderWorkspace';
-import { FollowUpPage } from './pages/FollowUp';
-import { WhatChangedPage } from './pages/WhatChanged';
 import { ForcedPasswordChangePage } from './pages/ChangePassword';
-import { UsersPage } from './pages/admin/UsersPage';
-import { AuditLogPage } from './pages/admin/AuditLogPage';
-import { MaterialsPage } from './pages/inventory/MaterialsPage';
-import { MaterialDetailPage, ReservationsPage, MovementsPage } from './pages/inventory/MaterialDetailPage';
-import { ImportWizardPage } from './pages/ImportWizard';
+
+// The larger screens load when first opened. As one bundle the app was 1.1 MB
+// of JavaScript before the sign-in page could draw, most of it charts and
+// order tabs that a given visit may never reach.
+const named = <K extends string>(load: () => Promise<Record<K, ComponentType>>, name: K) =>
+  lazy(() => load().then((m) => ({ default: m[name] })));
+const DashboardPage = named(() => import('./pages/Dashboard'), 'DashboardPage');
+const OrderWorkspacePage = named(() => import('./pages/OrderWorkspace'), 'OrderWorkspacePage');
+const FollowUpPage = named(() => import('./pages/FollowUp'), 'FollowUpPage');
+const WhatChangedPage = named(() => import('./pages/WhatChanged'), 'WhatChangedPage');
+const UsersPage = named(() => import('./pages/admin/UsersPage'), 'UsersPage');
+const AuditLogPage = named(() => import('./pages/admin/AuditLogPage'), 'AuditLogPage');
+const MaterialsPage = named(() => import('./pages/inventory/MaterialsPage'), 'MaterialsPage');
+const MaterialDetailPage = named(() => import('./pages/inventory/MaterialDetailPage'), 'MaterialDetailPage');
+const ReservationsPage = named(() => import('./pages/inventory/MaterialDetailPage'), 'ReservationsPage');
+const MovementsPage = named(() => import('./pages/inventory/MaterialDetailPage'), 'MovementsPage');
+const ImportWizardPage = named(() => import('./pages/ImportWizard'), 'ImportWizardPage');
 import {
   LoginPage, MyTasksPage, NotificationsPage, ReportsPage,
   ModuleListPage, ClientsPage, FactoriesPage, SettingsPage,
 } from './pages/Misc';
 
-const queryClient = new QueryClient({
+const queryClient: QueryClient = new QueryClient({
+  // The step rail is derived from nearly everything on an order — production,
+  // audits, cartons, shipments, the BOM, external work, costing, tasks — and
+  // listing it in every one of those mutations is how some were missed and the
+  // rail went stale. Any successful write marks it stale instead. Only the rail
+  // on screen refetches, so this costs one small request.
+  mutationCache: new MutationCache({
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ['order-steps'] });
+    },
+  }),
   defaultOptions: {
     queries: {
       staleTime: 30_000,
@@ -73,7 +92,9 @@ function Protected({ children, requires }: { children: React.ReactNode; requires
   // walking away actually clears the error rather than carrying it along.
   return (
     <AppShell>
-      <ErrorBoundary key={location.pathname}>{children}</ErrorBoundary>
+      <ErrorBoundary key={location.pathname}>
+        <Suspense fallback={<Spinner />}>{children}</Suspense>
+      </ErrorBoundary>
     </AppShell>
   );
 }
@@ -106,14 +127,14 @@ export default function App() {
               still lands somewhere sensible instead of on a 404.
             */}
             <Route path="/production" element={<Navigate to="/orders?status=IN_PRODUCTION" replace />} />
-            <Route path="/materials"  element={<Navigate to="/orders?shortages=1" replace />} />
-            <Route path="/external"   element={<Navigate to="/orders?external=1" replace />} />
+            <Route path="/materials"  element={<Navigate to="/orders" replace />} />
+            <Route path="/external"   element={<Navigate to="/orders" replace />} />
             <Route path="/quality"    element={<Navigate to="/orders?status=QUALITY_CHECK" replace />} />
             <Route path="/packing"    element={<Navigate to="/orders?status=PACKING" replace />} />
             <Route path="/shipping"   element={<Navigate to="/orders?status=READY_TO_SHIP" replace />} />
 
             <Route path="/costing" element={
-              <Protected>
+              <Protected requires="costing:read">
                 <ModuleListPage
                   title="Costing" subtitle="Actual cost against selling price"
                   columns={['qty', 'shipped']}

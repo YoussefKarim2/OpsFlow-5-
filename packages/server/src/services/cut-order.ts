@@ -30,6 +30,10 @@ export async function writeCutOrder(order: FullOrder): Promise<{ total: number; 
   const cutCells: QtyCell[] = computeCutMatrix(d.cells, d.colors, d.sizes, cutPct);
 
   await prisma.$transaction(async (tx) => {
+    // Recorded separately from the rows: when stock covers every cell the
+    // cut order is empty, and "generated, nothing to cut" must stay
+    // distinguishable from "never generated" — see `shouldRefreshCutOrder`.
+    await tx.order.update({ where: { id: order.id }, data: { cutOrderGeneratedAt: new Date() } });
     await tx.stageQuantity.deleteMany({ where: { orderId: order.id, ledger: 'CUT' } });
     if (cutCells.length > 0) {
       await tx.stageQuantity.createMany({
@@ -53,12 +57,26 @@ export async function writeCutOrder(order: FullOrder): Promise<{ total: number; 
  * to refresh.
  */
 export async function refreshCutOrder(orderId: string): Promise<number | null> {
-  const existing = await prisma.stageQuantity.count({ where: { orderId, ledger: 'CUT' } });
-  if (existing === 0) return null;
-
   const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
   if (!order) return null;
+  const cutRowCount = order.quantities.filter((q) => q.ledger === 'CUT').length;
+  if (!shouldRefreshCutOrder({ generatedAt: order.cutOrderGeneratedAt, cutRowCount })) return null;
 
   const { total } = await writeCutOrder(order);
   return total;
+}
+
+/**
+ * Whether an order has a cut order to keep up to date.
+ *
+ * Counting CUT rows alone used to decide it, and failed exactly when stock
+ * covered every cell: the rewrite left no rows, and from then on the order
+ * looked as if no cut order had ever been generated — so taking the stock
+ * back out never put the pieces back on the sheet. The generation time is
+ * what answers it now. Rows without one still count: a cut matrix read in by
+ * the order importer, or written before the time was recorded, is a cut order
+ * all the same.
+ */
+export function shouldRefreshCutOrder(state: { generatedAt: Date | null; cutRowCount: number }): boolean {
+  return state.generatedAt != null || state.cutRowCount > 0;
 }

@@ -29,6 +29,12 @@ interface Plan {
   plannedTotal: number; requiredTotal: number; varianceTotal: number;
   totalLayers: number; totalFabricM: number;
   avgConsumptionPerPieceM: number | null; planEfficiencyPct: number | null;
+  /** Lays whose pieces count as garments; trim, lining and extra panel lays do not. */
+  garmentLayIds?: string[];
+  mainFabric?: string | null;
+  /** Every size planned in full — a surplus in one size does not cover another. */
+  coversRequirement?: boolean;
+  shortfallTotal?: number;
 }
 
 interface FabricPos {
@@ -60,6 +66,10 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
     inspectedByName: string | null; actualCutQty: number | null; fabricUsedM: number | null; notes: string | null;
   }>;
 
+  // Lays that are part of a garment rather than whole ones — trim fabric,
+  // lining, a separately cut panel — are listed but not counted as pieces.
+  const counted = plan.garmentLayIds ? new Set(plan.garmentLayIds) : null;
+
   // Size order comes from the cut requirement, so the columns match the matrix.
   const sizes = Object.keys(plan.requiredBySize).length > 0
     ? Object.keys(plan.requiredBySize)
@@ -78,8 +88,11 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
         <StatTile
           label="Plan vs requirement"
           value={<Num value={plan.varianceTotal} kind="variance" />}
-          tone={Math.abs(plan.varianceTotal) > plan.requiredTotal * 0.02 ? 'amber' : 'emerald'}
-          sub={`${plan.plannedTotal.toLocaleString()} planned / ${plan.requiredTotal.toLocaleString()} needed`}
+          tone={plan.coversRequirement === false || Math.abs(plan.varianceTotal) > plan.requiredTotal * 0.02 ? 'amber' : 'emerald'}
+          sub={
+            `${plan.plannedTotal.toLocaleString()} planned / ${plan.requiredTotal.toLocaleString()} needed`
+            + (plan.shortfallTotal ? ` · ${plan.shortfallTotal.toLocaleString()} short across sizes` : '')
+          }
         />
       </div>
 
@@ -120,7 +133,17 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
                     <td className="td text-xs">
                       {l.fabric}{l.color && <span className="text-ink-400"> · {l.color}</span>}
                     </td>
-                    <td className="td text-xs">{l.panel}</td>
+                    <td className="td text-xs">
+                      {l.panel}
+                      {counted && !counted.has(l.id) && (
+                        <span
+                          className="block text-2xs text-ink-400"
+                          title={`Only ${plan.mainFabric ?? 'main fabric'} lays that cut the whole garment count toward the pieces planned.`}
+                        >
+                          not counted as garments
+                        </span>
+                      )}
+                    </td>
                     <td className="td font-mono text-2xs text-ink-600">{l.ratio}</td>
                     {sizes.map((s) => (
                       <td key={s} className="td text-center">

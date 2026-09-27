@@ -8,6 +8,8 @@ import { asyncHandler } from '../util/async-handler.js';
 import { NotFoundError, ValidationError } from '../errors.js';
 import { refreshOrderCache, ORDER_INCLUDE, deriveOrder } from '../services/order-service.js';
 import { logActivity, logAndNotify } from '../services/activity-service.js';
+import { issueToProduction, returnFromProduction } from '../services/inventory-service.js';
+import type { AuthUser } from '../middleware/auth.js';
 
 export const materialsRouter = Router();
 materialsRouter.use(authenticate);
@@ -170,12 +172,40 @@ const bomRowSchema = bomItemSchema.extend({
  * actual consumption, moves for a reason that can be traced.
  */
 async function setIssuedQty(
-  item: { id: string; orderId: string; unit: string; issuedQty: Prisma.Decimal },
+  item: { id: string; orderId: string; unit: string; issuedQty: Prisma.Decimal; materialId: string | null },
   issued: number,
-  actor: { id: string; name: string },
+  actor: AuthUser,
 ): Promise<void> {
   const was = Number(item.issuedQty.toString());
   if (issued === was) return;
+  const notes = `Corrected on the bill of materials from ${was.toLocaleString()} to ${issued.toLocaleString()}`;
+
+  // A line linked to a catalogue material draws on real stock. Raising its
+  // issued figure without moving the stock left the shelf, the reservation
+  // and the movement ledger all saying the material was still there. So the
+  // correction goes through the inventory service — an issue when it rises, a
+  // return when it falls — and the three move together.
+  if (item.materialId) {
+    const delta = issued - was;
+    const movement = {
+      materialId: item.materialId, orderId: item.orderId, unit: item.unit, bomItemId: item.id, reason: notes,
+    };
+    if (delta > 0) await issueToProduction(actor, { ...movement, qty: delta });
+    else await returnFromProduction(actor, { ...movement, qty: -delta });
+    await prisma.$transaction(async (tx) => {
+      // The stock side converts through the material's unit and back; the
+      // line keeps exactly the figure that was typed.
+      await tx.bomItem.update({
+        where: { id: item.id },
+        data: { issuedQty: issued, issuedByName: actor.name, issuedAt: new Date() },
+      });
+      await tx.materialIssue.create({
+        data: { orderId: item.orderId, bomItemId: item.id, qty: delta, unit: item.unit, issuedById: actor.id, notes },
+      });
+    });
+    return;
+  }
+
   await prisma.$transaction(async (tx) => {
     await tx.bomItem.update({
       where: { id: item.id },
@@ -185,7 +215,7 @@ async function setIssuedQty(
       data: {
         orderId: item.orderId, bomItemId: item.id, qty: issued - was,
         unit: item.unit, issuedById: actor.id,
-        notes: `Corrected on the bill of materials from ${was.toLocaleString()} to ${issued.toLocaleString()}`,
+        notes,
       },
     });
   });
@@ -207,6 +237,9 @@ materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHa
   const keep = new Set(rows.map((r) => r.id).filter((id): id is string => !!id));
   const removed = existing.filter((e) => !keep.has(e.id)).map((e) => e.id);
 
+  // Issued figures on lines linked to stock, applied after the rows are saved.
+  const linkedIssues: Array<{ id: string; issued: number }> = [];
+
   await prisma.$transaction(async (tx) => {
     // Deleting first frees any unique constraint the rewritten rows might want.
     if (removed.length > 0) await tx.bomItem.deleteMany({ where: { id: { in: removed } } });
@@ -221,14 +254,20 @@ materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHa
       // What the row said before this save, so a changed issued quantity can
       // be recorded as the movement it is rather than overwritten in place.
       const before = id
-        ? await tx.bomItem.findUnique({ where: { id }, select: { issuedQty: true, unit: true } })
+        ? await tx.bomItem.findUnique({ where: { id }, select: { issuedQty: true, unit: true, materialId: true } })
         : null;
 
       const itemId = id
         ? (await tx.bomItem.update({ where: { id }, data, select: { id: true } })).id
         : (await tx.bomItem.create({ data: { ...data, orderId: order.id }, select: { id: true } })).id;
 
-      if (issuedQty != null) {
+      // A line linked to a catalogue material draws on real stock, so its
+      // correction has to move the shelf and the reservation too. That runs
+      // through the inventory service, which keeps its own transactions, so it
+      // is done once the rows are saved.
+      if (issuedQty != null && before?.materialId) {
+        linkedIssues.push({ id: itemId, issued: issuedQty });
+      } else if (issuedQty != null) {
         const was = before ? Number(before.issuedQty.toString()) : 0;
         const delta = issuedQty - was;
         if (delta !== 0) {
@@ -258,6 +297,14 @@ materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHa
       }
     }
   });
+
+  for (const { id, issued } of linkedIssues) {
+    const item = await prisma.bomItem.findUniqueOrThrow({
+      where: { id },
+      select: { id: true, orderId: true, unit: true, issuedQty: true, materialId: true },
+    });
+    await setIssuedQty(item, issued, actor);
+  }
 
   await logActivity({
     orderId: order.id, actorId: actor.id, actorName: actor.name,
@@ -316,8 +363,10 @@ materialsRouter.patch('/bom/:id', requirePermission('material:edit'), asyncHandl
   const item = await prisma.bomItem.findUnique({ where: { id: req.params.id } });
   if (!item) throw new NotFoundError('BOM item');
 
-  await prisma.bomItem.update({ where: { id: item.id }, data: input });
-  if (issued != null) await setIssuedQty(item, issued, actor);
+  // The row as it stands after this edit, so a correction to the issued
+  // figure is read against the unit and material the line now has.
+  const updated = await prisma.bomItem.update({ where: { id: item.id }, data: input });
+  if (issued != null) await setIssuedQty(updated, issued, actor);
   await logActivity({
     orderId: item.orderId, actorId: actor.id, actorName: actor.name,
     action: 'BOM_ITEM_UPDATED', summary: `updated ${item.item} in the bill of materials`,
@@ -364,6 +413,16 @@ materialsRouter.post('/bom/:id/issue', requirePermission('material:issue'), asyn
     );
   }
 
+  // A line linked to a catalogue material is issued from real stock: through
+  // the inventory service, so the shelf, this order's reservation and the
+  // movement ledger fall with the issued figure instead of staying put.
+  if (item.materialId) {
+    await issueToProduction(actor, {
+      materialId: item.materialId, orderId: item.orderId, qty: input.qty, unit: item.unit,
+      bomItemId: item.id, issuedToName: input.issuedToName ?? null, reason: input.notes ?? null,
+    });
+  }
+
   const result = await prisma.$transaction(async (tx) => {
     const issue = await tx.materialIssue.create({
       data: {
@@ -384,13 +443,16 @@ materialsRouter.post('/bom/:id/issue', requirePermission('material:issue'), asyn
     return issue;
   });
 
-  await logActivity({
-    orderId: item.orderId, actorId: actor.id, actorName: actor.name,
-    action: 'MATERIAL_ISSUED',
-    summary: `issued ${input.qty.toLocaleString()} ${item.unit} of ${item.item}${input.issuedToName ? ` to ${input.issuedToName}` : ''}`,
-    entityType: 'MaterialIssue', entityId: result.id,
-    meta: { item: item.item, qty: input.qty, unit: item.unit, newTotal, required },
-  });
+  // The inventory service has already logged a linked line's issue.
+  if (!item.materialId) {
+    await logActivity({
+      orderId: item.orderId, actorId: actor.id, actorName: actor.name,
+      action: 'MATERIAL_ISSUED',
+      summary: `issued ${input.qty.toLocaleString()} ${item.unit} of ${item.item}${input.issuedToName ? ` to ${input.issuedToName}` : ''}`,
+      entityType: 'MaterialIssue', entityId: result.id,
+      meta: { item: item.item, qty: input.qty, unit: item.unit, newTotal, required },
+    });
+  }
 
   // Once the last shortage clears, say so — it is what unblocks production.
   const remaining = await prisma.bomItem.findMany({
@@ -431,6 +493,10 @@ materialsRouter.get('/:orderId/markers', requirePermission('cutting:read'), asyn
     id: m.id, fabric: m.fabricName, color: m.fabricColor ?? '', panel: m.panel,
     ratio: m.sizeRatio, layers: m.layers,
     markerLengthM: Number(m.markerLengthM.toString()),
+    // The recorded figure, lay allowance included. Without it the plan fell
+    // back to layers × marker length and "Fabric required" came out short by
+    // the allowance — about 7% on a typical lay plan.
+    totalLengthM: dec(m.totalLengthM),
     nestPcs: m.nestPcs, efficiencyPct: dec(m.efficiencyPct),
   }));
 
@@ -444,7 +510,7 @@ materialsRouter.get('/:orderId/markers', requirePermission('cutting:read'), asyn
   }
 
   res.json({
-    plan: computeMarkerPlan(lays, requiredBySize),
+    plan: computeMarkerPlan(lays, requiredBySize, { mainFabric: order.fabric }),
     fabrics: order.fabricRecords.map((f) =>
       computeFabricPosition({
         fabric: f.fabricName, color: f.colorName ?? '',
@@ -496,9 +562,21 @@ materialsRouter.post('/:orderId/markers', requirePermission('cutting:write'), as
 }));
 
 materialsRouter.delete('/markers/:id', requirePermission('cutting:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
   const marker = await prisma.marker.findUnique({ where: { id: req.params.id } });
   if (!marker) throw new NotFoundError('Marker');
   await prisma.marker.delete({ where: { id: marker.id } });
+
+  // Removing a lay changes whether the plan covers the cut order, so the
+  // cached order figures are refreshed and the removal is on the record like
+  // every other change to the lay plan.
+  await logActivity({
+    orderId: marker.orderId, actorId: actor.id, actorName: actor.name,
+    action: 'MARKER_REMOVED',
+    summary: `removed a lay: ${marker.sizeRatio} × ${marker.layers} layers at ${marker.markerLengthM.toString()} m`,
+    entityType: 'Marker', entityId: marker.id,
+  });
+  await refreshOrderCache(marker.orderId);
   res.status(204).end();
 }));
 

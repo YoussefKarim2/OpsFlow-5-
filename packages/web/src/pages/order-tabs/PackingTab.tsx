@@ -21,6 +21,7 @@ interface PackingList {
     id: string; cartonNumber: string; cartonSize: string | null; colorName: string | null;
     lines?: Array<{ id: string; orderSizeId: string | null; sizeName: string | null; qty: number }>;
     sizeName: string | null; qty: number; grossWeightKg: number | null; netWeightKg: number | null;
+    orderSizeId?: string | null;
   }>;
   totals: { cartonCount: number; totalQty: number; grossWeightKg: number; netWeightKg: number };
 }
@@ -28,8 +29,21 @@ interface PackingList {
 interface Shipment {
   id: string; method: string | null; status: string; qty: number;
   promisedShippingDate: string | null; requiredDeliveryDate: string | null;
-  actualShippingDate: string | null; trackingNumber: string | null; carrier: string | null;
+  actualShippingDate: string | null; deliveredDate?: string | null;
+  trackingNumber: string | null; carrier: string | null;
   overrideApproved: boolean; overrideReason: string | null;
+}
+
+const SHIP_STATUSES = ['NOT_READY', 'READY', 'BOOKED', 'SHIPPED', 'DELIVERED'] as const;
+
+/**
+ * Today as the person at the keyboard sees it. `toISOString()` is UTC, which in
+ * Cairo is still yesterday until two or three in the morning.
+ */
+function localToday(): string {
+  const d = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
 const SHIP_TONE: Record<string, string> = {
@@ -55,7 +69,16 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
     void qc.invalidateQueries({ queryKey: ['packing', order.id] });
     void qc.invalidateQueries({ queryKey: ['shipments', order.id] });
     void qc.invalidateQueries({ queryKey: ['order', order.id] });
+    // Cartons move the PACKED ledger, which the quantity grids read.
+    void qc.invalidateQueries({ queryKey: ['matrix', order.id] });
   };
+
+  const [shipmentError, setShipmentError] = useState<string | null>(null);
+  const updateShipment = useMutation({
+    mutationFn: (v: { id: string; status: string }) => api.packing.updateShipment(v.id, { status: v.status }),
+    onSuccess: () => { setShipmentError(null); invalidate(); },
+    onError: (e) => setShipmentError(e instanceof ApiError ? e.message : 'Could not update the shipment.'),
+  });
 
   const createList = useMutation({ mutationFn: () => api.packing.createList(order.id), onSuccess: invalidate });
   const approve = useMutation({ mutationFn: (id: string) => api.packing.approve(id), onSuccess: invalidate });
@@ -70,7 +93,9 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
   return (
     <div className="space-y-4 p-5">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatTile label="Produced" value={fmtNumber(order.production.producedQty)} />
+        {/* The same produced figure the server checks shipments against: the
+            in-line ledger or sewing, whichever is further along. */}
+        <StatTile label="Produced" value={fmtNumber(order.producedQty)} />
         <StatTile label="Packed" value={fmtNumber(packedQty)} tone={packedQty > 0 ? 'accent' : 'neutral'} />
         <StatTile
           label="Cartons"
@@ -171,7 +196,12 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
                               onClick={() => setEditingCarton({
                                 id: c.id,
                                 number: c.cartonNumber,
-                                lines: (c.lines ?? []).map((ln) => ({ orderSizeId: ln.orderSizeId, qty: ln.qty })),
+                                // A single-size carton has no lines; it opens on
+                                // its own size and quantity, not the first size
+                                // at zero, which saved would have unpacked it.
+                                lines: c.lines && c.lines.length > 0
+                                  ? c.lines.map((ln) => ({ orderSizeId: ln.orderSizeId, qty: ln.qty }))
+                                  : c.orderSizeId ? [{ orderSizeId: c.orderSizeId, qty: c.qty }] : [],
                               })}
                             >
                               Sizes
@@ -201,6 +231,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
             )
           }
         />
+        {shipmentError && <div className="px-4 pt-3"><ErrorNote error={new Error(shipmentError)} /></div>}
         {shipmentList.length === 0 ? (
           <EmptyState title="Nothing shipped yet" />
         ) : (
@@ -218,7 +249,23 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
             <tbody className="divide-y divide-ink-100">
               {shipmentList.map((s) => (
                 <tr key={s.id}>
-                  <td className="td"><span className={clsx('chip', SHIP_TONE[s.status])}>{s.status.replace(/_/g, ' ')}</span></td>
+                  <td className="td">
+                    {/* A consignment moves along in place. Recording a second
+                        row to say it arrived counted its pieces twice. */}
+                    {can('shipment:write') ? (
+                      <select
+                        aria-label="Shipment status"
+                        className={clsx('chip cursor-pointer', SHIP_TONE[s.status])}
+                        value={s.status}
+                        disabled={updateShipment.isPending}
+                        onChange={(e) => updateShipment.mutate({ id: s.id, status: e.target.value })}
+                      >
+                        {SHIP_STATUSES.map((st) => <option key={st} value={st}>{st.replace(/_/g, ' ')}</option>)}
+                      </select>
+                    ) : (
+                      <span className={clsx('chip', SHIP_TONE[s.status])}>{s.status.replace(/_/g, ' ')}</span>
+                    )}
+                  </td>
                   <td className="td text-xs">{s.method || '—'}</td>
                   <td className="td text-right">
                     <Num value={s.qty} />
@@ -256,7 +303,8 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
         onDone={() => { setAddingCarton(null); invalidate(); }}
       />
       <ShipmentModal
-        open={shipping} order={order} producedQty={order.production.producedQty}
+        open={shipping} order={order} producedQty={order.producedQty}
+        alreadyShippedQty={shipmentList.reduce((a, s) => a + s.qty, 0)}
         onClose={() => setShipping(false)}
         onDone={() => { setShipping(false); invalidate(); }}
       />
@@ -373,19 +421,24 @@ function CartonModal({
 }
 
 function ShipmentModal({
-  open, order, producedQty, onClose, onDone,
+  open, order, producedQty, alreadyShippedQty, onClose, onDone,
 }: {
-  open: boolean; order: OrderDetailDto; producedQty: number; onClose: () => void; onDone: () => void;
+  open: boolean; order: OrderDetailDto; producedQty: number;
+  /** Pieces on consignments already recorded; the limit is on the running total. */
+  alreadyShippedQty: number;
+  onClose: () => void; onDone: () => void;
 }) {
   const { can } = useAuth();
   const [form, setForm] = useState({
     status: 'READY', qty: '', carrier: '', trackingNumber: '',
-    actualShippingDate: new Date().toISOString().slice(0, 10),
+    actualShippingDate: localToday(),
   });
   const [reason, setReason] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  const exceedsProduced = Number(form.qty) > producedQty && Number(form.qty) > 0;
+  const hasLeft = form.status === 'SHIPPED' || form.status === 'DELIVERED';
+  const runningTotal = alreadyShippedQty + (Number(form.qty) || 0);
+  const exceedsProduced = runningTotal > producedQty && Number(form.qty) > 0;
   const canOverride = can('shipment:override');
 
   const save = useMutation({
@@ -397,7 +450,8 @@ function ShipmentModal({
           method: order.shippingMethod ?? undefined,
           carrier: form.carrier || undefined,
           trackingNumber: form.trackingNumber || undefined,
-          actualShippingDate: form.status === 'SHIPPED' ? form.actualShippingDate : undefined,
+          // A delivered consignment left too, and has a departure date.
+          actualShippingDate: hasLeft ? form.actualShippingDate : undefined,
         },
         exceedsProduced ? reason : undefined,
       ),
@@ -427,7 +481,7 @@ function ShipmentModal({
         <div className="grid grid-cols-2 gap-3">
           <Field label="Status">
             <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} className="input">
-              {['NOT_READY', 'READY', 'BOOKED', 'SHIPPED', 'DELIVERED'].map((s) => (
+              {SHIP_STATUSES.map((s) => (
                 <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
               ))}
             </select>
@@ -437,7 +491,7 @@ function ShipmentModal({
           </Field>
           <Field label="Carrier"><input value={form.carrier} onChange={(e) => setForm({ ...form, carrier: e.target.value })} className="input" /></Field>
           <Field label="Tracking / AWB"><input value={form.trackingNumber} onChange={(e) => setForm({ ...form, trackingNumber: e.target.value })} className="input" /></Field>
-          {form.status === 'SHIPPED' && (
+          {hasLeft && (
             <Field label="Actual shipping date">
               <input type="date" value={form.actualShippingDate} onChange={(e) => setForm({ ...form, actualShippingDate: e.target.value })} className="input" />
             </Field>
@@ -450,7 +504,9 @@ function ShipmentModal({
               Shipping more than has been produced
             </p>
             <p className="mt-0.5 text-xs text-amber-800">
-              {Number(form.qty).toLocaleString()} pieces against {producedQty.toLocaleString()} produced.
+              {runningTotal.toLocaleString()} pieces on shipments
+              {alreadyShippedQty > 0 ? ` (${alreadyShippedQty.toLocaleString()} already recorded)` : ''} against{' '}
+              {producedQty.toLocaleString()} produced.
               {canOverride
                 ? ' As an administrator you can override this, but the reason is recorded in the audit trail.'
                 : ' Only an administrator can override this.'}

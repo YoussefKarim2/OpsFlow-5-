@@ -85,6 +85,15 @@ export interface PdfExtractionOptions {
   allowedConcepts?: readonly ImportConcept[];
   /** Injected in tests so the suite never loads a PDF engine. */
   reader?: (buffer: Buffer) => Promise<PdfPage[]>;
+  /**
+   * The stand-in PO number when the document states none.
+   *
+   * Supplied by the caller from the import job, so the preview and the commit
+   * — two separate reads of the same file — name the order the same. Made up
+   * afresh on every read, the number the coordinator approved was never the
+   * one the order was created with.
+   */
+  placeholderPoNumber?: string;
 }
 
 export interface PdfPage {
@@ -467,9 +476,14 @@ export async function extractFromPdf(
       }
       if (total === 0) continue;
 
-      // The colour is the leftmost cell that is not part of the grid and is not
-      // a number — the grid's own row label, whether or not it has a heading.
-      const label = row
+      // The colour is the column headed as one, when there is one. Otherwise
+      // it is the leftmost cell that is not part of the grid and is not a
+      // number — the grid's own row label, whether or not it has a heading.
+      // The heading comes first because a row that opens with the style name
+      // ("Classic Tee | Navy | 10 | 20") would otherwise import every row as a
+      // colour called "Classic Tee".
+      const headed = iColor != null && !sizeIdx.has(iColor) ? (row[iColor] ?? '').trim() : '';
+      const label = headed || row
         .map((c, i) => ({ c: c.trim(), i }))
         .filter(({ c, i }) => c !== '' && !sizeIdx.has(i) && i < (sizeCols[0]?.index ?? 0) && toNum(c) == null)
         .map(({ c }) => c)[0];
@@ -719,11 +733,12 @@ export async function extractFromPdf(
   // deriving it quietly — the review screen shows the value and it can be typed
   // over before anything is saved.
   if (named.poNumber == null || String(named.poNumber).trim() === '') {
-    const candidate = [named.customerRef, named.orderName, named.styleNumber]
+    const candidate = [named.externalReference, named.orderName, named.styleNumber]
       .map((v) => (v == null ? '' : String(v).trim()))
       .find((v) => v.length >= 3 && v.length <= 60);
 
     const derived = candidate
+      ?? options.placeholderPoNumber
       ?? `IMPORT-${new Date().toISOString().slice(0, 10)}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
 
     named.poNumber = derived;

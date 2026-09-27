@@ -577,3 +577,49 @@ describe('what counts as the order name', () => {
     assert.notEqual(r.fields.orderName, 'Season');
   });
 });
+
+/**
+ * A grid whose rows open with something other than the colour.
+ *
+ * "Classic Tee | Navy | 10 | 20 | 30" — the colour column is identified by its
+ * heading, and the row label rule (first non-numeric cell) used to take the
+ * style instead, importing both rows as one colour called "Classic Tee".
+ */
+describe('a size grid with a style column before the colour', () => {
+  const line = (y: number, cells: string[]) => cells.map((t, i) => at(t, 50 + i * 80, y, 30));
+  const read = (extra: ReturnType<typeof at>[] = []) =>
+    extractFromPdf(Buffer.alloc(0), {
+      reader: async () => [{
+        pageNumber: 1,
+        items: [
+          ...extra,
+          ...line(600, ['Style', 'Colour', 'S', 'M', 'L']),
+          ...line(580, ['Classic Tee', 'Navy', '10', '20', '30']),
+          ...line(560, ['Classic Tee', 'Pantone 19-4052', '5', '5', '5']),
+        ],
+      }],
+    });
+
+  test('the colour comes from the Colour column', async () => {
+    const r = await read();
+    assert.deepEqual(r.matrices[0]?.rows.map((x) => x.color), ['Navy', 'Pantone 19-4052']);
+  });
+
+  test('a customer reference stands in for a missing PO number', async () => {
+    const r = await read(line(700, ['Your ref:', 'REF-12345']));
+    assert.equal(r.fields.externalReference, 'REF-12345');
+    assert.equal(r.fields.poNumber, 'REF-12345');
+  });
+
+  test('a placeholder PO number is the one the caller supplies, every read', async () => {
+    // Nothing on this page names the order, so the placeholder is used — and
+    // the preview and the commit, two separate reads, must agree on it.
+    const page = async () => [{ pageNumber: 1, items: [
+      ...line(600, ['Colour', 'S', 'M', 'L']), ...line(580, ['Navy', '10', '20', '30']),
+    ] }];
+    const a = await extractFromPdf(Buffer.alloc(0), { reader: page, placeholderPoNumber: 'IMPORT-2026-09-26-ABC123' });
+    const b = await extractFromPdf(Buffer.alloc(0), { reader: page, placeholderPoNumber: 'IMPORT-2026-09-26-ABC123' });
+    assert.equal(a.fields.poNumber, 'IMPORT-2026-09-26-ABC123');
+    assert.equal(b.fields.poNumber, a.fields.poNumber);
+  });
+});

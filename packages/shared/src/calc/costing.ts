@@ -301,13 +301,8 @@ export function computeCosting(input: CostingInput): CostingResult {
    * straight onto the costing record. Adding both would bill sublimation
    * twice, so a typed figure replaces the derived lines for that operation
    * rather than joining them.
-   */
-  const isKind = (l: CostLineInput, word: string): boolean =>
-    `${l.label} ${l.sourceRef ?? ''}`.toUpperCase().includes(word);
-
-  /**
-   * Each operation belongs to exactly one row.
    *
+   * Each operation belongs to exactly one row (`outsideWorkKind`).
    * Sorted rather than filtered three times: an operation called "Sublimation
    * embroidery" matched both tests and was added to the total twice, so a job
    * costing 500 arrived on the sheet as 1,000. Sublimation is decided first
@@ -319,8 +314,9 @@ export function computeCosting(input: CostingInput): CostingResult {
   const embroideryLines: typeof externalLines = [];
   const otherExternalLines: typeof externalLines = [];
   for (const line of externalLines) {
-    if (isKind(line, 'SUBLIMATION')) sublimationLines.push(line);
-    else if (isKind(line, 'EMBROIDER')) embroideryLines.push(line);
+    const kind = outsideWorkKind(line);
+    if (kind === 'SUBLIMATION') sublimationLines.push(line);
+    else if (kind === 'EMBROIDERY') embroideryLines.push(line);
     else otherExternalLines.push(line);
   }
 
@@ -449,8 +445,14 @@ export function computeCosting(input: CostingInput): CostingResult {
     machineDaysUsed == null && noMachines ? 'Waiting for the machine-days used and the machine count'
       : machineDaysUsed == null ? 'Waiting for the machine-days used'
       : noMachines ? `Waiting for ${noMachines}` : null);
+  // Cut quantity is always a number, so a rate that did not compute against
+  // known work days means the work days were zero — nothing can be produced
+  // per day in no days, and asking for a cut quantity sent people to the wrong
+  // screen.
   needs('productivityRate', productivityRate,
-    workDays == null ? 'Waiting for the work days' : 'Waiting for a cut quantity');
+    workDays == null ? 'Waiting for the work days'
+      : workDays === 0 ? 'Waiting for work days above zero — the machine-days used is 0'
+      : 'Waiting for a cut quantity');
   needs('cmCostUsd', cmCostUsd,
     machineCostEgpPerDay == null ? 'Waiting for the machine cost'
       : machineDaysUsed == null ? 'Waiting for the line machines and days in line'
@@ -483,6 +485,10 @@ export function computeCosting(input: CostingInput): CostingResult {
   needs('unitActualCostEgp', unitActualCostEgp,
     unitActualCostUsd == null ? 'Waiting for the actual cost per unit'
       : noRate ? `Waiting for ${noRate}` : null);
+  // Asked for by name, so the screen's list of what is missing can say it: the
+  // rate is only ever typed, and nothing else on the sheet converts without it.
+  needs('dollarRate', dollarRate == null || dollarRate === 0 ? null : dollarRate,
+    'Waiting for the dollar rate');
   needs('sellPriceUsd', sellPriceUsd, 'Waiting for a price per piece on Order Details');
   needs('shippedQty', shippedQty, 'Waiting for a shipment to be recorded');
 
@@ -524,6 +530,24 @@ export function computeCosting(input: CostingInput): CostingResult {
     unitActualCostUsd, unitActualCostEgp, sellPriceUsd,
     profitPerUnitUsd, profitPct, totalProfitUsd, targetPriceUsd, isProfitable,
   };
+}
+
+/**
+ * Which of the sheet's dedicated outside-work rows an EXTERNAL line belongs to.
+ *
+ * Sublimation and embroidery have rows of their own on the sheet, so their
+ * lines are totalled there and must not be listed again among the other
+ * outside work. Read from the label and the source reference together, and
+ * sublimation is decided first: an operation called "Sublimation embroidery"
+ * once matched both and was billed twice. Null means it keeps a row of its own.
+ */
+export function outsideWorkKind(
+  line: Pick<CostLineInput, 'label' | 'sourceRef'>,
+): 'SUBLIMATION' | 'EMBROIDERY' | null {
+  const text = `${line.label} ${line.sourceRef ?? ''}`.toUpperCase();
+  if (text.includes('SUBLIMATION')) return 'SUBLIMATION';
+  if (text.includes('EMBROIDER')) return 'EMBROIDERY';
+  return null;
 }
 
 /** Convert an EGP price to USD — the sheet's `=0.4/$D$12` pattern, made explicit. */

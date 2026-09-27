@@ -58,7 +58,7 @@ describe('the step context reads the order the way the database stores it', () =
     // Each of these three was named something else in an earlier draft, and a
     // wrong name here is invisible: the step just never leaves "Not started".
     const ctx = buildStepContext(row({
-      productionRecords: [{ qty: 600 }, { qty: 400 }],
+      productionRecords: [{ qty: 600, operation: 'SEWING' }, { qty: 400, operation: 'SEWING' }],
       packingLists: [{ approved: true, cartons: [{ qty: 25 }, { qty: 25 }] }],
       shipments: [
         { qty: 900, status: 'SHIPPED', actualShippingDate: new Date('2026-09-01') },
@@ -120,6 +120,14 @@ describe('the step context reads the order the way the database stores it', () =
     assert.equal(covered.markerCoversRequirement, true);
   });
 
+  test('a lay plan short in one size is not finished, whatever its total', () => {
+    const lopsided = buildStepContext(row({ markers: [{}] }), NO_EXTRAS, {
+      materialShortCount: 0, markerPlannedQty: 300, markerRequiredQty: 200,
+      markerCoversRequirement: false,
+    });
+    assert.equal(lopsided.markerCoversRequirement, false);
+  });
+
   test('finished stock of zero is an answer, not a blank', () => {
     const checked = buildStepContext(row(), { ...NO_EXTRAS, stockRecorded: true, stockQty: 0 });
     assert.equal(checked.stockRecorded, true);
@@ -127,11 +135,11 @@ describe('the step context reads the order the way the database stores it', () =
   });
 
   test('a quality audit still pending is not a decided one', () => {
-    const pending = buildStepContext(row({ qualityAudits: [{ result: 'PENDING' }] }), NO_EXTRAS);
+    const pending = buildStepContext(row({ qualityAudits: [{ result: 'PENDING', correctiveActionClosed: true }] }), NO_EXTRAS);
     assert.equal(pending.auditCount, 0);
     assert.equal(pending.auditPassed, false);
 
-    const failed = buildStepContext(row({ qualityAudits: [{ result: 'FAIL' }] }), NO_EXTRAS);
+    const failed = buildStepContext(row({ qualityAudits: [{ result: 'FAIL', correctiveActionClosed: false }] }), NO_EXTRAS);
     assert.equal(failed.auditCount, 1);
     assert.equal(failed.openQualityFailure, true);
     assert.equal(failed.auditPassed, false);
@@ -148,6 +156,80 @@ describe('the step context reads the order the way the database stores it', () =
     }), NO_EXTRAS, undefined, today);
 
     assert.deepEqual(ctx.taskCounts[StageKey.PROGRESS_STATUS], { total: 3, completed: 1, overdue: 1 });
+  });
+
+  test('a failure answered by a closed corrective action and a passing re-inspection has passed', () => {
+    // The regression: any audit that had ever failed kept Quality open for good.
+    const ctx = buildStepContext(row({
+      qualityAudits: [
+        { result: 'FAIL', correctiveActionClosed: true, createdAt: new Date('2026-09-01') },
+        { result: 'PASS', correctiveActionClosed: true, createdAt: new Date('2026-09-05') },
+      ],
+    }), NO_EXTRAS);
+    assert.equal(ctx.openQualityFailure, false);
+    assert.equal(ctx.auditPassed, true);
+    const step = deriveOrderSteps(ctx).steps.find((s) => s.key === StageKey.AUDIT)!;
+    assert.equal(step.state, StepState.COMPLETED);
+
+    // Still open while the corrective action is, whatever came after.
+    const open = buildStepContext(row({
+      qualityAudits: [
+        { result: 'FAIL', correctiveActionClosed: false, createdAt: new Date('2026-09-01') },
+        { result: 'PASS', correctiveActionClosed: true, createdAt: new Date('2026-09-05') },
+      ],
+    }), NO_EXTRAS);
+    assert.equal(open.openQualityFailure, true);
+
+    // And a later failure outranks an earlier pass.
+    const refailed = buildStepContext(row({
+      qualityAudits: [
+        { result: 'PASS', correctiveActionClosed: true, createdAt: new Date('2026-09-01') },
+        { result: 'FAIL', correctiveActionClosed: false, createdAt: new Date('2026-09-05') },
+      ],
+    }), NO_EXTRAS);
+    assert.equal(refailed.auditPassed, false);
+  });
+
+  test('produced means sewn: cutting alone does not finish production', () => {
+    const cutOnly = buildStepContext(row({
+      productionRecords: [{ qty: 1000, operation: 'CUTTING' }],
+    }), NO_EXTRAS);
+    assert.equal(cutOnly.producedQty, 0);
+
+    // The in-line ledger counts when it is further along than the sewing log,
+    // exactly as deriveOrder takes the larger of the two.
+    const inLine = buildStepContext(row({
+      quantities: [{ ledger: 'IN_LINE', qty: 700 }],
+      productionRecords: [{ qty: 300, operation: 'SEWING' }, { qty: 900, operation: 'CUTTING' }],
+    }), NO_EXTRAS);
+    assert.equal(inLine.producedQty, 700);
+  });
+
+  test('a delivered consignment is shipped, with or without a shipping date', () => {
+    const ctx = buildStepContext(row({
+      shipments: [{ qty: 800, status: 'DELIVERED', actualShippingDate: null }],
+    }), NO_EXTRAS);
+    assert.equal(ctx.shippedQty, 800);
+  });
+
+  test('a task due today is not overdue, whatever the hour', () => {
+    const today = new Date('2026-08-24T18:00:00Z');
+    const ctx = buildStepContext(row({
+      tasks: [{ stageKey: 'PROGRESS_STATUS', status: 'NOT_STARTED', dueDate: new Date('2026-08-24T00:00:00Z') }],
+    }), NO_EXTRAS, undefined, today);
+    assert.equal(ctx.taskCounts[StageKey.PROGRESS_STATUS]!.overdue, 0);
+  });
+
+  test('a cancelled external operation neither blocks nor waits to come back', () => {
+    const ctx = buildStepContext(row({
+      externalOperations: [
+        { status: 'CANCELLED', requiresApproval: true, approval: null },
+        { status: 'RETURNED', requiresApproval: false, approval: null },
+      ],
+    }), NO_EXTRAS);
+    assert.equal(ctx.externalOpsBlocked, 0);
+    assert.equal(ctx.externalOpCount, 1);
+    assert.equal(ctx.externalOpsReturned, 1);
   });
 
   test('a stage override reaches the derivation intact', () => {

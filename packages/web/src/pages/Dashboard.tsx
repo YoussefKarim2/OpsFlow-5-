@@ -299,8 +299,11 @@ export function DashboardPage() {
                   <span className="w-40 shrink-0 truncate text-xs text-ink-600">
                     {ORDER_STATUS_LABEL[s.status as OrderStatus]}
                   </span>
+                  {/* A share of the whole book, the same set the rows list.
+                      Dividing by the active count (which leaves Completed out)
+                      pushed bars past 100%. */}
                   <ProgressBar
-                    value={(s.count / Math.max(1, data.cards.totalActive)) * 100}
+                    value={(s.count / Math.max(1, data.statusBreakdown.reduce((a, x) => a + x.count, 0))) * 100}
                     tone="accent" className="flex-1"
                   />
                   <span className="tnum w-6 text-right text-xs font-semibold text-ink-700">{s.count}</span>

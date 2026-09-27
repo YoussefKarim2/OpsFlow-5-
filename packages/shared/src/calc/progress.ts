@@ -132,6 +132,12 @@ export interface OrderStatusInput {
   packedQty: number;
   shippedQty: number;
   qualityPassedQty: number;
+  /**
+   * The latest decided final inspection passed and no failure is still open.
+   * The out-line ledger is typed by hand and often lags; a passed audit is the
+   * quality department's own answer and is enough on its own.
+   */
+  qualityAuditPassed?: boolean;
   packingApproved: boolean;
   materialsFullyIssued: boolean;
   hasPendingBlockingApproval: boolean;
@@ -151,7 +157,10 @@ export function deriveOrderStatus(i: OrderStatusInput): OrderStatus {
   if (i.shipmentStatus === 'SHIPPED' || i.shippedQty >= i.orderQty && i.orderQty > 0) return OrderStatus.SHIPPED;
   if (i.packedQty > 0 && i.packedQty >= i.producedQty && i.packingApproved) return OrderStatus.READY_TO_SHIP;
   if (i.packedQty > 0) return OrderStatus.PACKING;
-  if (i.orderQty > 0 && i.producedQty >= i.orderQty && i.qualityPassedQty < i.producedQty) return OrderStatus.QUALITY_CHECK;
+  if (
+    i.orderQty > 0 && i.producedQty >= i.orderQty
+    && i.qualityPassedQty < i.producedQty && !i.qualityAuditPassed
+  ) return OrderStatus.QUALITY_CHECK;
   if (i.isBehindSchedule && i.producedQty > 0) return OrderStatus.PRODUCTION_DELAYED;
   if (i.producedQty > 0) return OrderStatus.IN_PRODUCTION;
   if (i.hasPendingBlockingApproval) return OrderStatus.WAITING_APPROVAL;

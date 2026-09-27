@@ -19,7 +19,7 @@ import { NotFoundError, BadRequestError } from '../errors.js';
 import { workbookUpload as upload, assertLooksLikeWorkbook } from '../services/import/upload-guard.js';
 import { detectFileKind } from '../services/import/file-kind.js';
 import { extractLayingMarking, type LayingExtractionResult, type LayingRow } from '../services/import/laying-extractor.js';
-import { commitLayingImport, layingRowKey, type RowResolution } from '../services/import/laying-committer.js';
+import { commitLayingImport, resolveLayingRows, type RowResolution } from '../services/import/laying-committer.js';
 import { announceChange } from '../services/change-service.js';
 import { storage } from '../services/storage/index.js';
 import { refreshOrderCache } from '../services/order-service.js';
@@ -54,15 +54,14 @@ async function findConflicts(orderId: string, rows: LayingRow[]): Promise<RowCon
     where: { orderId },
     select: { id: true, markerNumber: true, fabricName: true, fabricColor: true, layers: true, markerLengthM: true, totalLengthM: true, position: true },
   });
-  const byMarkerNumber = new Map(existing.filter((m) => m.markerNumber).map((m) => [m.markerNumber, m]));
-  const byPosition = new Map(existing.map((m) => [m.position, m]));
-
+  // The same pairing the commit uses, so a choice made against a key here is
+  // applied to the same row and the same existing lay there.
   const conflicts: RowConflict[] = [];
-  for (const row of rows) {
-    const match = row.markerNumber ? byMarkerNumber.get(row.markerNumber) : byPosition.get(row.rowNumber - 1);
+  for (const { key, existing: ref } of resolveLayingRows(rows, existing)) {
+    const match = ref ? existing.find((m) => m.id === ref.id) : undefined;
     if (!match) continue;
     conflicts.push({
-      key: layingRowKey(row),
+      key,
       existing: {
         id: match.id, markerNumber: match.markerNumber, fabricName: match.fabricName, fabricColor: match.fabricColor,
         layers: match.layers, markerLengthM: match.markerLengthM.toString(), totalLengthM: match.totalLengthM?.toString() ?? null,
@@ -97,7 +96,32 @@ async function buildResponse(jobId: string, fileName: string, orderId: string, e
   };
 }
 
-async function persistJob(jobId: string, extraction: LayingExtractionResult): Promise<void> {
+/**
+ * How the file is being read: which sheet, the columns assigned by hand, and
+ * any saved layout applied at upload. Kept on the job with the preview so the
+ * commit — which re-reads the file from storage — reads it exactly the way the
+ * approved preview did. Without it the commit re-read the default sheet with
+ * the automatic mapping, and a column assigned by hand previewed as 140
+ * layers and was stored as 0.
+ */
+interface ReadOptions {
+  sheetName?: string;
+  overrides?: Record<number, ImportConcept>;
+  savedMapping?: Record<string, ImportConcept>;
+}
+
+function readOptionsOf(job: { preview: unknown }): ReadOptions {
+  const p = (job.preview ?? {}) as { sheetName?: string; overrides?: Record<string, ImportConcept>; savedMapping?: Record<string, ImportConcept> };
+  const overrides: Record<number, ImportConcept> = {};
+  for (const [index, concept] of Object.entries(p.overrides ?? {})) overrides[Number(index)] = concept;
+  return {
+    sheetName: p.sheetName || undefined,
+    overrides: Object.keys(overrides).length > 0 ? overrides : undefined,
+    savedMapping: p.savedMapping,
+  };
+}
+
+async function persistJob(jobId: string, extraction: LayingExtractionResult, read: ReadOptions = {}): Promise<void> {
   const hasErrors = extraction.issues.some((i) => i.level === 'ERROR');
   await prisma.importJob.update({
     where: { id: jobId },
@@ -106,7 +130,10 @@ async function persistJob(jobId: string, extraction: LayingExtractionResult): Pr
       detectedSheets: extraction.analysis.candidateSheets as never,
       mappings: extraction.analysis.columns as never,
       issues: extraction.issues as never,
-      preview: { rows: extraction.rows, sheetName: extraction.analysis.sheetName } as never,
+      preview: {
+        rows: extraction.rows, sheetName: extraction.analysis.sheetName,
+        overrides: read.overrides ?? {}, savedMapping: read.savedMapping ?? null,
+      } as never,
       errorMessage: hasErrors ? 'Validation errors must be resolved before importing.' : null,
     },
   });
@@ -151,7 +178,9 @@ layingImportRouter.post('/upload', requirePermission('import:laying'), upload.si
     });
   }
 
-  await persistJob(job.id, finalExtraction);
+  await persistJob(job.id, finalExtraction, {
+    savedMapping: savedMapping ? savedMapping.mapping as Record<string, ImportConcept> : undefined,
+  });
   res.json(await buildResponse(job.id, job.fileName, order.id, finalExtraction));
 }));
 
@@ -167,11 +196,18 @@ layingImportRouter.post('/:jobId/remap', requirePermission('import:laying'), asy
   if (!job) throw new NotFoundError('Import job');
 
   const buffer = await storage.get(job.storageKey);
-  const overrides: Record<number, ImportConcept> = {};
+  const previous = readOptionsOf(job);
+  // Assignments made earlier carry forward — the wizard sends its whole set,
+  // but a client that sends only the column just changed must not undo the
+  // rest. A different sheet starts afresh: column 3 there is another column.
+  const sheetName = input.sheetName ?? previous.sheetName;
+  const sameSheet = sheetName === previous.sheetName;
+  const overrides: Record<number, ImportConcept> = sameSheet ? { ...(previous.overrides ?? {}) } : {};
   for (const [index, concept] of Object.entries(input.columnMapping ?? {})) overrides[Number(index)] = concept as ImportConcept;
 
-  const extraction = await extractLayingMarking(buffer, { sheetName: input.sheetName, overrides });
-  await persistJob(job.id, extraction);
+  const read: ReadOptions = { sheetName, overrides, savedMapping: previous.savedMapping };
+  const extraction = await extractLayingMarking(buffer, read);
+  await persistJob(job.id, extraction, { ...read, sheetName: extraction.analysis.sheetName });
   res.json(await buildResponse(job.id, job.fileName, order.id, extraction));
 }));
 
@@ -180,8 +216,10 @@ layingImportRouter.post('/:jobId/save-mapping', requirePermission('import:laying
   const job = await prisma.importJob.findFirst({ where: { id: req.params.jobId, targetOrderId: order.id, target: 'LAYING_MARKING' } });
   if (!job) throw new NotFoundError('Import job');
 
+  // The layout as the coordinator left it — their hand assignments included —
+  // not the automatic reading of the file, which is what they were correcting.
   const buffer = await storage.get(job.storageKey);
-  const extraction = await extractLayingMarking(buffer);
+  const extraction = await extractLayingMarking(buffer, readOptionsOf(job));
   const mapping = toSavedMapping(extraction.analysis.columns);
   if (Object.keys(mapping).length === 0) throw new BadRequestError('There is nothing to save — no columns were mapped.');
 
@@ -212,19 +250,18 @@ layingImportRouter.post('/:jobId/commit', requirePermission('import:laying'), as
   if (job.status === 'COMMITTED') throw new BadRequestError('This file has already been imported.');
 
   const buffer = await storage.get(job.storageKey);
-  const extraction = await extractLayingMarking(buffer, {
-    sheetName: (job.detectedSheets as { sheetName?: string } | null)?.sheetName,
-  });
+  // Read exactly as the approved preview was: same sheet, same hand-assigned
+  // columns, same saved layout.
+  const extraction = await extractLayingMarking(buffer, readOptionsOf(job));
   // Deliberately no gate on extraction issues — see `canCommit` above.
 
   try {
+    // Marks the job COMMITTED itself, in the same transaction as the lays.
     const result = await commitLayingImport(prisma, {
       jobId: job.id, orderId: order.id, rows: extraction.rows,
       resolutions: input.resolutions as Record<string, RowResolution>,
       actorId: actor.id, actorName: actor.name,
     });
-
-    await prisma.importJob.update({ where: { id: job.id }, data: { status: 'COMMITTED', committedAt: new Date() } });
 
     // The sheet itself, filed against the order so it can be opened later.
     await attachLayingSheet(order.id, job, buffer, actor);
@@ -245,8 +282,10 @@ layingImportRouter.post('/:jobId/commit', requirePermission('import:laying'), as
 
     res.status(201).json(result);
   } catch (err) {
-    await prisma.importJob.update({
-      where: { id: job.id },
+    // Never over a job another request has just committed — losing the race
+    // to import the same file is not the file failing.
+    await prisma.importJob.updateMany({
+      where: { id: job.id, status: { not: 'COMMITTED' } },
       data: { status: 'FAILED', errorMessage: err instanceof Error ? err.message : 'Unknown error' },
     });
     throw err;

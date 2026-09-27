@@ -195,6 +195,10 @@ model Order {
   pricePerPieceUsd         Decimal?              @db.Decimal(10, 4)
   /// Cut allowance, stored as a fraction (0.05 = 5%). Drives the cut matrix.
   cutPercentage            Decimal               @default(0.05) @db.Decimal(5, 4)
+  /// When the cut order was last written. Set even when it came out empty
+  /// (stock covered everything), which is how a generated-but-empty cut order
+  /// is told apart from one never generated.
+  cutOrderGeneratedAt      DateTime?
   /// Accessory allowance, Order Details!D23.
   accessoryPercentage      Decimal               @default(0.05) @db.Decimal(5, 4)
   poDate                   DateTime?
@@ -630,6 +634,11 @@ model MaterialStock {
   location    InventoryLocation? @relation(fields: [locationId], references: [id])
   material    Material           @relation(fields: [materialId], references: [id], onDelete: Cascade)
 
+  /// Postgres treats NULLs as distinct, so this does not stop two balances for
+  /// one material with no location. The migration
+  /// 20260926110000_cut_order_generated_stock_integrity adds a partial unique
+  /// index on (materialId) WHERE locationId IS NULL for that case, which
+  /// Prisma's schema language cannot express.
   @@unique([materialId, locationId])
   @@index([materialId])
   @@map("material_stock")
@@ -1097,7 +1106,10 @@ model CostingRecord {
   costingDate            DateTime?
   /// EGP per USD. Accessory prices on the sheet are quoted in EGP and divided
   /// by this (=0.4/$D$12), so it must be stored with the costing, not inferred.
-  dollarRate             Decimal    @default(48.5) @db.Decimal(10, 4)
+  /// Null until somebody enters one: a default rate was stored by the first
+  /// autosave, so the sheet converted at a rate nobody chose and never said it
+  /// was waiting for one.
+  dollarRate             Decimal?   @db.Decimal(10, 4)
   dailyCostEgp           Decimal?   @db.Decimal(14, 4)
   machineCount           Int?
   machineDaysUsed        Int?

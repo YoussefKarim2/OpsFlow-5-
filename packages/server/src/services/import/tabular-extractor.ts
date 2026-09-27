@@ -35,8 +35,8 @@ import {
 import type { ImportIssue, ImportSheetInfo } from '@opsflow/shared';
 import type { ExtractionResult, ExtractedMatrix } from './extractor.js';
 import { detectFileKind } from './file-kind.js';
-import { cellText, toNumber, toDate, buildLineItems } from './extractor.js';
-import { safeDate, toIsoDayOrNull } from '@opsflow/shared';
+import { cellText, toNumber, toDate, buildLineItems, parseFieldOverride } from './extractor.js';
+import { toIsoDayOrNull } from '@opsflow/shared';
 import { loadWorkbook } from './open-workbook.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -207,9 +207,11 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
     blankRun = 0;
 
     // A totals row is a summary of the data, not part of it. Importing it
-    // doubles the order.
-    const first = String(cellText(values[0])).trim().toLowerCase();
-    if (/^(total|totals|grand total|sum|subtotal)\b/.test(first)) break;
+    // doubles the order. Judged by the row's first *filled* cell, not column
+    // A: a table that starts in column B has its "Total" label there, and
+    // reading the blank A cell let the totals through as one more colour.
+    const firstFilled = values.find((v) => v != null && String(cellText(v)).trim() !== '');
+    if (isTotalsLabel(firstFilled)) break;
 
     rows.push(values);
   }
@@ -223,6 +225,12 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
     rows,
     score: scoreTable(headers, rows),
   };
+}
+
+/** "Total", "Grand total", "Subtotal", "Sum" — a row that restates the others. */
+function isTotalsLabel(value: unknown): boolean {
+  const text = String(cellText(value)).trim().toLowerCase();
+  return /^(total|totals|grand total|sum|sub\s*total)\b/.test(text);
 }
 
 /**
@@ -409,6 +417,9 @@ function buildWideMatrix(ctx: BuildContext, sizeColumns: Array<{ index: number; 
   for (const row of ctx.table.rows) {
     const color = String(cellText(row[colorCol])).trim();
     if (!color) continue;
+    // A totals row that survived the table read — labelled in the colour
+    // column rather than the first one — is the grid restated, not a colour.
+    if (isTotalsLabel(color)) continue;
 
     const cells: Record<string, number> = {};
     let total = 0;
@@ -672,16 +683,11 @@ export async function extractTabular(
       : String(cellText(firstValue)).trim();
   }
 
+  // Read exactly as the commit reads them, so the preview cannot differ from
+  // what is written — and a value that cannot be read is refused by name here
+  // rather than turning into an Invalid Date or NaN further on.
   for (const [field, value] of Object.entries(options.fieldOverrides ?? {})) {
-    if (value === null || value === '') { fields[field] = null; continue; }
-    const spec = Object.values(CONCEPT_META).find((m) => m.field === field);
-    fields[field] =
-      spec?.type === 'number' ? Number(value)
-      // `new Date(String(value))` here was the other half of the crash: an
-      // override the coordinator typed as "13/09/2026" became an Invalid Date
-      // that threw the moment the preview tried to render it.
-      : spec?.type === 'date' ? safeDate(value)
-      : String(value);
+    fields[field] = parseFieldOverride(field, value);
   }
 
   // A PO number the file does not carry is a question, not a failure: the
@@ -734,8 +740,9 @@ export async function extractTabular(
       offset: [0, 0] as [number, number],
       // A table column's provenance is its column letter and the row its
       // header sat on — "column D, header on row 5" is what somebody needs to
-      // find it in the file.
-      cell: `${columnLetter(c.index + 1)} (header row ${chosen.headerRowIndex + 1})`,
+      // find it in the file. `headerRowIndex` is already the sheet's own
+      // 1-based row number, so it is shown as it is.
+      cell: `${columnLetter(c.index + 1)} (header row ${chosen.headerRowIndex})`,
       sampleValue: c.samples[0] ?? null,
       required: MATRIX_REQUIRED.has(c.concept),
       resolved: !c.needsConfirmation,

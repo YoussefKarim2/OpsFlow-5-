@@ -525,3 +525,45 @@ describe('reading the facts stated above the table', () => {
     assert.equal(r.fields.styleNumber, 'UFEC01010');
   });
 });
+
+/**
+ * A totals row is the grid restated, never a colour.
+ *
+ * The check looked only at column A. A customer table that starts in column B
+ * has its "Total" label there, so the totals came through as one more colour
+ * and the order was doubled.
+ */
+describe('totals rows away from column A', () => {
+  test('a table that starts in column B stops at its Total row', async () => {
+    const buffer = await buildWorkbook([{ name: 'Order', rows: [
+      [null, 'Colour', 'S', 'M', 'L'],
+      [null, 'Navy', 10, 20, 30],
+      [null, 'Red', 5, 5, 5],
+      [null, 'Total', 15, 25, 35],
+    ] }]);
+    const r = await extractTabular(buffer);
+    const m = r.matrices[0]!;
+    assert.deepEqual(m.rows.map((x) => x.color), ['Navy', 'Red']);
+    assert.equal(m.computedTotal, 75);
+  });
+
+  test('a Total in the colour column is skipped even when another column comes first', async () => {
+    const buffer = await buildWorkbook([{ name: 'Order', rows: [
+      ['PO Number', 'Colour', 'S', 'M', 'L'],
+      ['PO-1', 'Navy', 10, 20, 30],
+      ['PO-1', 'Total', 10, 20, 30],
+    ] }]);
+    const r = await extractTabular(buffer);
+    assert.deepEqual(r.matrices[0]!.rows.map((x) => x.color), ['Navy']);
+    assert.equal(r.matrices[0]!.computedTotal, 60);
+  });
+
+  test('a column is placed on the header row it is really on', async () => {
+    const buffer = await buildWorkbook([{ name: 'Order', rows: [
+      ['PO Number', 'Colour', 'S', 'M'],
+      ['PO-1', 'Navy', 10, 20],
+    ] }]);
+    const r = await extractTabular(buffer);
+    assert.match(r.mappings[0]!.cell ?? '', /header row 1\)/);
+  });
+});

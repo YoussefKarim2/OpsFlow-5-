@@ -27,6 +27,9 @@ export function setToken(token: string | null): void {
   } catch { /* private browsing — the session simply won't persist */ }
 }
 
+/** Fired when the server says this account must change its password first. */
+export const PASSWORD_CHANGE_REQUIRED_EVENT = 'opsflow:password-change-required';
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -66,7 +69,14 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   if (res.status === 204) return undefined as T;
 
   const text = await res.text();
-  const body = text ? (JSON.parse(text) as unknown) : null;
+  // A proxy's 502 page or a dev server with the API down answers in HTML.
+  // Parsing that blindly surfaced "Unexpected token <" instead of the failure.
+  let body: unknown = null;
+  try {
+    body = text ? (JSON.parse(text) as unknown) : null;
+  } catch {
+    if (res.ok) throw new ApiError('The server sent a response that could not be read.', res.status, 'BAD_RESPONSE');
+  }
 
   if (!res.ok) {
     const e = body as { error?: string; code?: string; details?: unknown } | null;
@@ -74,6 +84,12 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     if (res.status === 401) {
       setToken(null);
       if (!location.pathname.startsWith('/login')) location.href = '/login';
+    }
+    // An administrator reset this password mid-session. The account can do
+    // nothing else until it sets a new one, so the app re-reads the account
+    // and shows the change-password screen instead of a wall of errors.
+    if (e?.code === 'PASSWORD_CHANGE_REQUIRED') {
+      window.dispatchEvent(new Event(PASSWORD_CHANGE_REQUIRED_EVENT));
     }
     throw new ApiError(
       e?.error ?? `Request failed (${res.status})`,
@@ -84,6 +100,29 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   return body as T;
+}
+
+/**
+ * Saves a file the API serves behind sign-in. A plain <a href> cannot carry
+ * the bearer token, so the file is fetched and handed to the browser as a blob.
+ * The server's Content-Disposition name wins over the fallback when present.
+ */
+async function downloadFile(path: string, fallbackName: string, failMessage: string): Promise<void> {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { Authorization: `Bearer ${getToken() ?? ''}` },
+  });
+  if (!res.ok) throw new ApiError(failMessage, res.status, 'DOWNLOAD_FAILED');
+  const disposition = res.headers.get('Content-Disposition') ?? '';
+  const name = /filename="([^"]+)"/.exec(disposition)?.[1] ?? fallbackName;
+  const url = URL.createObjectURL(await res.blob());
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Revoking in the same tick can cancel the save in some browsers.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 const get = <T>(p: string) => request<T>(p);
@@ -269,7 +308,8 @@ export interface CostLineDto {
 
 export interface CostingDto {
   costingDate: string | null;
-  dollarRate: number;
+  /** Null until somebody enters one. */
+  dollarRate: number | null;
   dailyCostEgp: number | null;
   machineCount: number | null;
   machineDaysUsed: number | null;
@@ -544,8 +584,12 @@ export const api = {
   auth: {
     login: (email: string, password: string) => post<LoginResponse>('/auth/login', { email, password }),
     me: () => get<LoginResponse['user']>('/auth/me'),
-    changePassword: (currentPassword: string, newPassword: string) =>
-      post<{ ok: true }>('/auth/change-password', { currentPassword, newPassword }),
+    /** The change ends every older session, so the reply carries this one's replacement. */
+    changePassword: async (currentPassword: string, newPassword: string) => {
+      const res = await post<{ ok: true; token?: string }>('/auth/change-password', { currentPassword, newPassword });
+      if (res.token) setToken(res.token);
+      return res;
+    },
   },
 
   admin: {
@@ -582,22 +626,8 @@ export const api = {
       data: { at: string; ok: boolean; filename?: string; bytes?: number;
         rows?: number; tables?: number; emailed?: boolean; error?: string };
     }>('/admin/backups'),
-    /**
-     * Downloads through fetch rather than a plain link, because the API needs
-     * the bearer token and an <a href> cannot carry one.
-     */
-    downloadBackup: async (filename: string): Promise<void> => {
-      const res = await fetch(`${BASE}/admin/backups/${encodeURIComponent(filename)}`, {
-        headers: { Authorization: `Bearer ${getToken() ?? ''}` },
-      });
-      if (!res.ok) throw new ApiError('Could not download that backup.', res.status, 'DOWNLOAD_FAILED');
-      const url = URL.createObjectURL(await res.blob());
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
-    },
+    downloadBackup: (filename: string) =>
+      downloadFile(`/admin/backups/${encodeURIComponent(filename)}`, filename, 'Could not download that backup.'),
     allowlist: () => get<{
       allowlist: string[];
       holders: Array<{ email: string; name: string; active: boolean; effective: boolean }>;
@@ -635,7 +665,7 @@ export const api = {
       post<MaterialRow>('/inventory/wastage', body),
 
     reserve: (body: {
-      materialId: string; orderId: string; qty: number; bomItemId?: string | null;
+      materialId: string; orderId: string; qty: number; unit?: string; bomItemId?: string | null;
       allowPartial?: boolean; notes?: string;
     }) => post<{ reservation: { id: string; qty: number }; material: MaterialRow; partial: boolean }>('/inventory/reservations', body),
     releaseReservation: (id: string, reason?: string) =>
@@ -644,10 +674,10 @@ export const api = {
       get<{ data: ReservationRow[] }>(`/inventory/reservations${qs(filters)}`),
 
     issue: (body: {
-      materialId: string; orderId: string; qty: number; bomItemId?: string | null;
+      materialId: string; orderId: string; qty: number; unit?: string; bomItemId?: string | null;
       stage?: string | null; issuedToName?: string; batchLot?: string; reason?: string;
     }) => post<{ material: MaterialRow; drawnFromReservation: number; drawnFromFree: number }>('/inventory/issues', body),
-    return: (body: { materialId: string; orderId: string; qty: number; bomItemId?: string | null; reason?: string }) =>
+    return: (body: { materialId: string; orderId: string; qty: number; unit?: string; bomItemId?: string | null; reason?: string }) =>
       post<MaterialRow>('/inventory/returns', body),
 
     movements: (filters: Record<string, unknown> = {}) =>
@@ -809,7 +839,8 @@ export const api = {
         fileKind: string;
       }>(`/orders/${orderId}/proforma/import`, { method: 'POST', body: fd });
     },
-    proformaExportUrl: (orderId: string) => `/orders/${orderId}/proforma/export.xlsx`,
+    downloadProformaXlsx: (orderId: string) =>
+      downloadFile(`/orders/${orderId}/proforma/export.xlsx`, 'proforma.xlsx', 'Could not export the proforma.'),
     saveProforma: (orderId: string, body: unknown) =>
       put<{ data: ProformaDto }>(`/orders/${orderId}/proforma`, body),
     sendProforma: (orderId: string) => post<{ data: ProformaDto }>(`/orders/${orderId}/proforma/send`),
@@ -896,6 +927,16 @@ export const api = {
     shipments: (orderId: string) => get<{ data: ShipmentDto[] }>(`/packing/${orderId}/shipments`),
     createShipment: (orderId: string, body: unknown, reason?: string) =>
       post<{ id: string; overrideApplied: boolean }>(`/packing/${orderId}/shipments`, body, reason),
+    /** Move one consignment along (booked → shipped → delivered) without a second row. */
+    updateShipment: (
+      shipmentId: string,
+      body: {
+        status?: string; qty?: number;
+        actualShippingDate?: string | null; deliveredDate?: string | null;
+        carrier?: string | null; trackingNumber?: string | null; notes?: string | null;
+      },
+      reason?: string,
+    ) => patch<{ id: string; overrideApplied: boolean }>(`/packing/shipments/${shipmentId}`, body, reason),
   },
 
   reference: {
