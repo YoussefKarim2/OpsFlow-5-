@@ -21,6 +21,7 @@ import { prisma } from '../../db.js';
 import { config } from '../../config.js';
 import { ORDER_INCLUDE, deriveOrder } from '../order-service.js';
 import { announceChange } from '../change-service.js';
+import { alertNotice } from './alert-policy.js';
 
 const SEVERITY_PRIORITY: Record<AlertSeverity, NotificationPriority | null> = {
   CRITICAL: NotificationPriority.URGENT,
@@ -54,10 +55,10 @@ function slug(title: string): string {
  * One pass over every open order: recompute its alerts, and announce the
  * ones that are new or have materially changed since the last sweep.
  *
- * "Materially changed" is a plain string comparison of severity + detail —
- * `deriveOrder`'s `detail` text already carries the number that moved ("3
- * days remaining" vs "overdue by 2 days"), so a snapshot changing means the
- * situation genuinely did, not that the sweep merely ran again.
+ * "Materially changed" is decided by `alertNotice` (alert-policy.ts): for most
+ * alerts a change in severity or detail, but for lateness and deadline
+ * reminders only a change in severity — their detail is a day count that
+ * moves every day by itself, which re-announced every late item each morning.
  */
 export async function runAlertSweep(): Promise<{ checked: number; announced: number }> {
   const orders = await prisma.order.findMany({
@@ -85,7 +86,7 @@ export async function runAlertSweep(): Promise<{ checked: number; announced: num
       // verified live against real order data, fixed by keying on the title
       // too whenever there is no better id.
       const entityId = alert.entityId ?? `${order.id}:${slug(alert.title)}`;
-      const snapshot = `${alert.severity}:${alert.detail}`;
+      const { snapshot, email } = alertNotice(alert);
 
       const prior = await prisma.alertState.findUnique({
         where: { code_entityType_entityId: { code: alert.code, entityType: 'Order', entityId } },
@@ -105,6 +106,7 @@ export async function runAlertSweep(): Promise<{ checked: number; announced: num
         fields: [{ label: alert.title, oldValue: prior?.lastSnapshot ?? null, newValue: alert.detail }],
         actorId: null,
         actorName: 'OpsFlow',
+        email,
       });
 
       await prisma.alertState.upsert({

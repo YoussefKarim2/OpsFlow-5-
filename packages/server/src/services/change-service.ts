@@ -257,6 +257,9 @@ export async function announceChange(input: {
   /** Overrides the category's default type — the alert sweep and task
    * assignment know more precisely what this is than the category alone. */
   notificationType?: NotificationType;
+  /** False keeps it in-app only: no email, not even to ALWAYS_NOTIFY addresses.
+   * The alert sweep's deadline reminders use this. Defaults to true. */
+  email?: boolean;
 }): Promise<void> {
   try {
     const priority = input.priority ?? NotificationPriority.NORMAL;
@@ -311,6 +314,8 @@ export async function announceChange(input: {
         })),
       });
     }
+
+    if (input.email === false) return;
 
     const emailRecipients = await filterByPreference(raw, input.category, priority, 'email');
 
