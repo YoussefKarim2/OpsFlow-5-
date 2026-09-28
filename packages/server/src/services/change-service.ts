@@ -257,9 +257,6 @@ export async function announceChange(input: {
   /** Overrides the category's default type — the alert sweep and task
    * assignment know more precisely what this is than the category alone. */
   notificationType?: NotificationType;
-  /** False keeps it in-app only: no email, not even to ALWAYS_NOTIFY addresses.
-   * The alert sweep's deadline reminders use this. Defaults to true. */
-  email?: boolean;
 }): Promise<void> {
   try {
     const priority = input.priority ?? NotificationPriority.NORMAL;
@@ -315,7 +312,12 @@ export async function announceChange(input: {
       });
     }
 
-    if (input.email === false) return;
+    // Email is for what people did. An announcement nobody made — the alert
+    // sweep's overdue, late, blocked and shortage reminders — stays on the
+    // screen and in the bell. Mailed, it arrived as a batch every morning,
+    // to everyone routed and every ALWAYS_NOTIFY address, and taught people
+    // to ignore OpsFlow mail altogether.
+    if (!input.actorId) return;
 
     const emailRecipients = await filterByPreference(raw, input.category, priority, 'email');
 
