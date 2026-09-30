@@ -52,7 +52,7 @@ export function ProductionTab({ order }: { order: OrderDetailDto }) {
   }));
 
   return (
-    <div className="space-y-4 p-5">
+    <div className="space-y-4 step-body">
       {a.isBehindSchedule && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3">
           <div className="flex items-start gap-2.5">
@@ -137,56 +137,60 @@ export function ProductionTab({ order }: { order: OrderDetailDto }) {
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader title="By operation" />
-          <table className="w-full">
-            <thead className="border-b border-ink-200 bg-ink-50">
-              <tr>
-                <th className="th">Operation</th>
-                <th className="th text-right">Total</th>
-                <th className="th text-right">Days</th>
-                <th className="th text-right">Avg/day</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-ink-100">
-              {data.byOperation.length === 0 && (
-                <tr><td colSpan={4} className="td text-center text-ink-400">No records</td></tr>
-              )}
-              {data.byOperation.map((o) => (
-                <tr key={o.operation}>
-                  <td className="td font-medium">{o.operation.charAt(0) + o.operation.slice(1).toLowerCase()}</td>
-                  <td className="td text-right"><Num value={o.qty} /></td>
-                  <td className="td text-right"><Num value={o.days} /></td>
-                  <td className="td text-right"><Num value={o.avgPerDay} places={0} /></td>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="border-b border-ink-200 bg-ink-50">
+                <tr>
+                  <th className="th">Operation</th>
+                  <th className="th text-right">Total</th>
+                  <th className="th text-right">Days</th>
+                  <th className="th text-right">Avg/day</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-ink-100">
+                {data.byOperation.length === 0 && (
+                  <tr><td colSpan={4} className="td text-center text-ink-400">No records</td></tr>
+                )}
+                {data.byOperation.map((o) => (
+                  <tr key={o.operation}>
+                    <td className="td font-medium">{o.operation.charAt(0) + o.operation.slice(1).toLowerCase()}</td>
+                    <td className="td text-right"><Num value={o.qty} /></td>
+                    <td className="td text-right"><Num value={o.days} /></td>
+                    <td className="td text-right"><Num value={o.avgPerDay} places={0} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </Card>
 
         <Card>
           <CardHeader title="By line" subtitle="Which line is carrying the order" />
-          <table className="w-full">
-            <thead className="border-b border-ink-200 bg-ink-50">
-              <tr>
-                <th className="th">Line</th>
-                <th className="th text-right">Total</th>
-                <th className="th text-right">Days</th>
-                <th className="th text-right">Avg/day</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-ink-100">
-              {data.byLine.length === 0 && (
-                <tr><td colSpan={4} className="td text-center text-ink-400">No records</td></tr>
-              )}
-              {data.byLine.map((l) => (
-                <tr key={l.line}>
-                  <td className="td font-medium">{l.line}</td>
-                  <td className="td text-right"><Num value={l.qty} /></td>
-                  <td className="td text-right"><Num value={l.days} /></td>
-                  <td className="td text-right"><Num value={l.avgPerDay} places={0} /></td>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="border-b border-ink-200 bg-ink-50">
+                <tr>
+                  <th className="th">Line</th>
+                  <th className="th text-right">Total</th>
+                  <th className="th text-right">Days</th>
+                  <th className="th text-right">Avg/day</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-ink-100">
+                {data.byLine.length === 0 && (
+                  <tr><td colSpan={4} className="td text-center text-ink-400">No records</td></tr>
+                )}
+                {data.byLine.map((l) => (
+                  <tr key={l.line}>
+                    <td className="td font-medium">{l.line}</td>
+                    <td className="td text-right"><Num value={l.qty} /></td>
+                    <td className="td text-right"><Num value={l.days} /></td>
+                    <td className="td text-right"><Num value={l.avgPerDay} places={0} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </Card>
       </div>
 

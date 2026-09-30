@@ -159,7 +159,7 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
   const values = lookups?.values ?? {};
 
   return (
-    <div className="space-y-4 p-5">
+    <div className="space-y-4 step-body">
       {error && <ErrorNote error={new Error(error)} />}
 
       <div className="flex justify-end gap-2">

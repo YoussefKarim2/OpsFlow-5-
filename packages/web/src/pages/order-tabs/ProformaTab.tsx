@@ -250,7 +250,7 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
   const anyIncomplete = draft.lines.some((l) => l.description.trim() && lineTotal(l) == null);
 
   return (
-    <div className="space-y-4 p-5">
+    <div className="space-y-4 step-body">
       {/* The document. Hidden on screen; the print stylesheet hides the
           application and shows this instead. Fed from `draft`, so what prints
           is exactly what is on screen — including edits not yet saved, which is

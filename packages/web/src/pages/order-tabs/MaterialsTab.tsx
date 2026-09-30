@@ -77,14 +77,14 @@ export function MaterialsTab({ order }: { order: OrderDetailDto }) {
   });
 
   if (isLoading) return <Spinner label="Checking stock…" />;
-  if (error) return <div className="p-5"><ErrorNote error={error} onRetry={refetch} /></div>;
+  if (error) return <div className="step-body"><ErrorNote error={error} onRetry={refetch} /></div>;
   if (!position) return null;
 
   const short = position.requirements.filter((r) => r.status === 'SHORT');
   const reservable = position.requirements.filter((r) => r.status === 'RESERVABLE');
 
   return (
-    <div className="space-y-4 p-5">
+    <div className="space-y-4 step-body">
       {/* The headline: can this order be made? */}
       <div className="grid gap-3 sm:grid-cols-4">
         <Tile

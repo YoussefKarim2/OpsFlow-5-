@@ -16,6 +16,23 @@
 }
 
 @layer components {
+  /* The working area of every order step: its own padding, set here once.
+     Kept to a hairline at the sides so the step, not the margin around it,
+     has the width. */
+  .step-body {
+    @apply px-2 py-3;
+  }
+  /* The step header above a step body: the same gutter, with no bottom edge
+     of its own because the body below starts with its padding. */
+  .step-gutter {
+    @apply px-2 pt-3;
+  }
+  /* Another step's screen shown inside this one. It brings its own
+     step-body padding, so this cancels the host's rather than doubling it —
+     and must track step-body exactly, or it pokes out of the page. */
+  .step-embed {
+    @apply -mx-2 -mb-3;
+  }
   .card {
     @apply rounded-lg border border-ink-200 bg-white shadow-card;
   }

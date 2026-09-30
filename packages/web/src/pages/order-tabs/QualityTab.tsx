@@ -50,7 +50,7 @@ export function QualityTab({ order }: { order: OrderDetailDto }) {
   const openFailure = audits.find((a) => a.result === 'FAIL' && !a.correctiveActionClosed);
 
   return (
-    <div className="space-y-4 p-5">
+    <div className="space-y-4 step-body">
       {openFailure && (
         <div className="rounded-md border border-red-200 bg-red-50 px-4 py-3">
           <div className="flex items-start gap-2.5">

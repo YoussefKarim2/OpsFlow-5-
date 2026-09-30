@@ -86,7 +86,7 @@ export function CustomerReferenceTab({ orderId }: { orderId: string }) {
   if (isLoading) return <Spinner label="Loading documents…" />;
 
   return (
-    <div className="space-y-4 p-5">
+    <div className="space-y-4 step-body">
       <Card>
         <div className="card-header">
           <h3 className="card-title">Attach what the customer sent</h3>

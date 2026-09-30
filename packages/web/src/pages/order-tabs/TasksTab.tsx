@@ -62,7 +62,7 @@ export function TasksTab({ order }: { order: OrderDetailDto }) {
   const done = tasks.filter((t) => t.status === 'COMPLETED').length;
 
   return (
-    <div className="space-y-4 p-5">
+    <div className="space-y-4 step-body">
       <Card>
         <CardHeader
           title="Workflow"

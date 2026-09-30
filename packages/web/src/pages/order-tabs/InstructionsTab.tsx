@@ -75,7 +75,7 @@ export function InstructionsTab({ orderId }: { orderId: string }) {
   if (isLoading) return <Spinner label="Loading instructions…" />;
 
   return (
-    <div className="space-y-4 p-5">
+    <div className="space-y-4 step-body">
       <Card>
         <div className="card-header">
           <h3 className="card-title">Instructions for this order only</h3>
