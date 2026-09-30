@@ -271,11 +271,11 @@ export function OrderWorkspacePage() {
           />
         )}
 
-        <div className="min-h-0 min-w-0 flex-1 overflow-y-auto bg-ink-50">
+        <div className="min-h-0 flex-1 overflow-y-auto bg-ink-50">
           {/* What this step is for, who does it, what is missing, and the one
               button that moves the order on. Above whatever screen it opens. */}
           {steps && stepForTab && tab !== 'overview' && (
-            <div className="step-gutter">
+            <div className="px-5 pt-5">
               <StepHeader orderId={order.id} steps={steps} step={stepForTab} />
             </div>
           )}

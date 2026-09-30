@@ -186,7 +186,7 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
   // record, so anything it saved would be an empty draft over the real one.
   if (!can('costing:read') || order.costing == null) {
     return (
-      <div className="step-body">
+      <div className="p-5">
         <div className="flex items-start gap-2.5 rounded-md border border-ink-200 bg-ink-50 px-4 py-3">
           <Lock className="mt-0.5 h-4 w-4 shrink-0 text-ink-500" />
           <p className="text-xs leading-relaxed text-ink-700">
@@ -509,7 +509,7 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
     : null;
 
   return (
-    <div className="print-document space-y-4 step-body">
+    <div className="print-document space-y-4 p-5">
       {!mayWrite && (
         <div className="no-print flex items-start gap-2.5 rounded-md border border-amber-200 bg-amber-50 px-4 py-3">
           <Lock className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />

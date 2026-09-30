@@ -24,7 +24,7 @@ export function OverviewTab({
   const qty = (l: string) => funnel.find((f) => f.ledger === l)?.qty ?? 0;
 
   return (
-    <div className="space-y-4 step-body">
+    <div className="space-y-4 p-5">
       {/* The gates still run and `order.blockers` is still derived and still
           returned by the API — the checklist, the next-action line and the
           server's own refusals all read it. It is no longer announced here in

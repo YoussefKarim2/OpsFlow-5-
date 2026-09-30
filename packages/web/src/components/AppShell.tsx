@@ -65,12 +65,10 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex h-full">
-      {/* Sidebar — 180px from lg up: the narrowest at which every label, the
-          brand line and the account name still read in full, so the order
-          steps get the rest of the width. Below lg it is a 240px drawer. */}
+      {/* Sidebar */}
       <aside
         className={clsx(
-          'fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-ink-800 bg-ink-950 transition-transform lg:static lg:w-[180px] lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-ink-800 bg-ink-950 transition-transform lg:static lg:translate-x-0',
           open ? 'translate-x-0' : '-translate-x-full',
         )}
       >

@@ -91,7 +91,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
   const shippedQty = order.funnel.find((f) => f.ledger === 'SHIPPED')?.qty ?? 0;
 
   return (
-    <div className="space-y-4 step-body">
+    <div className="space-y-4 p-5">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {/* The same produced figure the server checks shipments against: the
             in-line ledger or sewing, whichever is further along. */}

@@ -153,7 +153,7 @@ export function QuantityTab({
     edits[`${colorId}:${sizeId}`] ?? matrix.cells[colorId]?.[sizeId] ?? 0;
 
   return (
-    <div className="space-y-4 step-body">
+    <div className="space-y-4 p-5">
       {error && <ErrorNote error={new Error(error)} />}
 
       <Card>

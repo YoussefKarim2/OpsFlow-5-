@@ -48,7 +48,7 @@ export function ActivityTab({ orderId }: { orderId: string }) {
   });
 
   return (
-    <div className="step-body">
+    <div className="p-5">
       <Card>
         <CardHeader
           title="History"

@@ -49,7 +49,7 @@ export function ProgressStatusTab({
   const overdueTasks = (tasks?.data ?? []).filter((t) => t.isOverdue && t.status !== 'COMPLETED');
 
   return (
-    <div className="space-y-4 step-body">
+    <div className="space-y-4 p-5">
       {/* ── Where it stands ─────────────────────────────────────────────── */}
       <Card>
         <div className="p-4">

@@ -46,7 +46,7 @@ export function OrderAuditTab({ order }: { order: OrderDetailDto }) {
   });
 
   return (
-    <div className="space-y-4 step-body">
+    <div className="space-y-4 p-5">
       <Card>
         <CardHeader
           title="Audit"
@@ -180,7 +180,7 @@ export function OrderAuditTab({ order }: { order: OrderDetailDto }) {
               the corrective action is closed.
             </p>
           </div>
-          <div className="step-embed">
+          <div className="-mx-5 -mb-5">
             <QualityTab order={order} />
           </div>
         </>

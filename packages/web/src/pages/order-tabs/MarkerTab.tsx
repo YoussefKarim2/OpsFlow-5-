@@ -76,7 +76,7 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
     : Object.keys(plan.plannedBySize);
 
   return (
-    <div className="space-y-4 step-body">
+    <div className="space-y-4 p-5">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
         <StatTile label="Lays" value={plan.lays.length} />
         <StatTile label="Total layers" value={<Num value={plan.totalLayers} />} />
@@ -221,34 +221,32 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
           {fabrics.length === 0 ? (
             <EmptyState title="No fabric records" />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="border-b border-ink-200 bg-ink-50">
-                  <tr>
-                    <th className="th">Fabric</th>
-                    <th className="th text-right">Required</th>
-                    <th className="th text-right">Issued</th>
-                    <th className="th text-right">Consumed</th>
-                    <th className="th text-right">Short</th>
+            <table className="w-full">
+              <thead className="border-b border-ink-200 bg-ink-50">
+                <tr>
+                  <th className="th">Fabric</th>
+                  <th className="th text-right">Required</th>
+                  <th className="th text-right">Issued</th>
+                  <th className="th text-right">Consumed</th>
+                  <th className="th text-right">Short</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-ink-100">
+                {fabrics.map((f, i) => (
+                  <tr key={i}>
+                    <td className="td font-medium">{f.fabric}{f.color && <span className="text-ink-400"> · {f.color}</span>}</td>
+                    <td className="td text-right"><Num value={f.requiredM} places={0} suffix=" m" /></td>
+                    <td className="td text-right"><Num value={f.issuedM} places={0} suffix=" m" fallback="—" /></td>
+                    <td className="td text-right"><Num value={f.actualConsumptionM} places={0} suffix=" m" fallback="—" /></td>
+                    <td className="td text-right">
+                      <span className={clsx('tnum text-sm font-semibold', f.shortageM > 0 ? 'text-red-600' : 'text-emerald-600')}>
+                        {f.shortageM > 0 ? `${Math.round(f.shortageM).toLocaleString()} m` : 'Covered'}
+                      </span>
+                    </td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-ink-100">
-                  {fabrics.map((f, i) => (
-                    <tr key={i}>
-                      <td className="td font-medium">{f.fabric}{f.color && <span className="text-ink-400"> · {f.color}</span>}</td>
-                      <td className="td text-right"><Num value={f.requiredM} places={0} suffix=" m" /></td>
-                      <td className="td text-right"><Num value={f.issuedM} places={0} suffix=" m" fallback="—" /></td>
-                      <td className="td text-right"><Num value={f.actualConsumptionM} places={0} suffix=" m" fallback="—" /></td>
-                      <td className="td text-right">
-                        <span className={clsx('tnum text-sm font-semibold', f.shortageM > 0 ? 'text-red-600' : 'text-emerald-600')}>
-                          {f.shortageM > 0 ? `${Math.round(f.shortageM).toLocaleString()} m` : 'Covered'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           )}
         </Card>
 
@@ -257,30 +255,28 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
           {cutting.length === 0 ? (
             <EmptyState title="Nothing cut yet" />
           ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="border-b border-ink-200 bg-ink-50">
-                  <tr>
-                    <th className="th">Date</th>
-                    <th className="th">Team</th>
-                    <th className="th">Cut by</th>
-                    <th className="th text-right">Qty</th>
-                    <th className="th text-right">Fabric</th>
+            <table className="w-full">
+              <thead className="border-b border-ink-200 bg-ink-50">
+                <tr>
+                  <th className="th">Date</th>
+                  <th className="th">Team</th>
+                  <th className="th">Cut by</th>
+                  <th className="th text-right">Qty</th>
+                  <th className="th text-right">Fabric</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-ink-100">
+                {cutting.map((c) => (
+                  <tr key={c.id}>
+                    <td className="td">{fmtDate(c.cutDate)}</td>
+                    <td className="td text-xs">{c.cuttingTeam || '—'}</td>
+                    <td className="td text-xs">{c.cutByName || '—'}</td>
+                    <td className="td text-right font-semibold"><Num value={c.actualCutQty} /></td>
+                    <td className="td text-right"><Num value={c.fabricUsedM} places={0} suffix=" m" fallback="—" /></td>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-ink-100">
-                  {cutting.map((c) => (
-                    <tr key={c.id}>
-                      <td className="td">{fmtDate(c.cutDate)}</td>
-                      <td className="td text-xs">{c.cuttingTeam || '—'}</td>
-                      <td className="td text-xs">{c.cutByName || '—'}</td>
-                      <td className="td text-right font-semibold"><Num value={c.actualCutQty} /></td>
-                      <td className="td text-right"><Num value={c.fabricUsedM} places={0} suffix=" m" fallback="—" /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           )}
         </Card>
       </div>

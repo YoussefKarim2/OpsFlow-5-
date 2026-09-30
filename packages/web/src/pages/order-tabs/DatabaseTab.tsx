@@ -70,7 +70,7 @@ export function DatabaseTab({ orderId }: { orderId: string }) {
   const sheets = (source?.sheets ?? []) as Array<{ name: string; rowCount?: number; columnCount?: number }>;
 
   return (
-    <div className="space-y-4 step-body">
+    <div className="space-y-4 p-5">
       <div className="flex items-start gap-2 rounded-md border border-ink-200 bg-white px-4 py-3">
         <Info className="mt-0.5 h-4 w-4 shrink-0 text-ink-400" />
         <p className="text-xs text-ink-600">

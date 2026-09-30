@@ -88,7 +88,7 @@ export function StockTab({ order }: { order: OrderDetailDto }) {
   if (isLoading) return <Spinner label="Loading finished stock…" />;
 
   return (
-    <div className="space-y-4 step-body">
+    <div className="space-y-4 p-5">
       <Card>
         <div className="card-header">
           <h3 className="card-title">Finished pieces already in stock</h3>

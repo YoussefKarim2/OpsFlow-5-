@@ -55,7 +55,7 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
   });
 
   if (isLoading) return <Spinner />;
-  if (error) return <div className="step-body"><ErrorNote error={error} /></div>;
+  if (error) return <div className="p-5"><ErrorNote error={error} /></div>;
   if (!data) return null;
 
   if (editing) {
@@ -78,7 +78,7 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
     }));
 
     return (
-      <div className="space-y-4 step-body">
+      <div className="space-y-4 p-5">
         <Card>
           <CardHeader
             title="Edit the bill of materials"
@@ -115,7 +115,7 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
   }
 
   return (
-    <div className="space-y-4 step-body">
+    <div className="space-y-4 p-5">
       {can('material:edit') && (
         <div className="flex justify-end">
           <button className="btn-secondary btn-sm" onClick={() => setEditing(true)}>

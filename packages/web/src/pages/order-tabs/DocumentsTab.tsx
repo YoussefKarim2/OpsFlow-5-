@@ -36,7 +36,7 @@ export function DocumentsTab({ orderId }: { orderId: string }) {
   if (isLoading) return <Spinner />;
 
   return (
-    <div className="space-y-4 step-body">
+    <div className="space-y-4 p-5">
       <Card>
         <div className="card-header">
           <h3 className="card-title">Documents</h3>

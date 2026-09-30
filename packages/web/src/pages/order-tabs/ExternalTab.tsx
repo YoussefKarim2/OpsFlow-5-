@@ -163,7 +163,7 @@ export function ExternalTab({ order, onJump }: {
     }));
 
     return (
-      <div className="space-y-4 step-body">
+      <div className="space-y-4 p-5">
         <Card>
           <CardHeader
             title="External work"
@@ -185,7 +185,7 @@ export function ExternalTab({ order, onJump }: {
   }
 
   return (
-    <div className="space-y-4 step-body">
+    <div className="space-y-4 p-5">
       {can('external:write') && (
         <div className="flex justify-end">
           <button className="btn-secondary btn-sm" onClick={() => setEditing(true)}>

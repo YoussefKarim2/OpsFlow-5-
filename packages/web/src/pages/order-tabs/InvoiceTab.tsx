@@ -49,7 +49,7 @@ export function InvoiceTab({ order }: { order: OrderDetailDto }) {
   const hasShipped = Boolean(shipment?.actualShippingDate);
 
   return (
-    <div className="space-y-4 step-body">
+    <div className="space-y-4 p-5">
       {/* ── The invoice ─────────────────────────────────────────────────── */}
       <Card>
         <CardHeader
@@ -176,7 +176,7 @@ export function InvoiceTab({ order }: { order: OrderDetailDto }) {
       </Card>
 
       {/* The existing shipping screen, reused rather than rebuilt. */}
-      <div className="step-embed">
+      <div className="-mx-5 -mb-5">
         <PackingTab order={order} focus="shipping" />
       </div>
 
