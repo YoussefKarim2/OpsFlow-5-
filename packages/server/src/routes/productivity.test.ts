@@ -62,6 +62,9 @@ describe('productivity range validation', () => {
       { from: '2026-02-30', to: '2026-03-01' },
       { from: '2026-10-05T00:00:00Z', to: '2026-10-11' },
       { from: '2026-10-05', to: '2026-10-11', primary: 'IRONING' },
+      // Still a real operation, just not one the dropdown offers as primary.
+      { from: '2026-10-05', to: '2026-10-11', primary: 'WASHING' },
+      { from: '2026-10-05', to: '2026-10-11', primary: 'FINISHING' },
     ]) {
       assert.equal(productivityQuery.safeParse(bad).success, false, JSON.stringify(bad));
     }

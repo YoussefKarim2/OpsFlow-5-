@@ -13,7 +13,7 @@ import type { Alert } from './calc/alerts.js';
 import type { StageProgress } from './calc/progress.js';
 import type { ProductionAnalytics } from './calc/production.js';
 import type {
-  DayRange, OutputSummary, Trend, DefectRateSummary, FabricUtilisationSummary, OperationOutput,
+  DayRange, OutputSummary, Trend, DefectRateSummary, FabricUtilisationSummary, OperationOutput, FactoryOverview,
 } from './calc/productivity.js';
 import type { BomSummary } from './calc/materials.js';
 import type { CostingResult } from './calc/costing.js';
@@ -483,6 +483,10 @@ export interface ProductivityCuttingRowDto {
 export interface ProductivityDto {
   range: DayRange;
   previousRange: DayRange;
+  /** The whole factory: unique garments, stage throughput, activity. Never a sum across stages. */
+  overview: FactoryOverview;
+  /** Garments sewn per recorded day, this period against the one before. */
+  overviewTrend: Trend;
   primaryOperation: ProductionOperation;
   output: OutputSummary;
   /** Primary-operation average per recorded day, this period against the one before. */

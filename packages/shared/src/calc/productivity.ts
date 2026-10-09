@@ -128,6 +128,28 @@ export const PRODUCTION_OPERATIONS: readonly ProductionOperation[] = [
 /** The operation whose output is the factory's throughput. */
 export const PRIMARY_OPERATION: ProductionOperation = ProductionOperation.SEWING;
 
+/**
+ * The operations a person can pick as the primary one. Washing and finishing
+ * are not stages this factory manages by, so they are not offered. They stay
+ * in the enum and in `PRODUCTION_OPERATIONS`: a record already filed under
+ * them must still be counted and shown.
+ */
+export const PRIMARY_OPERATION_CHOICES: readonly ProductionOperation[] = [
+  ProductionOperation.CUTTING, ProductionOperation.SEWING, ProductionOperation.PRINTING,
+  ProductionOperation.EMBROIDERY, ProductionOperation.PACKING,
+];
+
+/**
+ * Operations in the order a garment meets them. Used to lay out stage
+ * throughput so the reader sees pieces flowing left to right, which is also
+ * why those columns must never be summed: it is the same garment at each one.
+ */
+export const STAGE_ORDER: readonly ProductionOperation[] = [
+  ProductionOperation.CUTTING, ProductionOperation.PRINTING, ProductionOperation.EMBROIDERY,
+  ProductionOperation.SEWING, ProductionOperation.WASHING, ProductionOperation.FINISHING,
+  ProductionOperation.PACKING,
+];
+
 export interface ProductivityRecordInput {
   id: string;
   orderId: string;
@@ -420,4 +442,96 @@ export function summariseByOrder(
       recordCount: v.records,
     }))
     .sort((a, b) => (b.primary ?? -1) - (a.primary ?? -1) || b.recordCount - a.recordCount);
+}
+
+// ── Factory overview ────────────────────────────────────────────────────────
+//
+// The whole factory for a period, from the same production records. A record
+// is pieces passing through ONE operation, and a garment passes through
+// several, so quantities are never added across operations: that would count
+// one garment up to five times. The overview gives three separate things and
+// names each for what it is.
+//
+//   Garments sewn — the unique output. Sewing is where a garment comes into
+//   being, and it is already what "produced" means on every order page.
+//
+//   Garments packed — finished goods, the same garments counted again at the
+//   last stage. Kept apart from sewn because packing lags sewing and a period
+//   boundary can fall between the two.
+//
+//   Stage throughput — pieces through each operation, in manufacturing order.
+//   Shown side by side, never totalled.
+
+export interface StageThroughput {
+  operation: ProductionOperation;
+  /** Pieces through this stage over the days it was recorded; null if never. */
+  qty: number | null;
+  recordedDays: number;
+  avgPerRecordedDay: number | null;
+  /** Whether any record for this operation exists in the period. */
+  recorded: boolean;
+}
+
+export interface FactoryOverview {
+  range: DayRange;
+  calendarDays: number;
+  recordedDays: number;
+  unrecordedDays: number;
+  recordCount: number;
+  /** Distinct orders with any production record in the period. */
+  activeOrders: number;
+  /** Unique garments made: sewing output over the days sewing was recorded. */
+  garmentsSewn: number | null;
+  sewnRecordedDays: number;
+  sewnPerRecordedDay: number | null;
+  /** Finished goods: packing output. The same garments, later. Never added to sewn. */
+  garmentsPacked: number | null;
+  packedRecordedDays: number;
+  /** Every operation in manufacturing order, recorded or not. */
+  stages: StageThroughput[];
+  operationsRecorded: ProductionOperation[];
+  operationsUnrecorded: ProductionOperation[];
+  /** One row per calendar day, each operation null when not recorded that day. */
+  days: DayOutput[];
+}
+
+export function summariseFactory(
+  records: readonly ProductivityRecordInput[],
+  range: DayRange,
+): FactoryOverview {
+  const out = summariseOutput(records, range, ProductionOperation.SEWING);
+  const byOp = new Map(out.byOperation.map((o) => [o.operation, o]));
+  const stages: StageThroughput[] = STAGE_ORDER.map((operation) => {
+    const o = byOp.get(operation)!;
+    return { operation, qty: o.qty, recordedDays: o.recordedDays, avgPerRecordedDay: o.avgPerRecordedDay, recorded: o.recordedDays > 0 };
+  });
+  const sewing = byOp.get(ProductionOperation.SEWING)!;
+  const packing = byOp.get(ProductionOperation.PACKING)!;
+
+  const days = new Set(enumerateDays(range));
+  const orders = new Set<string>();
+  let recordCount = 0;
+  for (const r of records) {
+    if (!days.has(dayKeyOf(r.date)) || !Number.isFinite(r.qty)) continue;
+    orders.add(r.orderId);
+    recordCount += 1;
+  }
+
+  return {
+    range,
+    calendarDays: out.calendarDays,
+    recordedDays: out.recordedDays,
+    unrecordedDays: out.unrecordedDays,
+    recordCount,
+    activeOrders: orders.size,
+    garmentsSewn: sewing.qty,
+    sewnRecordedDays: sewing.recordedDays,
+    sewnPerRecordedDay: sewing.avgPerRecordedDay,
+    garmentsPacked: packing.qty,
+    packedRecordedDays: packing.recordedDays,
+    stages,
+    operationsRecorded: stages.filter((s) => s.recorded).map((s) => s.operation),
+    operationsUnrecorded: stages.filter((s) => !s.recorded).map((s) => s.operation),
+    days: out.days,
+  };
 }

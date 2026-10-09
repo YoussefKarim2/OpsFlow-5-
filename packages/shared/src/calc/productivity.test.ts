@@ -11,9 +11,10 @@ import assert from 'node:assert/strict';
 
 import { ProductionOperation } from '../enums.js';
 import {
-  summariseOutput, summariseByOrder, summariseDefectRate, summariseFabricUtilisation,
+  summariseOutput, summariseByOrder, summariseDefectRate, summariseFabricUtilisation, summariseFactory,
   compareTrend, periodRange, previousRange, rangeBounds, daysInRange, enumerateDays,
-  isDayKey, shiftDay, type ProductivityRecordInput,
+  isDayKey, shiftDay, PRIMARY_OPERATION_CHOICES, PRODUCTION_OPERATIONS, STAGE_ORDER,
+  type ProductivityRecordInput,
 } from './productivity.js';
 
 const rec = (
@@ -285,5 +286,86 @@ describe('empty data', () => {
     }
     assert.equal(JSON.stringify(s).includes('NaN'), false);
     assert.deepEqual(summariseByOrder([], WEEK), []);
+  });
+});
+
+describe('factory overview', () => {
+  const flow = [
+    // One order, 100 garments, through four stages across the week.
+    rec('2026-10-05', 'CUTTING', 100),
+    rec('2026-10-06', 'PRINTING', 100),
+    rec('2026-10-07', 'SEWING', 60),
+    rec('2026-10-08', 'SEWING', 40),
+    rec('2026-10-09', 'PACKING', 100),
+  ];
+
+  test('garments sewn is the unique output and is not the sum of every stage', () => {
+    const f = summariseFactory(flow, WEEK);
+    assert.equal(f.garmentsSewn, 100, 'sixty plus forty sewn');
+    assert.equal(f.garmentsPacked, 100);
+    // The five records carry 400 pieces between them, but they are the same
+    // hundred garments at four stages. Nothing in the overview says 400.
+    assert.equal(JSON.stringify(f).includes('400'), false);
+    assert.equal('totalPieces' in f, false);
+    assert.equal('total' in f, false);
+  });
+
+  test('stage throughput is in manufacturing order and says which stages were recorded', () => {
+    const f = summariseFactory(flow, WEEK);
+    assert.deepEqual(f.stages.map((s) => s.operation), STAGE_ORDER);
+    assert.deepEqual(f.stages.map((s) => s.operation), ['CUTTING', 'PRINTING', 'EMBROIDERY', 'SEWING', 'WASHING', 'FINISHING', 'PACKING']);
+    assert.deepEqual(f.operationsRecorded, ['CUTTING', 'PRINTING', 'SEWING', 'PACKING']);
+    assert.deepEqual(f.operationsUnrecorded, ['EMBROIDERY', 'WASHING', 'FINISHING']);
+    const embroidery = f.stages.find((s) => s.operation === 'EMBROIDERY')!;
+    assert.equal(embroidery.qty, null, 'not recorded is null, not zero');
+    assert.equal(embroidery.recorded, false);
+    const sewing = f.stages.find((s) => s.operation === 'SEWING')!;
+    assert.equal(sewing.recordedDays, 2);
+    assert.equal(sewing.avgPerRecordedDay, 50);
+  });
+
+  test('activity counts come from the records in the range only', () => {
+    const f = summariseFactory([...flow, rec('2026-10-01', 'SEWING', 999, 'other')], WEEK);
+    assert.equal(f.recordCount, 5);
+    assert.equal(f.activeOrders, 1);
+    assert.equal(f.recordedDays, 5);
+    assert.equal(f.unrecordedDays, 2);
+    assert.equal(f.calendarDays, 7);
+  });
+
+  test('a period with only cutting has no garments sewn and no garments packed — unknown, not zero', () => {
+    const f = summariseFactory([rec('2026-10-05', 'CUTTING', 500)], WEEK);
+    assert.equal(f.garmentsSewn, null);
+    assert.equal(f.sewnPerRecordedDay, null);
+    assert.equal(f.garmentsPacked, null);
+    assert.equal(f.recordedDays, 1);
+    assert.deepEqual(f.operationsRecorded, ['CUTTING']);
+  });
+
+  test('an empty period has nulls, zero activity and no NaN', () => {
+    const f = summariseFactory([], WEEK);
+    assert.equal(f.garmentsSewn, null);
+    assert.equal(f.garmentsPacked, null);
+    assert.equal(f.recordCount, 0);
+    assert.equal(f.activeOrders, 0);
+    assert.deepEqual(f.operationsRecorded, []);
+    assert.equal(f.operationsUnrecorded.length, 7);
+    assert.equal(JSON.stringify(f).includes('NaN'), false);
+  });
+
+  test('a record filed under washing or finishing is still counted, though neither is a dropdown choice', () => {
+    const f = summariseFactory([rec('2026-10-05', 'WASHING', 30), rec('2026-10-05', 'FINISHING', 20)], WEEK);
+    assert.equal(f.stages.find((s) => s.operation === 'WASHING')!.qty, 30);
+    assert.equal(f.stages.find((s) => s.operation === 'FINISHING')!.qty, 20);
+    assert.deepEqual(f.operationsRecorded, ['WASHING', 'FINISHING']);
+  });
+});
+
+describe('primary operation choices', () => {
+  test('washing and finishing are not offered, but remain valid operations', () => {
+    assert.deepEqual(PRIMARY_OPERATION_CHOICES, ['CUTTING', 'SEWING', 'PRINTING', 'EMBROIDERY', 'PACKING']);
+    assert.ok(PRODUCTION_OPERATIONS.includes('WASHING'));
+    assert.ok(PRODUCTION_OPERATIONS.includes('FINISHING'));
+    for (const c of PRIMARY_OPERATION_CHOICES) assert.ok(PRODUCTION_OPERATIONS.includes(c));
   });
 });

@@ -2,13 +2,13 @@ import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
-  ComposedChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell,
+  ComposedChart, Bar, Line, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell,
 } from 'recharts';
 import { ChevronLeft, ChevronRight, ChevronDown, ArrowRight, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import {
   fmtDate, fmtDateShort, fmtNumber, fmtPct,
-  PRODUCTION_OPERATIONS, PRIMARY_OPERATION, periodRange, shiftDay, daysInRange, isDayKey,
-  type ProductionOperation, type ProductivityDto, type ProductivityPeriod, type Trend, type DayRange,
+  PRODUCTION_OPERATIONS, PRIMARY_OPERATION, PRIMARY_OPERATION_CHOICES, periodRange, shiftDay, daysInRange, isDayKey,
+  type ProductionOperation, type ProductivityDto, type ProductivityPeriod, type Trend, type DayRange, type FactoryOverview,
 } from '@opsflow/shared';
 import { api } from '../lib/api';
 import { Card, CardHeader, StatTile, Spinner, ErrorNote, EmptyState, clsx } from '../components/ui';
@@ -38,6 +38,12 @@ function opLabel(op: string): string {
   return op.charAt(0) + op.slice(1).toLowerCase();
 }
 
+/** One colour per operation, so a stage reads the same in every chart. */
+const OP_COLOR: Record<ProductionOperation, string> = {
+  CUTTING: '#0ea5e9', PRINTING: '#a855f7', EMBROIDERY: '#ec4899', SEWING: '#2563eb',
+  WASHING: '#14b8a6', FINISHING: '#f59e0b', PACKING: '#16a34a',
+};
+
 export function ProductivityPage() {
   const [params, setParams] = useSearchParams();
   const today = localToday();
@@ -45,7 +51,7 @@ export function ProductivityPage() {
   const mode: Mode = (MODES.find((m) => m.key === params.get('mode'))?.key) ?? 'week';
   const anchor = isDayKey(params.get('anchor')) ? params.get('anchor')! : today;
   const primary: ProductionOperation =
-    (PRODUCTION_OPERATIONS.find((o) => o === params.get('primary'))) ?? PRIMARY_OPERATION;
+    (PRIMARY_OPERATION_CHOICES.find((o) => o === params.get('primary'))) ?? PRIMARY_OPERATION;
 
   const range: DayRange = useMemo(() => {
     if (mode === 'custom') {
@@ -135,7 +141,7 @@ export function ProductivityPage() {
           Primary operation
           <select className="input !py-1 text-xs" value={primary}
             onChange={(e) => update({ primary: e.target.value === PRIMARY_OPERATION ? null : e.target.value })}>
-            {PRODUCTION_OPERATIONS.map((o) => <option key={o} value={o}>{opLabel(o)}</option>)}
+            {PRIMARY_OPERATION_CHOICES.map((o) => <option key={o} value={o}>{opLabel(o)}</option>)}
           </select>
         </label>
       </div>
@@ -165,8 +171,20 @@ function ProductivityBody({ data }: { data: ProductivityDto }) {
 
   const nothingAtAll = out.recordedDays === 0 && !data.quality?.summary.auditCount && !data.fabric?.summary.recordCount;
 
+  // Columns: the operations a person can choose, plus any other operation that
+  // actually has a record in this period, so history is never hidden.
+  const visibleOps = PRODUCTION_OPERATIONS.filter((o) =>
+    PRIMARY_OPERATION_CHOICES.includes(o) || out.byOperation.some((b) => b.operation === o && b.recordedDays > 0));
+
   return (
     <>
+      <OverviewSection overview={data.overview} trend={data.overviewTrend} />
+
+      <div className="pt-1">
+        <h2 className="text-base font-semibold text-ink-900">{label} in detail</h2>
+        <p className="text-xs text-ink-500">The operation chosen as primary, with its own days, orders and records.</p>
+      </div>
+
       {/* KPI tiles */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
         <StatTile
@@ -275,7 +293,7 @@ function ProductivityBody({ data }: { data: ProductivityDto }) {
                   <thead className="border-b border-ink-200 bg-ink-50">
                     <tr>
                       <th className="th">Date</th>
-                      {PRODUCTION_OPERATIONS.map((o) => (
+                      {visibleOps.map((o) => (
                         <th key={o} className={clsx('th text-right', o === data.primaryOperation && 'text-accent-700')}>{opLabel(o)}</th>
                       ))}
                       <th className="th text-right">Orders</th>
@@ -287,7 +305,7 @@ function ProductivityBody({ data }: { data: ProductivityDto }) {
                       const open = openDay === d.date;
                       const rows = recordsByDay.get(d.date) ?? [];
                       return (
-                        <DayRow key={d.date} day={d} open={open} rows={rows} primary={data.primaryOperation}
+                        <DayRow key={d.date} day={d} open={open} rows={rows} primary={data.primaryOperation} ops={visibleOps}
                           onToggle={() => setOpenDay(open ? null : d.date)} />
                       );
                     })}
@@ -305,7 +323,7 @@ function ProductivityBody({ data }: { data: ProductivityDto }) {
                   <tr><th className="th">Operation</th><th className="th text-right">Pieces</th><th className="th text-right">Days</th><th className="th text-right">Avg/day</th></tr>
                 </thead>
                 <tbody className="divide-y divide-ink-100">
-                  {out.byOperation.map((o) => (
+                  {out.byOperation.filter((o) => visibleOps.includes(o.operation)).map((o) => (
                     <tr key={o.operation} className={clsx(o.operation === data.primaryOperation && 'bg-accent-50/40')}>
                       <td className="td font-medium">{opLabel(o.operation)}</td>
                       <td className="td text-right"><Qty value={o.qty} /></td>
@@ -329,7 +347,7 @@ function ProductivityBody({ data }: { data: ProductivityDto }) {
                     <tr>
                       <th className="th">PO</th><th className="th">Order</th><th className="th">Client</th><th className="th">Factory</th>
                       <th className="th text-right text-accent-700">{label}</th>
-                      {PRODUCTION_OPERATIONS.filter((o) => o !== data.primaryOperation).map((o) => <th key={o} className="th text-right">{opLabel(o)}</th>)}
+                      {visibleOps.filter((o) => o !== data.primaryOperation).map((o) => <th key={o} className="th text-right">{opLabel(o)}</th>)}
                       <th className="th text-right">Days</th><th className="th" />
                     </tr>
                   </thead>
@@ -341,7 +359,7 @@ function ProductivityBody({ data }: { data: ProductivityDto }) {
                         <td className="td text-xs text-ink-600">{o.clientName}</td>
                         <td className="td text-xs text-ink-600">{o.factoryName ?? '—'}</td>
                         <td className="td text-right font-medium"><Qty value={o.primary} /></td>
-                        {PRODUCTION_OPERATIONS.filter((op) => op !== data.primaryOperation).map((op) => (
+                        {visibleOps.filter((op) => op !== data.primaryOperation).map((op) => (
                           <td key={op} className="td text-right"><Qty value={o.byOperation[op]} /></td>
                         ))}
                         <td className="td tnum text-right">{o.recordedDays}</td>
@@ -374,13 +392,163 @@ function ProductivityBody({ data }: { data: ProductivityDto }) {
   );
 }
 
+// ── Overall factory productivity ────────────────────────────────────────────
+//
+// Three separate things, never added together: unique garments (sewn),
+// finished goods (packed) and pieces through each stage. A record is pieces
+// through one operation and a garment passes through several, so a sum across
+// stages would count one garment up to five times.
+
+function OverviewSection({ overview: f, trend }: { overview: FactoryOverview; trend: Trend }) {
+  const recordedStages = f.stages.filter((s) => s.recorded);
+  const chartData = f.days.map((d) => ({ date: d.date, recorded: d.recorded, ...d.byOperation }));
+
+  return (
+    <section className="space-y-4">
+      <div>
+        <h2 className="text-base font-semibold text-ink-900">Overall factory productivity</h2>
+        <p className="text-xs text-ink-500">
+          Every production record in this period, across all orders. Stages are the same garments counted at each step, so they are shown side by side and never added together.
+        </p>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile
+          label="Garments sewn"
+          tone="accent"
+          value={f.garmentsSewn == null ? <Unrecorded /> : fmtNumber(f.garmentsSewn)}
+          sub={f.garmentsSewn == null
+            ? 'Unique output. No sewing recorded on any day of this period.'
+            : <>unique garments made, over {f.sewnRecordedDays} day{f.sewnRecordedDays === 1 ? '' : 's'} with a sewing record <TrendNote trend={trend} what="rate" /></>}
+        />
+        <StatTile
+          label="Garments packed"
+          tone="emerald"
+          value={f.garmentsPacked == null ? <Unrecorded /> : fmtNumber(f.garmentsPacked)}
+          sub={f.garmentsPacked == null
+            ? 'Finished goods. No packing recorded in this period.'
+            : `finished goods, over ${f.packedRecordedDays} day${f.packedRecordedDays === 1 ? '' : 's'} with a packing record. The same garments as sewn, counted at the last stage.`}
+        />
+        <StatTile
+          label="Days with a record"
+          tone={f.unrecordedDays > 0 && f.recordedDays > 0 ? 'amber' : 'neutral'}
+          value={<>{fmtNumber(f.recordedDays)}<span className="text-base font-normal text-ink-400"> / {f.calendarDays}</span></>}
+          sub={f.unrecordedDays === 0
+            ? 'Every day of the period has at least one production record.'
+            : `${f.unrecordedDays} day${f.unrecordedDays === 1 ? '' : 's'} with no record of any operation. Unknown, not zero.`}
+        />
+        <StatTile
+          label="Orders active"
+          value={fmtNumber(f.activeOrders)}
+          sub={`${fmtNumber(f.recordCount)} production record${f.recordCount === 1 ? '' : 's'} across ${f.operationsRecorded.length} of ${f.stages.length} operations`}
+        />
+      </div>
+
+      <div className="grid grid-cols-1 gap-5 xl:grid-cols-5">
+        <Card className="xl:col-span-3">
+          <CardHeader
+            title="Daily trend by stage"
+            subtitle={recordedStages.length === 0
+              ? 'No production record of any operation in this period.'
+              : `One line per recorded operation. Shaded days have no record of any kind; a gap in a line is a day that operation was not recorded.`}
+          />
+          {recordedStages.length === 0 ? <EmptyState title="Nothing recorded in this period" /> : (
+            <div className="h-64 px-2 pb-2">
+              <ResponsiveContainer width="100%" height="100%">
+                <ComposedChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
+                  <XAxis dataKey="date" tickFormatter={(d: string) => fmtDateShort(d)} tick={{ fontSize: 11, fill: '#65758d' }} axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={24} />
+                  <YAxis tick={{ fontSize: 11, fill: '#65758d' }} axisLine={false} tickLine={false} width={48} tickFormatter={(v: number) => v.toLocaleString()} />
+                  <Tooltip
+                    cursor={{ stroke: '#cbd5e1' }}
+                    content={({ active, payload }) => {
+                      const d = active && payload && payload[0]?.payload as (typeof chartData)[number] | undefined;
+                      if (!d) return null;
+                      return (
+                        <div className="rounded-md border border-ink-200 bg-white px-3 py-2 text-xs shadow-panel">
+                          <p className="font-medium text-ink-900">{fmtDate(d.date)}</p>
+                          {!d.recorded ? <p className="italic text-ink-500">No production recorded</p> : (
+                            <ul className="mt-1 space-y-0.5">
+                              {f.stages.filter((st) => d[st.operation] != null).map((st) => (
+                                <li key={st.operation} className="flex justify-between gap-4">
+                                  <span className="flex items-center gap-1.5"><span className="h-2 w-2 rounded-full" style={{ background: OP_COLOR[st.operation] }} />{opLabel(st.operation)}</span>
+                                  <span className="tnum">{fmtNumber(d[st.operation])}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      );
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} formatter={(v: string) => opLabel(v)} />
+                  {f.days.filter((d) => !d.recorded).map((d) => (
+                    <ReferenceArea key={d.date} x1={d.date} x2={d.date} fill="#e2e8f0" fillOpacity={0.6} strokeOpacity={0} />
+                  ))}
+                  {recordedStages.map((st) => (
+                    <Line key={st.operation} type="monotone" dataKey={st.operation} stroke={OP_COLOR[st.operation]} strokeWidth={2}
+                      dot={{ r: 3 }} connectNulls={false} isAnimationActive={false} />
+                  ))}
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </Card>
+
+        <Card className="xl:col-span-2">
+          <CardHeader title="Pieces through each stage" subtitle="In manufacturing order. Not totalled: it is the same garment at each stage." />
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="border-b border-ink-200 bg-ink-50">
+                <tr><th className="th">Stage</th><th className="th text-right">Pieces</th><th className="th text-right">Days</th><th className="th text-right">Avg/day</th><th className="th">Data</th></tr>
+              </thead>
+              <tbody className="divide-y divide-ink-100">
+                {f.stages.map((st) => (
+                  <tr key={st.operation} className={clsx(!st.recorded && 'text-ink-400')}>
+                    <td className="td font-medium">
+                      <span className="mr-1.5 inline-block h-2 w-2 rounded-full align-middle" style={{ background: st.recorded ? OP_COLOR[st.operation] : '#cbd5e1' }} />
+                      {opLabel(st.operation)}
+                    </td>
+                    <td className="td text-right"><Qty value={st.qty} /></td>
+                    <td className="td tnum text-right">{st.recorded ? st.recordedDays : ''}</td>
+                    <td className="td text-right"><Qty value={st.avgPerRecordedDay} /></td>
+                    <td className="td text-xs">
+                      {st.recorded
+                        ? <span className="chip bg-emerald-50 text-emerald-700 ring-emerald-500/20">Recorded</span>
+                        : <span className="chip bg-ink-100 text-ink-500 ring-ink-500/20">Not recorded</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="border-t border-ink-100 px-4 py-2 text-xs text-ink-500">
+            Cutting counts panels, printing and embroidery count decorated panels, sewing counts garments made, packing counts garments boxed. Adding the rows would count one garment several times, so there is no total row.
+          </p>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader title="Not measured yet" subtitle="Factory-wide figures the records cannot support, and what each would need" />
+        <ul className="divide-y divide-ink-100 text-sm">
+          <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Pieces per worker-hour.</span> <span className="text-ink-600">Needs the workers present and hours worked each day. Nothing records attendance.</span></li>
+          <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Cost per garment and daily running cost.</span> <span className="text-ink-600">Needs a daily factory cost. The daily cost on an order's costing sheet is a typed input for that one order, not a record of a day.</span></li>
+          <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Line efficiency.</span> <span className="text-ink-600">Needs the standard minutes per garment for each style, plus the hours above. Neither is recorded.</span></li>
+          <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Daily margin or profit.</span> <span className="text-ink-600">Selling price exists per order, but without a daily cost there is nothing to set against it.</span></li>
+        </ul>
+      </Card>
+    </section>
+  );
+}
+
 // ── Pieces ──────────────────────────────────────────────────────────────────
 
-function DayRow({ day, rows, open, primary, onToggle }: {
+function DayRow({ day, rows, open, primary, ops, onToggle }: {
   day: ProductivityDto['output']['days'][number];
   rows: ProductivityDto['records'];
   open: boolean;
   primary: ProductionOperation;
+  ops: readonly ProductionOperation[];
   onToggle: () => void;
 }) {
   return (
@@ -394,7 +562,7 @@ function DayRow({ day, rows, open, primary, onToggle }: {
           {fmtDate(day.date)}
           {!day.recorded && <span className="ml-2 text-2xs font-normal italic text-ink-400">not recorded</span>}
         </td>
-        {PRODUCTION_OPERATIONS.map((o) => (
+        {ops.map((o) => (
           <td key={o} className={clsx('td text-right', o === primary && day.byOperation[o] != null && 'font-semibold')}>
             <Qty value={day.byOperation[o]} />
           </td>
@@ -406,7 +574,7 @@ function DayRow({ day, rows, open, primary, onToggle }: {
       </tr>
       {open && (
         <tr>
-          <td colSpan={PRODUCTION_OPERATIONS.length + 3} className="bg-ink-50/60 px-4 py-2">
+          <td colSpan={ops.length + 3} className="bg-ink-50/60 px-4 py-2">
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-left text-2xs uppercase tracking-wider text-ink-500">

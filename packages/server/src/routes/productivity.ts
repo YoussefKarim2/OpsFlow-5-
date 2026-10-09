@@ -17,8 +17,8 @@ import { z } from 'zod';
 import {
   ProductionOperation, computeAudit,
   isDayKey, daysInRange, previousRange, rangeBounds, compareTrend,
-  summariseOutput, summariseByOrder, summariseDefectRate, summariseFabricUtilisation,
-  PRIMARY_OPERATION, PRODUCTION_OPERATIONS,
+  summariseOutput, summariseByOrder, summariseDefectRate, summariseFabricUtilisation, summariseFactory,
+  PRIMARY_OPERATION, PRIMARY_OPERATION_CHOICES,
   type ProductivityDto, type ProductivityRecordDto, type ProductivityOrderRowDto,
   type ProductivityAuditRowDto, type ProductivityCuttingRowDto, type DayRange, type Permission,
 } from '@opsflow/shared';
@@ -42,7 +42,9 @@ const dayKey = z.string().refine(isDayKey, { message: 'Enter a date as YYYY-MM-D
 export const productivityQuery = z.object({
   from: dayKey,
   to: dayKey,
-  primary: z.enum(PRODUCTION_OPERATIONS as [ProductionOperation, ...ProductionOperation[]]).optional(),
+  // Only the operations the dropdown offers. A record filed under any other
+  // operation is still counted; it just cannot be made the primary figure.
+  primary: z.enum(PRIMARY_OPERATION_CHOICES as [ProductionOperation, ...ProductionOperation[]]).optional(),
 });
 
 /** Validate the requested range: ordered, and no longer than a year. */
@@ -116,6 +118,8 @@ productivityRouter.get('/', requirePermission(PRODUCTIVITY_PERMISSION), asyncHan
 
   const output = summariseOutput(inputs, range, primary);
   const before = summariseOutput(inputs, previous, primary);
+  const overview = summariseFactory(inputs, range);
+  const overviewBefore = summariseFactory(inputs, previous);
 
   const orderById = new Map(production.map((p) => [p.orderId, p.order]));
   const orders: ProductivityOrderRowDto[] = summariseByOrder(inputs, range, primary).map((row) => {
@@ -185,6 +189,8 @@ productivityRouter.get('/', requirePermission(PRODUCTIVITY_PERMISSION), asyncHan
   const body: ProductivityDto = {
     range,
     previousRange: previous,
+    overview,
+    overviewTrend: compareTrend(overview.sewnPerRecordedDay, overviewBefore.sewnPerRecordedDay),
     primaryOperation: primary,
     output,
     trend: compareTrend(output.primaryAvgPerRecordedDay, before.primaryAvgPerRecordedDay),
