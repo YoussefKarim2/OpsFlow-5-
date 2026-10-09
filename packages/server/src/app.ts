@@ -24,6 +24,7 @@ import { externalRouter } from './routes/external.js';
 import { qualityRouter } from './routes/quality.js';
 import { packingRouter } from './routes/packing.js';
 import { dashboardRouter } from './routes/dashboard.js';
+import { productivityRouter } from './routes/productivity.js';
 import { importRouter } from './routes/import.js';
 import { layingImportRouter } from './routes/laying-import.js';
 import { notificationPreferencesRouter } from './routes/notification-preferences.js';
@@ -144,6 +145,7 @@ export function createApp() {
 
   app.use('/api/admin', adminRouter);
   app.use('/api/dashboard', dashboardRouter);
+  app.use('/api/productivity', productivityRouter);
   app.use('/api/orders', ordersRouter);
   // The guided step routine, plus the four screens that had no home before it:
   // customer documents, custom instructions, finished stock, proforma invoice.

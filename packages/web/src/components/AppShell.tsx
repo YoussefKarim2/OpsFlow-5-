@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Package, CheckSquare, Boxes, ShieldCheck,
   DollarSign, Users, Building2, BarChart3, Settings, Search,
   LogOut, Menu, X, ListChecks, Upload, UserCog, ScrollText,
-  BookLock, ArrowLeftRight,
+  BookLock, ArrowLeftRight, Activity,
 } from 'lucide-react';
 import type { Permission } from '@opsflow/shared';
 import { api } from '../lib/api';
@@ -22,6 +22,7 @@ const NAV: Array<{
   to: string; label: string; icon: typeof LayoutDashboard; group: string; requires?: Permission;
 }> = [
   { to: '/',            label: 'Dashboard',      icon: LayoutDashboard, group: 'Overview' },
+  { to: '/productivity', label: 'Productivity',  icon: Activity,        group: 'Overview', requires: 'production:read' },
   { to: '/orders',      label: 'Orders',         icon: Package,         group: 'Overview' },
   { to: '/my-tasks',    label: 'My Tasks',       icon: CheckSquare,     group: 'Overview' },
   { to: '/follow-up',   label: 'Follow-Up',      icon: ListChecks,      group: 'Overview' },

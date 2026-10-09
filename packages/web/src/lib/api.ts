@@ -11,7 +11,7 @@ import type {
   MatrixResponseDto, NotificationDto, ActivityDto, ImportPreviewDto, Paginated,
   StockPosition, MaterialPosition, InventorySummary, ImportConcept, ColumnAnalysis,
   OrderStepsResult, Blocker, StageKey, StageStatus,
-  NotificationPriority, ChangeCategory, ShipmentDto,
+  NotificationPriority, ChangeCategory, ShipmentDto, ProductivityDto, ProductionOperation,
 } from '@opsflow/shared';
 
 const BASE = import.meta.env.VITE_API_URL ?? '/api';
@@ -712,6 +712,12 @@ export const api = {
     }>('/dashboard/notifications'),
     markRead: (id: string) => post<{ ok: true }>(`/dashboard/notifications/${id}/read`),
     markAllRead: () => post<{ ok: true }>('/dashboard/notifications/read-all'),
+  },
+
+  /** Factory-wide productivity, read from the records the orders already hold. */
+  productivity: {
+    get: (params: { from: string; to: string; primary?: ProductionOperation }) =>
+      get<ProductivityDto>(`/productivity${qs(params)}`),
   },
 
   /**

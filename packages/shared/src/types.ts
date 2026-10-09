@@ -12,6 +12,9 @@ import type {
 import type { Alert } from './calc/alerts.js';
 import type { StageProgress } from './calc/progress.js';
 import type { ProductionAnalytics } from './calc/production.js';
+import type {
+  DayRange, OutputSummary, Trend, DefectRateSummary, FabricUtilisationSummary, OperationOutput,
+} from './calc/productivity.js';
 import type { BomSummary } from './calc/materials.js';
 import type { CostingResult } from './calc/costing.js';
 import type { MaterialPosition, ConsumptionVariance } from './calc/inventory.js';
@@ -421,6 +424,77 @@ export interface DashboardDto {
   recentActivity: ActivityDto[];
   productionTrend: Array<{ date: string; qty: number }>;
   statusBreakdown: Array<{ status: OrderStatus; count: number }>;
+}
+
+// --- Factory productivity (Phase 1: existing data only) --------------------
+
+/** An order that produced something in the period, with what it produced. */
+export interface ProductivityOrderRowDto {
+  orderId: string;
+  poNumber: string;
+  orderName: string;
+  clientName: string;
+  factoryName: string | null;
+  byOperation: OperationOutput;
+  primary: number | null;
+  recordedDays: number;
+  recordCount: number;
+}
+
+/** One production record, as the drill-down from a day shows it. */
+export interface ProductivityRecordDto {
+  id: string;
+  orderId: string;
+  poNumber: string;
+  orderName: string;
+  date: string;
+  operation: ProductionOperation;
+  qty: number;
+  line: string | null;
+  team: string | null;
+}
+
+export interface ProductivityAuditRowDto {
+  id: string;
+  orderId: string;
+  poNumber: string;
+  orderName: string;
+  inspectionDate: string;
+  auditType: string;
+  sampleSize: number | null;
+  /** Defects found — occurrences, not defective pieces. */
+  defectQty: number | null;
+  result: 'PASS' | 'FAIL' | 'PENDING';
+  /** False when the audit could not be counted in the rate. */
+  counted: boolean;
+}
+
+export interface ProductivityCuttingRowDto {
+  id: string;
+  orderId: string;
+  poNumber: string;
+  orderName: string;
+  cutDate: string;
+  actualCutQty: number | null;
+  fabricUsedM: number | null;
+  counted: boolean;
+}
+
+export interface ProductivityDto {
+  range: DayRange;
+  previousRange: DayRange;
+  primaryOperation: ProductionOperation;
+  output: OutputSummary;
+  /** Primary-operation average per recorded day, this period against the one before. */
+  trend: Trend;
+  /** Primary-operation total, this period against the one before. */
+  totalTrend: Trend;
+  orders: ProductivityOrderRowDto[];
+  records: ProductivityRecordDto[];
+  /** Absent when the account lacks quality:read. */
+  quality: { summary: DefectRateSummary; audits: ProductivityAuditRowDto[] } | null;
+  /** Absent when the account lacks cutting:read. */
+  fabric: { summary: FabricUtilisationSummary; records: ProductivityCuttingRowDto[] } | null;
 }
 
 export interface FollowUpItemDto {

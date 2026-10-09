@@ -16,6 +16,7 @@ import { ForcedPasswordChangePage } from './pages/ChangePassword';
 const named = <K extends string>(load: () => Promise<Record<K, ComponentType>>, name: K) =>
   lazy(() => load().then((m) => ({ default: m[name] })));
 const DashboardPage = named(() => import('./pages/Dashboard'), 'DashboardPage');
+const ProductivityPage = named(() => import('./pages/Productivity'), 'ProductivityPage');
 const OrderWorkspacePage = named(() => import('./pages/OrderWorkspace'), 'OrderWorkspacePage');
 const FollowUpPage = named(() => import('./pages/FollowUp'), 'FollowUpPage');
 const WhatChangedPage = named(() => import('./pages/WhatChanged'), 'WhatChangedPage');
@@ -109,6 +110,7 @@ export default function App() {
             <Route path="/login" element={<LoginPage />} />
 
             <Route path="/" element={<Protected><DashboardPage /></Protected>} />
+            <Route path="/productivity" element={<Protected requires="production:read"><ProductivityPage /></Protected>} />
             <Route path="/orders" element={<Protected><OrdersPage /></Protected>} />
             <Route path="/orders/:id" element={<Protected><OrderWorkspacePage /></Protected>} />
             <Route path="/my-tasks" element={<Protected><MyTasksPage /></Protected>} />

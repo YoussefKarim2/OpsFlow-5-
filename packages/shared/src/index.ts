@@ -10,6 +10,7 @@ export * from './excel-date.js';
 export * from './calc/num.js';
 export * from './calc/quantities.js';
 export * from './calc/production.js';
+export * from './calc/productivity.js';
 export * from './calc/progress.js';
 export * from './calc/materials.js';
 export * from './calc/costing.js';
