@@ -184,6 +184,18 @@ const schema = z.object({
    * it was not addressed to is worse than not sending it.
    */
   EMAIL_RECIPIENT_ALLOWLIST: z.string().default(''),
+
+  /**
+   * The one switch for all outgoing mail: change notifications, the test
+   * email and the backup email. On by default, so an environment that never
+   * mentions it behaves exactly as before.
+   *
+   * Off means a message is not created at all — not queued to go out later.
+   * Holding it PENDING (which is what happens without credentials) would send
+   * the whole backlog of test changes the moment mail was switched back on,
+   * which is the opposite of what turning it off during testing is for.
+   */
+  EMAIL_SENDING_ENABLED: envBool(true),
 });
 
 const parsed = schema.safeParse(process.env);

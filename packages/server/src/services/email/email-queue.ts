@@ -69,6 +69,10 @@ export function partitionByAllowlist(
 }
 
 export async function enqueueEmail(input: EnqueueInput): Promise<string | null> {
+  if (!config.EMAIL_SENDING_ENABLED) {
+    console.warn(`EMAIL SENDING DISABLED (EMAIL_SENDING_ENABLED=false) — not sent: "${input.subject}"`);
+    return null;
+  }
   const addressed = [...new Set(input.recipients.map((r) => r.trim().toLowerCase()))].filter(Boolean);
   if (addressed.length === 0) return null;
 
@@ -116,6 +120,8 @@ export async function enqueueEmail(input: EnqueueInput): Promise<string | null> 
 export async function attemptDelivery(id: string): Promise<boolean> {
   const row = await prisma.emailDelivery.findUnique({ where: { id } });
   if (!row || row.status === EmailStatus.SENT) return false;
+  // Switched off: leave anything already queued exactly as it is.
+  if (!config.EMAIL_SENDING_ENABLED) return false;
 
   if (!isGraphConfigured()) {
     // Not a failure — a message waiting for configuration. It stays PENDING

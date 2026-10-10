@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { CATEGORY_LABEL, PRIORITY_STYLE } from '@opsflow/shared';
 import type { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
+import { config } from '../config.js';
 import { requirePermission, requireSuperAdmin, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
 import { NotFoundError, ValidationError } from '../errors.js';
@@ -265,6 +266,9 @@ changesRouter.post('/emails/retry', requireSuperAdmin, asyncHandler(async (_req,
  */
 changesRouter.post('/emails/test', requireSuperAdmin, asyncHandler(async (req, res) => {
   const actor = currentUser(req);
+  if (!config.EMAIL_SENDING_ENABLED) {
+    throw new ValidationError('Email sending is switched off (EMAIL_SENDING_ENABLED=false), so no test email was sent.');
+  }
   const missing = missingGraphConfig();
   if (missing.length > 0) {
     throw new ValidationError(

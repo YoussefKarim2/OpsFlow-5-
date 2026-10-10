@@ -123,7 +123,7 @@ export async function runBackup(): Promise<BackupRunSummary> {
 
     let emailed = false;
     const to = backupRecipients();
-    if (config.BACKUP_EMAIL_ENABLED && isGraphConfigured() && to.length > 0) {
+    if (config.EMAIL_SENDING_ENABLED && config.BACKUP_EMAIL_ENABLED && isGraphConfigured() && to.length > 0) {
       // Base64 inflates by a third and Graph's inline-attachment ceiling is
       // around 4 MB. Past that the backup still exists on disk and the email
       // says so, which is better than an exception and no email at all.
