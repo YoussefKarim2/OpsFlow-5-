@@ -765,6 +765,17 @@ export const api = {
     }>('/changes/emails/test'),
   },
 
+  /**
+   * Ask OpsFlow, the read-only order assistant. `status` says whether it is
+   * switched on (an AI key is set on the server); `ask` sends the recent
+   * conversation and gets one answer plus the orders it drew on.
+   */
+  assistant: {
+    status: () => get<{ enabled: boolean }>('/assistant/status'),
+    ask: (messages: Array<{ role: 'user' | 'assistant'; content: string }>) =>
+      post<{ answer: string; orders: Array<{ id: string; poNumber: string }> }>('/assistant/ask', { messages }),
+  },
+
   notificationPreferences: {
     list: () => get<{
       data: Array<{

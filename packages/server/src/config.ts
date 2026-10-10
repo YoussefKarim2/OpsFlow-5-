@@ -210,6 +210,41 @@ const schema = z.object({
    * request a reservation; it holds no stock until one of these accepts it.
    */
   RESERVATION_DECIDER_EMAILS: z.string().default('mahmoud@soccertex.biz,samy@soccertex.biz,ibrahim@soccertex.biz'),
+
+  // ── Ask OpsFlow (the order assistant) ───────────────────────────────────
+  //
+  // Optional. With no key the assistant is simply switched off: the button
+  // does not appear and nothing else changes. With a key, staff can ask in
+  // plain English or Arabic ("how is PO 13506 doing?") and the answer is
+  // worked out from the same derivations the screens use, through read-only
+  // lookups that apply the asker's own permissions (see
+  // services/assistant/). The assistant cannot change anything.
+  //
+  // One key is enough. ANTHROPIC_API_KEY (Claude) is preferred when both are
+  // set; GEMINI_API_KEY (Google) works the same way. The key is read here and
+  // never leaves the server: not in a DTO, a log line or a response.
+  // NEVER commit a real value.
+  ASSISTANT_ENABLED: envBool(true),
+  /** `anthropic` or `gemini`. Empty picks whichever key is set, Claude first. */
+  // Read forgivingly: a typo here ("Claude", "google") must not stop the whole
+  // application from starting over an optional feature. Anything unrecognised
+  // means "choose from the keys".
+  ASSISTANT_PROVIDER: z.string().optional().transform((v): 'anthropic' | 'gemini' | undefined => {
+    const s = (v ?? '').trim().toLowerCase();
+    if (s === 'anthropic' || s === 'claude') return 'anthropic';
+    if (s === 'gemini' || s === 'google') return 'gemini';
+    return undefined;
+  }),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  GEMINI_API_KEY: z.string().optional(),
+  /** Model id. Empty uses the provider's default (see assistant/providers.ts). */
+  ASSISTANT_MODEL: z.string().default(''),
+  /**
+   * Questions one person may ask per day. Every question is a paid call to the
+   * AI provider, so a runaway script or a stuck retry loop must not be able to
+   * run up the bill. A person who reaches it is told so and can ask tomorrow.
+   */
+  ASSISTANT_DAILY_LIMIT_PER_USER: z.coerce.number().int().min(1).max(10_000).default(150),
 });
 
 const parsed = schema.safeParse(process.env);
