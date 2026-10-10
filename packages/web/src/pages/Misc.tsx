@@ -83,7 +83,7 @@ export function LoginPage() {
             <li><code>shimaa@soccertex.biz</code> — Quality</li>
             <li><code>ahmed@soccertex.biz</code> — Super Administrator</li>
           </ul>
-          <p className="mt-1.5 text-2xs text-ink-500">Password: <code>opsflow-demo-2026</code></p>
+          <p className="mt-1.5 text-2xs text-ink-500">Password: the one the seed printed in your terminal, or your SEED_PASSWORD.</p>
           <p className="mt-1 text-2xs text-ink-500">
             The super-administrator accounts must set a new password on first sign-in.
           </p>

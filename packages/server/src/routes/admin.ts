@@ -324,6 +324,7 @@ adminRouter.get('/activity', requirePermission('audit:read'), asyncHandler(async
       entityId: r.entityId,
       orderId: r.orderId,
       orderPoNumber: r.order?.poNumber ?? null,
+      signInIp: signInIp(r.action, r.meta),
       createdAt: r.createdAt.toISOString(),
     })),
     page: q.page,
@@ -332,6 +333,20 @@ adminRouter.get('/activity', requirePermission('audit:read'), asyncHandler(async
     totalPages: Math.max(1, Math.ceil(total / q.pageSize)),
   });
 }));
+
+/**
+ * The address a sign-in event came from, and nothing else.
+ *
+ * Sign-in rows record the client's IP so an administrator can tell a person's
+ * usual sign-ins from someone else's. It is personal data, so it is returned
+ * only for sign-in events — never lifted from any other row's details — and
+ * only on this route, which needs `audit:read`.
+ */
+export function signInIp(action: string, meta: unknown): string | null {
+  if (!action.startsWith('LOGIN')) return null;
+  const ip = meta && typeof meta === 'object' ? (meta as { ip?: unknown }).ip : null;
+  return typeof ip === 'string' && ip.length > 0 && ip.length <= 64 ? ip : null;
+}
 
 /** The distinct values present, so the filters offer only what exists. */
 adminRouter.get('/audit/facets', requirePermission('audit:read'), asyncHandler(async (_req, res) => {

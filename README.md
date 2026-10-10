@@ -46,11 +46,10 @@ Then open **http://localhost:5173** and sign in:
 | `helmy@soccertex.biz` | External Operations | Try to release printing before the approval lands. |
 | `shimaa@soccertex.biz` | Quality | Record an audit; fail it and watch the order block. |
 
-Password for all of them: `opsflow-demo-2026`
-
-The two super-administrator accounts are seeded with `mustChangePassword` set, so the first thing
-they see is a password change and the API refuses everything else until they do. That is the
-intended behaviour for an account whose password someone else has seen — not a bug.
+These accounts exist only in a development database you seed yourself. The seed never uses a
+fixed password: set `SEED_PASSWORD` before running it to choose one, or it generates a random one
+and prints it once in your terminal. Every seeded account must choose its own password on first
+sign-in, and the API refuses everything else until it has. Never seed a production database.
 
 ### Who may manage accounts
 

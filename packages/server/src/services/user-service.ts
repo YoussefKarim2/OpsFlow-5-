@@ -45,6 +45,8 @@ export interface UserRow {
    *  distributed guessing run is visible rather than resetting every window. */
   failedLoginCount: number;
   lastLoginAt: string | null;
+  /** When the password was last set, by its owner or by a reset. Null: never, since the account was made. */
+  passwordChangedAt: string | null;
   createdAt: string;
   disabledAt: string | null;
   disabledReason: string | null;
@@ -90,6 +92,7 @@ export function toUserRow(u: UserWithIncludes): UserRow {
     lockedUntil: u.lockedUntil && u.lockedUntil > new Date() ? u.lockedUntil.toISOString() : null,
     failedLoginCount: u.failedLoginCount,
     lastLoginAt: u.lastLoginAt?.toISOString() ?? null,
+    passwordChangedAt: u.passwordChangedAt?.toISOString() ?? null,
     createdAt: u.createdAt.toISOString(),
     disabledAt: u.disabledAt?.toISOString() ?? null,
     disabledReason: u.disabledReason,

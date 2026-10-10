@@ -4,6 +4,7 @@ import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
 import { normaliseEmail, computeLockout } from '@opsflow/shared';
 import { prisma } from '../db.js';
+import { newPasswordRule } from '../util/password-policy.js';
 import { config, isAllowlistedSuperAdmin } from '../config.js';
 import { signToken, authenticate, currentUser } from '../middleware/auth.js';
 import { UnauthorizedError, ValidationError } from '../errors.js';
@@ -150,9 +151,9 @@ authRouter.get('/me', authenticate, asyncHandler(async (req, res) => {
   res.json(toAuthPayload(user));
 }));
 
-const passwordSchema = z.object({
+export const passwordSchema = z.object({
   currentPassword: z.string().min(1),
-  newPassword: z.string().min(10, 'Choose a password of at least 10 characters.'),
+  newPassword: newPasswordRule(),
 });
 
 // `requestContextMiddleware` is repeated here because /api/auth is mounted
@@ -161,7 +162,11 @@ const passwordSchema = z.object({
 // the one record you would reach for after a credential incident.
 authRouter.post('/change-password', authenticate, requestContextMiddleware, asyncHandler(async (req, res) => {
   const u = currentUser(req);
-  const { currentPassword, newPassword } = passwordSchema.parse(req.body);
+  // The rule's own sentence, not "Some fields are invalid": a person choosing a
+  // password needs to know it was refused for being published or too short.
+  const parsed = passwordSchema.safeParse(req.body);
+  if (!parsed.success) throw new ValidationError(parsed.error.issues[0]?.message ?? 'Choose a different password.');
+  const { currentPassword, newPassword } = parsed.data;
 
   const user = await prisma.user.findUniqueOrThrow({ where: { id: u.id } });
   // A 400, not a 401: the session is fine, only the answer was wrong, and the

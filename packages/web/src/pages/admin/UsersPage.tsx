@@ -154,6 +154,7 @@ export function UsersPage() {
                   <th className="th">Status</th>
                   <th className="th">Created</th>
                   <th className="th">Last login</th>
+                  <th className="th" title="When the password was last set, by its owner or by a reset">Password changed</th>
                   <th className="th text-right">Actions</th>
                 </tr>
               </thead>
@@ -181,6 +182,11 @@ export function UsersPage() {
                     <td className="td"><StatusCell user={u} /></td>
                     <td className="td text-ink-500">{fmtDate(u.createdAt)}</td>
                     <td className="td text-ink-500">{u.lastLoginAt ? fmtDate(u.lastLoginAt) : 'Never'}</td>
+                    <td className="td">
+                      {u.passwordChangedAt
+                        ? <span className="text-ink-500">{fmtDate(u.passwordChangedAt)}</span>
+                        : <span className="font-medium text-amber-700" title="Still the password the account was created with. Reset it if that password was ever shared.">Never</span>}
+                    </td>
                     <td className="td">
                       <div className="flex items-center justify-end gap-1">
                         {canManage && (

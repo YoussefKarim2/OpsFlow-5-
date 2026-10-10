@@ -19,8 +19,10 @@ import {
   checkSeedSafety, assertSafeToSeed, databaseHost, SEED_OVERRIDE_PHRASE,
 } from './seed-guard.js';
 
-const LOCAL = 'postgresql://opsflow:opsflow@localhost:5433/opsflow?schema=public';
-const RAILWAY = 'postgresql://postgres:hunter2@containers-us-west-42.railway.app:7891/railway';
+const LOCAL = 'postgresql://dev:placeholder@localhost:5433/opsflow?schema=public';
+// A remote host on a reserved, unresolvable domain (RFC 2606). The guard only
+// reads the host, so no real address or credential is needed to test it.
+const REMOTE = 'postgresql://user:placeholder@db.example.invalid:5432/app';
 
 describe('seed guard — what counts as safe', () => {
   test('a local database is allowed', () => {
@@ -35,9 +37,9 @@ describe('seed guard — what counts as safe', () => {
   });
 
   test('a remote database is refused, and the message names the host', () => {
-    const v = checkSeedSafety({ nodeEnv: 'development', databaseUrl: RAILWAY });
+    const v = checkSeedSafety({ nodeEnv: 'development', databaseUrl: REMOTE });
     assert.equal(v.safe, false);
-    assert.match(v.reason!, /containers-us-west-42\.railway\.app/);
+    assert.match(v.reason!, /db\.example\.invalid/);
   });
 
   test('production is refused even when the host looks local', () => {
@@ -62,14 +64,14 @@ describe('seed guard — what counts as safe', () => {
 describe('seed guard — the override', () => {
   test('the exact phrase permits a remote seed', () => {
     const v = checkSeedSafety({
-      nodeEnv: 'production', databaseUrl: RAILWAY, override: SEED_OVERRIDE_PHRASE,
+      nodeEnv: 'production', databaseUrl: REMOTE, override: SEED_OVERRIDE_PHRASE,
     });
     assert.equal(v.safe, true);
   });
 
   test('a near-miss does not', () => {
     for (const attempt of ['1', 'true', 'yes', 'YES', 'i-understand', SEED_OVERRIDE_PHRASE.toUpperCase()]) {
-      const v = checkSeedSafety({ nodeEnv: 'production', databaseUrl: RAILWAY, override: attempt });
+      const v = checkSeedSafety({ nodeEnv: 'production', databaseUrl: REMOTE, override: attempt });
       assert.equal(v.safe, false, `"${attempt}" must not unlock the seed`);
     }
   });
@@ -78,7 +80,7 @@ describe('seed guard — the override', () => {
 describe('seed guard — how it fails', () => {
   test('assertSafeToSeed throws on a remote target and says how to override', () => {
     assert.throws(
-      () => assertSafeToSeed({ NODE_ENV: 'development', DATABASE_URL: RAILWAY } as NodeJS.ProcessEnv),
+      () => assertSafeToSeed({ NODE_ENV: 'development', DATABASE_URL: REMOTE } as NodeJS.ProcessEnv),
       (err: Error) => {
         assert.match(err.message, /Refusing to seed/);
         assert.match(err.message, new RegExp(SEED_OVERRIDE_PHRASE));
@@ -95,7 +97,7 @@ describe('seed guard — how it fails', () => {
 
   test('databaseHost reads the host and reports failure as null', () => {
     assert.equal(databaseHost(LOCAL), 'localhost');
-    assert.equal(databaseHost(RAILWAY), 'containers-us-west-42.railway.app');
+    assert.equal(databaseHost(REMOTE), 'db.example.invalid');
     assert.equal(databaseHost('nonsense'), null);
   });
 });

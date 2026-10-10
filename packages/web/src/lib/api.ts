@@ -409,6 +409,8 @@ export interface AdminUser {
   /** Failed sign-ins since the last success — runs across lockout windows. */
   failedLoginCount: number;
   lastLoginAt: string | null;
+  /** When the password was last set, by its owner or by a reset. Null: never changed. */
+  passwordChangedAt: string | null;
   createdAt: string;
   disabledAt: string | null;
   disabledReason: string | null;
@@ -444,6 +446,8 @@ export interface ActivityRow {
   entityId: string | null;
   orderId: string | null;
   orderPoNumber: string | null;
+  /** The address a sign-in came from. Sign-in events only. */
+  signInIp: string | null;
   createdAt: string;
 }
 

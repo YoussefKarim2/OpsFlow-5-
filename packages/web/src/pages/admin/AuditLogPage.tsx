@@ -215,7 +215,14 @@ function ActivityTable({ rows }: { rows: Array<import('../../lib/api').ActivityR
             <td className="td text-ink-500">{fmtDateTime(r.createdAt)}</td>
             <td className="td font-medium text-ink-800">{r.actorName}</td>
             <td className="td"><ActionChip action={r.action} /></td>
-            <td className="td whitespace-normal text-ink-700">{r.summary}</td>
+            <td className="td whitespace-normal text-ink-700">
+              {r.summary}
+              {r.signInIp && (
+                <span className="ml-2 font-mono text-2xs text-ink-500" title="Address the sign-in came from, recorded for security review">
+                  from {r.signInIp}
+                </span>
+              )}
+            </td>
             <td className="td">
               {r.orderId
                 ? <Link to={`/orders/${r.orderId}`} className="font-mono text-xs text-accent-700 hover:underline">{r.orderPoNumber}</Link>

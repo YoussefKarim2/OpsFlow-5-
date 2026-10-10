@@ -14,6 +14,7 @@
  * production by accident is not a recoverable mistake.
  */
 
+import { randomBytes } from 'node:crypto';
 import { PrismaClient, type Prisma } from '@prisma/client';
 import { assertSafeToSeed } from '../src/util/seed-guard.js';
 import argon2 from 'argon2';
@@ -31,7 +32,24 @@ import {
 } from './seed-data.js';
 
 const prisma = new PrismaClient();
-const DEFAULT_PASSWORD = 'opsflow-demo-2026';
+/**
+ * The password the seeded development accounts are given.
+ *
+ * Never written in the source. A fixed one was, it reached the README and the
+ * live sign-in page, and the repository is public — so every account the seed
+ * created had a password anyone could read. Set SEED_PASSWORD to choose one;
+ * otherwise a random one is made for this run and printed once, in this
+ * terminal only. Every seeded account must still choose its own on first
+ * sign-in.
+ */
+const SEED_PASSWORD = (() => {
+  const chosen = process.env.SEED_PASSWORD?.trim();
+  if (chosen) {
+    if (chosen.length < 10) throw new Error('SEED_PASSWORD must be at least 10 characters.');
+    return chosen;
+  }
+  return randomBytes(12).toString('base64url');
+})();
 
 async function main(): Promise<void> {
   // Before the first write, not after the tenth.
@@ -50,7 +68,7 @@ async function main(): Promise<void> {
   console.log(`  roles                 ${Object.keys(ROLE_PERMISSIONS).length}`);
 
   // ── Users ─────────────────────────────────────────────────────────────────
-  const passwordHash = await argon2.hash(DEFAULT_PASSWORD);
+  const passwordHash = await argon2.hash(SEED_PASSWORD);
   for (const u of USERS) {
     const role = await prisma.role.findUniqueOrThrow({ where: { key: u.roleKey } });
     await prisma.user.upsert({
@@ -538,7 +556,9 @@ async function main(): Promise<void> {
   });
 
   console.log(`\nDone.\n`);
-  console.log(`  Sign in with any of these — password: ${DEFAULT_PASSWORD}`);
+  console.log(process.env.SEED_PASSWORD
+    ? '  Sign in with any of these, using the SEED_PASSWORD you set:'
+    : `  Sign in with any of these, using this run's password (shown once): ${SEED_PASSWORD}`);
   console.log(`    hassona@soccertex.biz   Order Coordinator  (the main user)`);
   console.log(`    admin@soccertex.biz     Administrator`);
   console.log(`    khaled@soccertex.biz    Warehouse`);
