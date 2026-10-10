@@ -10,7 +10,7 @@
  * actionable and "get printing approval from the customer" is.
  */
 
-import { AlertCode, AlertSeverity, ApprovalStatus, ExternalOpStatus, TaskStatus } from '../enums.js';
+import { AlertCode, AlertSeverity, ExternalOpStatus, TaskStatus } from '../enums.js';
 import { daysBetween } from './num.js';
 import type { BomSummary } from './materials.js';
 import type { MaterialPosition, ConsumptionVariance } from './inventory.js';
@@ -69,12 +69,9 @@ export interface AlertContext {
   blockers?: readonly Blocker[];
   consumption?: readonly ConsumptionVariance[];
   production?: ProductionAnalytics | null;
-  approvals?: ReadonlyArray<{
-    id: string; type: string; status: ApprovalStatus; blocking: boolean; requestedDate?: string | Date | null;
-  }>;
   externalOps?: ReadonlyArray<{
-    id: string; operationType: string; status: ExternalOpStatus; requiresApproval: boolean;
-    approvalCleared: boolean; expectedReturnDate?: string | Date | null; actualReturnDate?: string | Date | null;
+    id: string; operationType: string; status: ExternalOpStatus;
+    expectedReturnDate?: string | Date | null; actualReturnDate?: string | Date | null;
   }>;
   quality?: ReadonlyArray<{ id: string; result: 'PASS' | 'FAIL' | 'PENDING'; correctiveActionClosed: boolean }>;
 }
@@ -112,57 +109,11 @@ export function evaluateAlerts(ctx: AlertContext): Alert[] {
     });
   }
 
-  // --- Approvals ---------------------------------------------------------
-  for (const a of ctx.approvals ?? []) {
-    if (a.status === ApprovalStatus.PENDING && a.blocking) {
-      const waiting = daysBetween(a.requestedDate ?? today, today);
-      push({
-        code: AlertCode.APPROVAL_PENDING, severity: AlertSeverity.CRITICAL,
-        title: 'Customer approval required',
-        detail: `${humanise(a.type)} approval is pending${waiting != null && waiting > 0 ? ` — ${waiting} day${waiting === 1 ? '' : 's'} outstanding` : ''}. Dependent work cannot start.`,
-        nextAction: `Chase the customer for ${humanise(a.type).toLowerCase()} approval`,
-        tab: 'approvals', entityId: a.id,
-      });
-    } else if (a.status === ApprovalStatus.REJECTED || a.status === ApprovalStatus.CHANGES_REQUESTED) {
-      push({
-        code: AlertCode.APPROVAL_PENDING, severity: AlertSeverity.WARNING,
-        title: `Approval ${a.status === ApprovalStatus.REJECTED ? 'rejected' : 'needs changes'}`,
-        detail: `${humanise(a.type)} was returned by the customer.`,
-        nextAction: 'Revise and resubmit for approval',
-        tab: 'approvals', entityId: a.id,
-      });
-    }
-  }
-
   // --- External operations ----------------------------------------------
 
-  // A print order split across four colours is one problem, not four. Blocked
-  // operations are grouped by operation type so the coordinator sees a single
-  // actionable line instead of an alert per colour.
-  // A cancelled operation is not going to happen, so it neither waits on an
-  // approval nor can be late coming back.
+  // A cancelled operation is not going to happen, so it cannot be late coming
+  // back. Nothing waits on customer approval: the factory does not use it.
   const liveOps = (ctx.externalOps ?? []).filter((op) => op.status !== ExternalOpStatus.CANCELLED);
-  const blockedOps = liveOps.filter(
-    (op) => op.requiresApproval && !op.approvalCleared && op.status !== ExternalOpStatus.RETURNED,
-  );
-  const blockedByType = new Map<string, typeof blockedOps>();
-  for (const op of blockedOps) {
-    const arr = blockedByType.get(op.operationType) ?? [];
-    arr.push(op);
-    blockedByType.set(op.operationType, arr);
-  }
-  for (const [operationType, ops] of blockedByType) {
-    push({
-      code: AlertCode.EXTERNAL_OP_BLOCKED, severity: AlertSeverity.CRITICAL,
-      title: 'External operation blocked',
-      detail:
-        `${operationType} cannot start until the customer approves` +
-        (ops.length > 1 ? ` — ${ops.length} operations affected.` : '.'),
-      nextAction: 'Obtain customer approval before releasing to the external factory',
-      tab: 'external', entityId: ops[0]!.id,
-    });
-  }
-
   for (const op of liveOps) {
     const late = op.expectedReturnDate ? daysBetween(op.expectedReturnDate, today) : null;
     if (!op.actualReturnDate && late != null && late > 0) {
@@ -355,9 +306,6 @@ export const SEVERITY_STYLE: Record<AlertSeverity, { icon: string; label: string
   OK:        { icon: '🟢', label: 'OK',        chip: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20', bar: 'bg-emerald-500' },
 };
 
-function humanise(s: string): string {
-  return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-}
 
 function fmtQty(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return '—';

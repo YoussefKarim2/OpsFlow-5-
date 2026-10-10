@@ -244,7 +244,7 @@ describe('laying import is separate from cutting', () => {
   });
 
   test('nor the factory manager, nor Finance', () => {
-    for (const p of ['production:write', 'order:edit', 'approval:record'] as Permission[]) {
+    for (const p of ['production:write', 'order:edit'] as Permission[]) {
       assert.ok(has('FACTORY_MANAGER', p), `FACTORY_MANAGER lost ${p}`);
     }
     for (const p of ['costing:read', 'costing:write'] as Permission[]) {

@@ -6,6 +6,7 @@ import { startAlertWorker, stopAlertWorker } from './services/alerts/alert-worke
 import { startBackupWorker, stopBackupWorker } from './services/backup/backup-worker.js';
 import { installProcessGuards } from './process-guards.js';
 import { reconcileAllStockLedgers } from './services/stock-sync.js';
+import { refreshOrderCache } from './services/order-service.js';
 
 async function main(): Promise<void> {
   await prisma.$connect();
@@ -31,6 +32,18 @@ async function main(): Promise<void> {
         if (corrected > 0) console.log(`  stock    → reconciled ${corrected} of ${scanned} orders with recorded stock`);
       })
       .catch((err) => console.error('[stock] reconcile failed:', err));
+
+    // Customer approvals were removed, but an order whose cached status was
+    // saved as WAITING_APPROVAL before that keeps showing it until something
+    // recalculates it. Recalculate those once. The cache is derived from the
+    // order's own records, so this changes no business data; once none are
+    // left it is one empty query.
+    void prisma.order.findMany({ where: { cachedStatus: 'WAITING_APPROVAL' as never }, select: { id: true } })
+      .then(async (stale) => {
+        for (const o of stale) await refreshOrderCache(o.id);
+        if (stale.length > 0) console.log(`  orders   → recalculated ${stale.length} order status(es) left at "waiting for approval"`);
+      })
+      .catch((err) => console.error('[orders] approval status refresh failed:', err));
   });
 
   let shuttingDown = false;

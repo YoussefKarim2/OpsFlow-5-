@@ -163,7 +163,6 @@ export function DashboardPage() {
           <StatTile label="Due Soon"          value={c.dueSoon}          tone={c.dueSoon > 0 ? 'amber' : 'neutral'} sub="within 14 days" onClick={() => navigate('/orders?due=soon')} />
           <StatTile label="Late"              value={c.late}             tone={c.late > 0 ? 'red' : 'emerald'} onClick={() => navigate('/orders?status=PRODUCTION_DELAYED')} />
           <StatTile label="Material Short"    value={c.materialShortages} tone={c.materialShortages > 0 ? 'red' : 'neutral'} sub="not enough stock" onClick={() => navigate('/inventory/materials?status=low')} />
-          <StatTile label="Waiting Approval"  value={c.waitingApproval}  tone={c.waitingApproval > 0 ? 'blue' : 'neutral'} onClick={() => navigate('/orders?status=WAITING_APPROVAL')} />
           <StatTile label="In Production"     value={c.inProduction}     tone="accent" onClick={() => navigate('/orders?status=IN_PRODUCTION')} />
           <StatTile label="Waiting Materials" value={c.waitingMaterials} tone={c.waitingMaterials > 0 ? 'amber' : 'neutral'} onClick={() => navigate('/orders?status=READY_FOR_PRODUCTION')} />
           <StatTile label="Waiting External"  value={c.waitingExternal}  tone={c.waitingExternal > 0 ? 'blue' : 'neutral'} onClick={() => navigate('/external')} />

@@ -220,14 +220,13 @@ describe('the step context reads the order the way the database stores it', () =
     assert.equal(ctx.taskCounts[StageKey.PROGRESS_STATUS]!.overdue, 0);
   });
 
-  test('a cancelled external operation neither blocks nor waits to come back', () => {
+  test('a cancelled external operation does not wait to come back', () => {
     const ctx = buildStepContext(row({
       externalOperations: [
-        { status: 'CANCELLED', requiresApproval: true, approval: null },
-        { status: 'RETURNED', requiresApproval: false, approval: null },
+        { status: 'CANCELLED' },
+        { status: 'RETURNED' },
       ],
     }), NO_EXTRAS);
-    assert.equal(ctx.externalOpsBlocked, 0);
     assert.equal(ctx.externalOpCount, 1);
     assert.equal(ctx.externalOpsReturned, 1);
   });

@@ -1,15 +1,13 @@
 /**
  * Business rules — the brief's section 39.
  *
- * Everything here was a sentence in the workbook that nobody was bound by.
- * `External Order!M15` literally says "برجاء عدم البدء ف طباعه الاوردر الا بعد
- * موافقه العميل" — do not start printing before customer approval — and Excel
- * has no way to stop you. These functions do.
+ * Everything here was a sentence in the workbook that nobody was bound by, and
+ * Excel has no way to stop you. These functions do.
  */
 
 import type { Prisma, PrismaClient } from '@prisma/client';
 import {
-  ApprovalRequiredError, QuantityRuleError, TaskPrerequisiteError,
+  QuantityRuleError, TaskPrerequisiteError,
   OverrideRequiredError, ValidationError,
 } from '../errors.js';
 
@@ -104,24 +102,6 @@ export function shipmentTotalAfter(
 }
 
 /**
- * The approval gate. An external operation that requires customer approval
- * cannot leave NOT_SENT until an APPROVED approval exists.
- */
-const STARTED_STATES = new Set(['SENT', 'IN_PROGRESS', 'RETURNED']);
-
-export function assertExternalOpMayStart(op: {
-  operationType: string;
-  requiresApproval: boolean;
-  approvalStatus: string | null | undefined;
-  targetStatus: string;
-}): void {
-  if (!STARTED_STATES.has(op.targetStatus)) return;
-  if (!op.requiresApproval) return;
-  if (op.approvalStatus === 'APPROVED') return;
-  throw new ApprovalRequiredError(op.operationType);
-}
-
-/**
  * A task cannot be completed without the information the process says it
  * produces. Progress Status column H lists that information for every step; the
  * checks below encode the ones a machine can verify.
@@ -199,22 +179,6 @@ export async function assertTaskCompletable(
             `(e.g. ${short[0]!.item}). Issue them, or record a purchase order, before completing this task.`,
           { shortItems: short.map((s) => s.item) },
         );
-      }
-      break;
-    }
-
-    case 'EX_SEND_ORDER': {
-      const ops = await prisma.externalOperation.findMany({
-        where: { orderId: task.orderId, requiresApproval: true },
-        include: { approval: true },
-      });
-      // A cancelled operation is not being sent and a returned one has already
-      // been, so neither can hold this task up.
-      const blocked = ops.filter(
-        (o) => o.approval?.status !== 'APPROVED' && o.status !== 'RETURNED' && o.status !== 'CANCELLED',
-      );
-      if (blocked.length > 0) {
-        throw new ApprovalRequiredError(blocked[0]!.operationType);
       }
       break;
     }

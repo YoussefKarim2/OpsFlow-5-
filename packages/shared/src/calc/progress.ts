@@ -140,7 +140,6 @@ export interface OrderStatusInput {
   qualityAuditPassed?: boolean;
   packingApproved: boolean;
   materialsFullyIssued: boolean;
-  hasPendingBlockingApproval: boolean;
   isBehindSchedule: boolean;
   anyTaskStarted: boolean;
 }
@@ -163,7 +162,6 @@ export function deriveOrderStatus(i: OrderStatusInput): OrderStatus {
   ) return OrderStatus.QUALITY_CHECK;
   if (i.isBehindSchedule && i.producedQty > 0) return OrderStatus.PRODUCTION_DELAYED;
   if (i.producedQty > 0) return OrderStatus.IN_PRODUCTION;
-  if (i.hasPendingBlockingApproval) return OrderStatus.WAITING_APPROVAL;
   if (i.materialsFullyIssued) return OrderStatus.READY_FOR_PRODUCTION;
   if (i.anyTaskStarted) return OrderStatus.DRAFT;
   return OrderStatus.DRAFT;
@@ -183,7 +181,7 @@ export function deriveHealth(i: {
   if (i.criticalAlerts > 0) return Health.LATE;
   if (i.isBehindSchedule) return Health.LATE;
   if (i.daysRemaining != null && i.daysRemaining < 0) return Health.LATE;
-  if (i.status === OrderStatus.WAITING_APPROVAL || i.status === OrderStatus.QUALITY_BLOCKED) return Health.WAITING;
+  if (i.status === OrderStatus.QUALITY_BLOCKED) return Health.WAITING;
   if (i.warningAlerts > 0) return Health.ATTENTION;
   if (i.daysRemaining != null && i.daysRemaining <= 7 && i.progressPct < 90) return Health.ATTENTION;
   if (i.progressPct === 0) return Health.NOT_STARTED;

@@ -1166,7 +1166,7 @@ stepsRouter.get('/:id/provenance', requirePermission('order:read'), asyncHandler
           markers: true, externalOperations: true, qualityAudits: true,
           packingLists: true, shipments: true, changeEvents: true,
           materialMovements: true, materialReservations: true,
-          customInstructions: true, approvals: true, notes: true,
+          customInstructions: true, notes: true,
         },
       },
     },

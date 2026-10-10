@@ -8,7 +8,7 @@ import { useState, type ReactNode } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { Check, BellOff } from 'lucide-react';
-import { fmtDate, ORDER_STATUS_LABEL, PRIORITY_STYLE, type OrderStatus } from '@opsflow/shared';
+import { fmtDate, ORDER_STATUS_LABEL, PERMISSIONS, PRIORITY_STYLE, type OrderStatus } from '@opsflow/shared';
 import { api, ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { ChangePasswordForm } from './ChangePassword';
@@ -224,7 +224,7 @@ export function NotificationsPage() {
 
       <Card>
         {list.length === 0 ? (
-          <EmptyState title="No notifications" detail="Task assignments, approvals, shortages, delays and quality failures arrive here." />
+          <EmptyState title="No notifications" detail="Task assignments, shortages, delays and quality failures arrive here." />
         ) : (
           <ul className="divide-y divide-ink-100">
             {list.map((n) => (
@@ -468,6 +468,9 @@ export function FactoriesPage() {
 
 export function SettingsPage() {
   const { user, can, isSuperAdmin } = useAuth();
+  // Only permissions the application still has. A role saved before one was
+  // retired (the customer-approval ones) still carries it, and it means nothing.
+  const knownPermissions = (user?.permissions ?? []).filter((p) => (PERMISSIONS as readonly string[]).includes(p));
 
   return (
     <div className="space-y-4 p-5">
@@ -508,9 +511,9 @@ export function SettingsPage() {
       {isSuperAdmin && <BackupsPanel />}
 
       <Card>
-        <CardHeader title="Your permissions" subtitle={`${user?.permissions.length ?? 0} granted`} />
+        <CardHeader title="Your permissions" subtitle={`${knownPermissions.length} granted`} />
         <div className="flex flex-wrap gap-1 p-4">
-          {(user?.permissions ?? []).map((p) => (
+          {knownPermissions.map((p) => (
             <code key={p} className="rounded bg-ink-100 px-1.5 py-0.5 text-2xs text-ink-700">{p}</code>
           ))}
         </div>

@@ -43,7 +43,7 @@ export class ApiError extends Error {
   /** True for the business-rule refusals that deserve an explanatory UI. */
   get isRuleViolation(): boolean {
     return [
-      'APPROVAL_REQUIRED', 'QUANTITY_RULE_VIOLATION',
+      'QUANTITY_RULE_VIOLATION',
       'TASK_PREREQUISITE_UNMET', 'OVERRIDE_REQUIRED',
     ].includes(this.code);
   }
@@ -913,10 +913,6 @@ export const api = {
     saveOperations: (orderId: string, operations: unknown[]) =>
       put<{ ok: true; count: number; removed: number }>(`/external/${orderId}/operations`, { operations }),
     setStatus: (opId: string, body: unknown) => post<{ ok: true }>(`/external/operations/${opId}/status`, body),
-    approvals: (orderId: string) => get<{ data: unknown[] }>(`/external/${orderId}/approvals`),
-    requestApproval: (orderId: string, body: unknown) => post<{ id: string }>(`/external/${orderId}/approvals`, body),
-    recordApproval: (id: string, body: unknown) => post<{ ok: true }>(`/external/approvals/${id}/record`, body),
-    pendingApprovals: () => get<{ data: unknown[] }>('/external/approvals/pending'),
   },
 
   quality: {

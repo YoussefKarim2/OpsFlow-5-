@@ -7,12 +7,11 @@
  * row would leave the order half-booked if the third failed.
  *
  * Fields are the ones External Work already had. Nothing is borrowed from the
- * proforma that makes no sense here: an operation has a factory, a return date
- * and an approval flag, none of which an invoice line does.
+ * proforma that makes no sense here: an operation has a factory and a return
+ * date, neither of which an invoice line does.
  *
  * Rows that have already left the building are read-only. Status belongs to the
- * transition route, which enforces the customer-approval gate, and an editor
- * that could also set it would be a way around that gate.
+ * transition route, which stamps the sent and returned dates and logs the move.
  */
 
 import { useState } from 'react';
@@ -30,18 +29,17 @@ export interface ExternalOpRow {
   qty: number;
   unitPriceUsd: number | null;
   expectedReturnDate?: string | null;
-  requiresApproval: boolean;
   notes?: string | null;
   /** Present on stored rows. Absent on new ones. */
   status?: string;
 }
 
 /** Work that has left the building is a record, not a draft. */
-const EDITABLE = new Set(['NOT_SENT', 'WAITING_APPROVAL']);
+const EDITABLE = new Set(['NOT_SENT']);
 const isLocked = (r: ExternalOpRow) => !!r.status && !EDITABLE.has(r.status);
 
 const blank = (d: { factoryId: string; returnDate: string }): ExternalOpRow => ({
-  operationType: '', qty: 0, unitPriceUsd: null, requiresApproval: false,
+  operationType: '', qty: 0, unitPriceUsd: null,
   externalFactoryId: d.factoryId || null,
   expectedReturnDate: d.returnDate || null,
 });
@@ -81,7 +79,6 @@ export function ExternalWorkEditor({
       qty: r.qty,
       unitPriceUsd: r.unitPriceUsd ?? undefined,
       expectedReturnDate: r.expectedReturnDate || undefined,
-      requiresApproval: r.requiresApproval,
       notes: r.notes || undefined,
       colorIds: [],
     }))),
@@ -160,7 +157,6 @@ export function ExternalWorkEditor({
               <th className="th w-28 text-right">Unit price</th>
               <th className="th w-28 text-right">Total</th>
               <th className="th w-36">Expected back</th>
-              <th className="th w-24">Approval</th>
               <th className="th w-40">Notes</th>
               <th className="th w-10" />
             </tr>
@@ -168,7 +164,7 @@ export function ExternalWorkEditor({
           <tbody className="divide-y divide-ink-100">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={10} className="td py-6 text-center text-ink-500">
+                <td colSpan={9} className="td py-6 text-center text-ink-500">
                   No outside work booked. Add an operation, or import a document that carries them.
                 </td>
               </tr>
@@ -220,11 +216,6 @@ export function ExternalWorkEditor({
                       value={(r.expectedReturnDate ?? '').slice(0, 10)}
                       onChange={(e) => set(i, { expectedReturnDate: e.target.value || null })} />
                   </td>
-                  <td className="p-1 text-center">
-                    <input type="checkbox" checked={r.requiresApproval} disabled={locked}
-                      title="Customer approval needed before this can be sent"
-                      onChange={(e) => set(i, { requiresApproval: e.target.checked })} />
-                  </td>
                   <td className="p-1">
                     <input
                       className="input border-transparent bg-transparent" disabled={locked}
@@ -255,7 +246,7 @@ export function ExternalWorkEditor({
                 <td className="td tnum text-right font-semibold">
                   <Num value={total || null} kind="money" places={2} />
                 </td>
-                <td colSpan={4} />
+                <td colSpan={3} />
               </tr>
             </tfoot>
           ) : null}

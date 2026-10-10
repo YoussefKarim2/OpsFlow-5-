@@ -22,7 +22,7 @@ import { Link } from 'react-router-dom';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { ArrowRight, Filter, RotateCcw, Search } from 'lucide-react';
 import {
-  PRIORITY_STYLE, CATEGORY_LABEL,
+  PRIORITY_STYLE, CATEGORY_LABEL, RETIRED_CATEGORIES,
   type NotificationPriority, type ChangeCategory,
 } from '@opsflow/shared';
 import { api, type ChangeEventDto } from '../lib/api';
@@ -154,7 +154,7 @@ export function WhatChangedPage({ embedded = false }: { embedded?: boolean } = {
           label="All" count={data?.total} active={category === 'ALL'}
           onClick={() => change(setCategory)('ALL')}
         />
-        {(Object.keys(CATEGORY_LABEL) as ChangeCategory[]).map((key) => {
+        {(Object.keys(CATEGORY_LABEL) as ChangeCategory[]).filter((k) => !RETIRED_CATEGORIES.includes(k)).map((key) => {
           const count = options?.categories.find((c) => c.key === key)?.count;
           // A category nothing has ever happened in is a button that does
           // nothing. Hide it until it has something to show.

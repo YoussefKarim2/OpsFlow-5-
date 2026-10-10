@@ -28,7 +28,7 @@ function fresh(over: Partial<StepContext> = {}): StepContext {
     markerCount: 0, markerCoversRequirement: false,
     bomLineCount: 0, bomFullyIssued: false, materialShortCount: 0,
     customInstructionCount: 0,
-    externalWorkDeclared: false, externalOpCount: 0, externalOpsReturned: 0, externalOpsBlocked: 0,
+    externalWorkDeclared: false, externalOpCount: 0, externalOpsReturned: 0,
     producedQty: 0, productionRecordCount: 0,
     auditCount: 0, auditPassed: false, openQualityFailure: false,
     cartonCount: 0, packedQty: 0, packingApproved: false,

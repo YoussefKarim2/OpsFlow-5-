@@ -173,7 +173,6 @@ export interface OrderDetailDto {
   counts: {
     openTasks: number;
     overdueTasks: number;
-    pendingApprovals: number;
     openExternalOps: number;
     attachments: number;
     blockers: number;
@@ -413,7 +412,6 @@ export interface DashboardDto {
     atRisk: number;
     onTrack: number;
     materialShortages: number;
-    waitingApproval: number;
     inProduction: number;
     waitingMaterials: number;
     waitingExternal: number;
@@ -534,7 +532,7 @@ export interface CostingOverviewDto {
 
 export interface FollowUpItemDto {
   id: string;
-  kind: 'TASK' | 'APPROVAL' | 'SHORTAGE' | 'EXTERNAL' | 'QUALITY';
+  kind: 'TASK' | 'SHORTAGE' | 'EXTERNAL' | 'QUALITY';
   orderId: string;
   orderPoNumber: string;
   orderName: string;

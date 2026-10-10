@@ -79,7 +79,6 @@ export interface StepContext {
   externalWorkDeclared: boolean;
   externalOpCount: number;
   externalOpsReturned: number;
-  externalOpsBlocked: number;
   /** Production. */
   producedQty: number;
   productionRecordCount: number;
@@ -189,7 +188,7 @@ const has = (n: number) => n > 0;
  */
 export const ORDER_TAB_KEYS = [
   'overview', 'reference', 'details', 'quantity', 'proforma', 'tasks',
-  'cutting', 'materials', 'bom', 'instructions', 'external', 'approvals',
+  'cutting', 'materials', 'bom', 'instructions', 'external',
   'production', 'quality', 'packing', 'stock',
   'shipping', 'costing', 'documents', 'activity',
   'database', 'progress', 'audit', 'invoice',
@@ -383,7 +382,6 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
       'What kind of external work, and which supplier',
       'How many pieces were sent, and when',
       'How many came back, and when',
-      'Customer approval, where the work needs it',
     ],
     tab: 'external',
     // The order sheet says whether the order has external work at all. When it
@@ -391,10 +389,9 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
     appliesWhen: (c) => c.externalWorkDeclared || has(c.externalOpCount),
     notApplicableBecause: 'This order has no printing or embroidery.',
     isDoneWhen: (c) =>
-      has(c.externalOpCount) && c.externalOpsReturned >= c.externalOpCount && c.externalOpsBlocked === 0,
+      has(c.externalOpCount) && c.externalOpsReturned >= c.externalOpCount,
     missing: (c) => {
       if (!has(c.externalOpCount)) return 'Record the external operation and send it';
-      if (c.externalOpsBlocked > 0) return 'Customer approval is outstanding';
       const outstanding = c.externalOpCount - c.externalOpsReturned;
       return outstanding > 0 ? `${outstanding} operation${outstanding === 1 ? '' : 's'} not back yet` : null;
     },

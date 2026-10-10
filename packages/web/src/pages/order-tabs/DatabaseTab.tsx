@@ -42,7 +42,6 @@ const COUNT_LABELS: Array<[string, string]> = [
   ['packingLists', 'Packing lists'],
   ['shipments', 'Shipments'],
   ['customInstructions', 'Custom instructions'],
-  ['approvals', 'Approvals'],
   ['attachments', 'Documents'],
   ['tasks', 'Workflow tasks'],
   ['stages', 'Order steps'],

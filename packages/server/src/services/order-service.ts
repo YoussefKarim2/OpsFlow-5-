@@ -77,8 +77,7 @@ const ORDER_INCLUDE = {
     where: { type: { in: ['ISSUE', 'RETURN'] as const } },
     select: { materialId: true, type: true, qty: true },
   },
-  externalOperations: { include: { externalFactory: true, approval: true } },
-  approvals: { include: { requestedBy: true, _count: { select: { attachments: true } } } },
+  externalOperations: { include: { externalFactory: true } },
   productionRecords: { orderBy: { date: 'asc' } },
   qualityAudits: { include: { defects: true } },
   packingLists: { include: { cartons: true }, orderBy: { createdAt: 'asc' } },
@@ -392,9 +391,6 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
   const openQualityFailure = order.qualityAudits.some(
     (a) => a.result === 'FAIL' && !a.correctiveActionClosed,
   );
-  const pendingBlockingApproval = order.approvals.some(
-    (a) => a.status === 'PENDING' && a.blocking,
-  );
   const latestPackingList = order.packingLists.at(-1) ?? null;
   const shipmentStatus = furthestShipmentStatus(order.shipments);
   // The verdict that stands is the most recent decided inspection.
@@ -418,7 +414,6 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     qualityAuditPassed: !openQualityFailure && latestDecidedAudit?.result === 'PASS',
     packingApproved: latestPackingList?.approved ?? false,
     materialsFullyIssued: bom?.fullyIssued ?? false,
-    hasPendingBlockingApproval: pendingBlockingApproval,
     isBehindSchedule: production.isBehindSchedule,
     anyTaskStarted: order.tasks.some((t) => t.status !== 'NOT_STARTED'),
   });
@@ -455,7 +450,6 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     stages.filter((s) => s.status === 'COMPLETED').map((s) => s.stageKey),
   );
 
-  const blockingApproval = order.approvals.find((a) => a.status === 'PENDING' && a.blocking);
   const worstShortage = materials?.topShortages[0] ?? null;
 
   const gateContext: GateContext = {
@@ -476,15 +470,6 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     // Every size, not the total: a surplus of XLs does not cover missing smalls.
     markerCoversRequirement: markerPlan ? markerPlan.coversRequirement : false,
     markerShortfall: markerPlan ? -markerPlan.shortfallTotal : 0,
-    hasPendingBlockingApproval: !!blockingApproval,
-    pendingApprovalLabel: blockingApproval
-      ? `${blockingApproval.type.replace(/_/g, ' ').toLowerCase()} approval`
-      : null,
-    // A cancelled operation is never going to be sent, so it waits on nothing.
-    externalOpsBlocked: order.externalOperations.filter(
-      (op) => op.requiresApproval && op.approval?.status !== 'APPROVED'
-        && op.status !== 'RETURNED' && op.status !== 'CANCELLED',
-    ).length,
     hasOpenQualityFailure: openQualityFailure,
     qualityInspected: order.qualityAudits.some((a) => a.result !== 'PENDING'),
     packingApproved: latestPackingList?.approved ?? false,
@@ -522,15 +507,10 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     blockers: gates.blockers,
     consumption,
     production,
-    approvals: order.approvals.map((a) => ({
-      id: a.id, type: a.type, status: a.status, blocking: a.blocking, requestedDate: a.requestedDate,
-    })),
     externalOps: order.externalOperations.map((op) => ({
       id: op.id,
       operationType: op.operationType,
       status: op.status,
-      requiresApproval: op.requiresApproval,
-      approvalCleared: op.approval?.status === 'APPROVED',
       expectedReturnDate: op.expectedReturnDate,
       actualReturnDate: op.actualReturnDate,
     })),
@@ -739,7 +719,6 @@ export async function getOrderDetail(orderId: string, today = new Date()): Promi
     counts: {
       openTasks: order.tasks.filter((t) => t.status !== 'COMPLETED').length,
       overdueTasks: d.stages.reduce((a, s) => a + s.overdueTasks, 0),
-      pendingApprovals: order.approvals.filter((a) => a.status === 'PENDING').length,
       openExternalOps: order.externalOperations.filter((o) => o.status !== 'RETURNED' && o.status !== 'CANCELLED').length,
       attachments: order._count.attachments,
       blockers: d.blockers.length,

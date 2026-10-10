@@ -92,7 +92,10 @@ export function OrdersPage() {
             <FilterSelect label="Season" value={filters.season} onChange={(v) => setFilter('season', v)}
               options={(lookups?.values.SEASON ?? []).map((s) => ({ value: s.value, label: s.value }))} />
             <FilterSelect label="Status" value={filters.status} onChange={(v) => setFilter('status', v)}
-              options={Object.entries(ORDER_STATUS_LABEL).map(([value, label]) => ({ value, label }))} />
+              options={Object.entries(ORDER_STATUS_LABEL)
+                // No order reaches this status any more: the factory does not use customer approvals.
+                .filter(([value]) => value !== 'WAITING_APPROVAL')
+                .map(([value, label]) => ({ value, label }))} />
             <FilterSelect label="Stage" value={filters.stage} onChange={(v) => setFilter('stage', v)}
               options={Object.entries(STAGE_META).sort((a, b) => a[1].order - b[1].order).map(([value, m]) => ({ value, label: m.label }))} />
             <FilterSelect label="Factory" value={filters.factoryId} onChange={(v) => setFilter('factoryId', v)}

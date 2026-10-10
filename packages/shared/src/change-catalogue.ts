@@ -518,3 +518,11 @@ export const CATEGORY_LABEL: Record<ChangeCategory, string> = {
   DOCUMENTS: 'Documents',
   ADMIN: 'Administration',
 };
+
+/**
+ * Categories nothing new is recorded in any more, so they are not offered as a
+ * filter or a notification setting. Approvals: the factory does not use
+ * customer approvals. Past events in them stay in the history, under "All".
+ */
+export const RETIRED_CATEGORIES: readonly ChangeCategory[] = [ChangeCategory.APPROVALS];
+

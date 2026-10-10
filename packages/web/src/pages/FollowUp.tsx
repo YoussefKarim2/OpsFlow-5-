@@ -16,7 +16,7 @@ import { api } from '../lib/api';
 import { Card, StatTile, Spinner, ErrorNote, EmptyState, clsx } from '../components/ui';
 
 const KIND_LABEL: Record<FollowUpItemDto['kind'], string> = {
-  TASK: 'Task', APPROVAL: 'Approval', SHORTAGE: 'Materials',
+  TASK: 'Task', SHORTAGE: 'Materials',
   EXTERNAL: 'External', QUALITY: 'Quality',
 };
 
@@ -63,7 +63,7 @@ export function FollowUpPage() {
       </div>
 
       <div className="flex flex-wrap gap-1">
-        {['ALL', 'TASK', 'APPROVAL', 'SHORTAGE', 'EXTERNAL', 'QUALITY'].map((k) => {
+        {['ALL', 'TASK', 'SHORTAGE', 'EXTERNAL', 'QUALITY'].map((k) => {
           const count = k === 'ALL' ? data.data.length : data.data.filter((i) => i.kind === k).length;
           return (
             <button
@@ -84,7 +84,7 @@ export function FollowUpPage() {
         <Card>
           <EmptyState
             title="Nothing needs following up"
-            detail="No overdue tasks, pending approvals, material shortages, late external operations or open quality failures."
+            detail="No overdue tasks, material shortages, late external operations or open quality failures."
           />
         </Card>
       ) : (

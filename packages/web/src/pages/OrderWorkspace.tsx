@@ -60,7 +60,10 @@ type TabKey = OrderTabKey;
 export function OrderWorkspacePage() {
   const { id = '' } = useParams();
   const [params, setParams] = useSearchParams();
-  const tab = (params.get('tab') as TabKey) || 'overview';
+  // `approvals` was a tab until customer approvals were removed; links already
+  // sent in emails and notifications land on the outside-work screen instead.
+  const rawTab = params.get('tab');
+  const tab = ((rawTab === 'approvals' ? 'external' : rawTab) as TabKey) || 'overview';
   const [showAllTabs, setShowAllTabs] = useState(false);
   const { isSuperAdmin } = useAuth();
   const navigate = useNavigate();
@@ -135,7 +138,6 @@ export function OrderWorkspacePage() {
     { key: 'bom',        label: 'BOM', badge: order.bom?.shortItems ?? 0, tone: 'amber' },
     { key: 'instructions', label: 'Custom Instructions' },
     { key: 'external',   label: 'External Order', badge: order.counts.openExternalOps },
-    { key: 'approvals',  label: 'Approvals', badge: order.counts.pendingApprovals, tone: 'red' },
     { key: 'production', label: 'Production' },
     { key: 'quality',    label: 'Quality' },
     { key: 'packing',    label: 'Packing' },
@@ -294,7 +296,7 @@ export function OrderWorkspacePage() {
           {tab === 'materials'    && <MaterialsTab order={order} />}
           {tab === 'bom'          && <BomTab order={order} />}
           {tab === 'instructions' && <InstructionsTab orderId={order.id} />}
-          {(tab === 'external' || tab === 'approvals') && <ExternalTab order={order} focus={tab} onJump={setTab} />}
+          {tab === 'external'     && <ExternalTab order={order} onJump={setTab} />}
           {tab === 'production'   && <ProductionTab order={order} />}
           {tab === 'quality'      && <QualityTab order={order} />}
           {(tab === 'packing' || tab === 'shipping') && <PackingTab order={order} focus={tab} />}

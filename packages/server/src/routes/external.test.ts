@@ -45,3 +45,11 @@ describe('bulk-saving external work', () => {
     assert.equal('id' in data, false);
   });
 });
+
+describe('outside work no longer waits for customer approval', () => {
+  test('an operation stored as waiting for approval reads as not sent', async () => {
+    const { asNotSent } = await import('./external.js');
+    assert.equal(asNotSent('WAITING_APPROVAL'), 'NOT_SENT');
+    for (const s of ['NOT_SENT', 'SENT', 'IN_PROGRESS', 'RETURNED', 'CANCELLED']) assert.equal(asNotSent(s), s);
+  });
+});

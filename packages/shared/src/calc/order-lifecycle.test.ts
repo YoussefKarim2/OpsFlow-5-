@@ -63,7 +63,7 @@ describe('a cancelled outside operation is not a problem', () => {
     order: { ...baseOrder, requiredDeliveryDate: '2026-12-01', promisedShippingDate: '2026-11-20' },
     tasks: [],
     externalOps: [{
-      id: 'op1', operationType: 'PRINTING', status, requiresApproval: true, approvalCleared: false,
+      id: 'op1', operationType: 'PRINTING', status,
       expectedReturnDate: '2026-09-01', actualReturnDate: null,
     }],
   });
@@ -74,9 +74,9 @@ describe('a cancelled outside operation is not a problem', () => {
     assert.ok(!codes.includes(AlertCode.EXTERNAL_OP_LATE));
   });
 
-  test('a live one still does both', () => {
+  test('a live one can still run late, but is never held for approval', () => {
     const codes = evaluateAlerts(ctx('SENT')).map((a) => a.code);
-    assert.ok(codes.includes(AlertCode.EXTERNAL_OP_BLOCKED));
+    assert.ok(!codes.includes(AlertCode.EXTERNAL_OP_BLOCKED), 'the factory does not use customer approvals');
     assert.ok(codes.includes(AlertCode.EXTERNAL_OP_LATE));
   });
 });
@@ -112,7 +112,7 @@ describe('a passed final inspection clears Quality Check on its own', () => {
     cancelled: false, hasOpenQualityFailure: false, shipmentStatus: null,
     orderQty: 1000, producedQty: 1000, packedQty: 0, shippedQty: 0,
     qualityPassedQty: 0, packingApproved: false, materialsFullyIssued: true,
-    hasPendingBlockingApproval: false, isBehindSchedule: false, anyTaskStarted: true,
+    isBehindSchedule: false, anyTaskStarted: true,
   };
 
   test('with nothing typed on the out-line ledger and no audit, it is waiting on quality', () => {

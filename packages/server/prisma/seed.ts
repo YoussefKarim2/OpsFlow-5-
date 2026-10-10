@@ -5,7 +5,7 @@
  * templates from `Progress Status`, and PO A302059B exactly as the workbook
  * records it — 1,972 pieces across four colours, a 2,071-piece cut order, a
  * six-lay marker plan consuming 1,194 m of Rosetta, 23 BOM lines with nothing
- * issued, and an external printing operation blocked on customer approval.
+ * issued, and an external printing operation not yet sent.
  *
  * Idempotent: safe to run repeatedly.
  *
@@ -311,9 +311,7 @@ async function main(): Promise<void> {
 
   /**
    * Progress the demo order to a realistic mid-flight state: sequences 1–4 are
-   * done, sequence 5 is where it is stuck (waiting on the customer's print
-   * approval), and everything after is not started. That is exactly the state
-   * the workbook describes.
+   * done, and everything after is not started.
    */
   const COMPLETED_THROUGH = 4;
   const taskIdByKey = new Map<string, string>();
@@ -349,15 +347,6 @@ async function main(): Promise<void> {
     });
     taskIdByKey.set(t.key, task.id);
   }
-
-  // The external-order task is blocked on the approval, not merely unstarted.
-  await prisma.task.update({
-    where: { id: taskIdByKey.get('EX_SEND_ORDER')! },
-    data: {
-      status: 'BLOCKED',
-      blockedReason: 'Waiting for the customer to approve the print artwork. External Order note: برجاء عدم البدء ف طباعه الاوردر الا بعد موافقه العميل',
-    },
-  });
 
   console.log(`    tasks               ${WORKFLOW_TEMPLATE.length} (sequences 1–${COMPLETED_THROUGH} complete)`);
 
@@ -417,19 +406,7 @@ async function main(): Promise<void> {
     },
   });
 
-  // ── Approval and external operation — the blocked gate ────────────────────
-  const approval = await prisma.approval.create({
-    data: {
-      orderId: order.id,
-      type: 'PRINT_ARTWORK',
-      status: 'PENDING',
-      blocking: true,
-      requestedDate: new Date(poDate.getTime() + 8 * 86_400_000),
-      requestedById: outsideWorkManager.id,
-      sentTo: 'John Orr — Florida Celtic',
-      comment: 'Full-piece print artwork sent for approval. Production cannot start until this returns.',
-    },
-  });
+  // ── External operation ────────────────────────────────────────────────────
 
   for (const ec of EXTERNAL_COLORS) {
     await prisma.externalOperation.create({
@@ -442,16 +419,13 @@ async function main(): Promise<void> {
         qty: ec.qty,
         unitRate: ec.rate,
         expectedReturnDate: new Date(poDate.getTime() + 20 * 86_400_000),
-        status: 'WAITING_APPROVAL',
-        requiresApproval: true,
-        // All four colours share the one artwork approval.
-        approvalId: ec.color === EXTERNAL_COLORS[0]!.color ? approval.id : null,
+        status: 'NOT_SENT',
         notes: `Colour area ${ec.areaM} m at ${ec.rate} m/pc — ${ec.color}`,
         colorIds: [colorIds.get(ec.color)!],
       },
     });
   }
-  console.log(`    external ops        ${EXTERNAL_COLORS.length} (blocked on customer approval)`);
+  console.log(`    external ops        ${EXTERNAL_COLORS.length} (not sent yet)`);
 
   // ── Costing ───────────────────────────────────────────────────────────────
   const costing = await prisma.costingRecord.create({
@@ -541,7 +515,6 @@ async function main(): Promise<void> {
     { orderId: order.id, actorId: coordinator.id, actorName: coordinator.name, action: 'CUT_ORDER_GENERATED', summary: 'generated the cut order — 2,071 pieces at 5% allowance', createdAt: new Date(poDate.getTime() + 2 * 86_400_000 + 3_600_000) },
     { orderId: order.id, actorId: cutting.id, actorName: cutting.name, action: 'MARKER_ADDED', summary: 'added 6 lays — 408 layers consuming 1,194 m of Rosetta', createdAt: new Date(poDate.getTime() + 4 * 86_400_000) },
     { orderId: order.id, actorId: coordinator.id, actorName: coordinator.name, action: 'BOM_ITEM_ADDED', summary: 'completed the bill of materials — 23 lines', createdAt: new Date(poDate.getTime() + 5 * 86_400_000) },
-    { orderId: order.id, actorId: outsideWorkManager.id, actorName: outsideWorkManager.name, action: 'APPROVAL_REQUESTED', summary: 'requested print artwork approval from John Orr — Florida Celtic', createdAt: new Date(poDate.getTime() + 8 * 86_400_000) },
     { orderId: order.id, actorId: cutting.id, actorName: cutting.name, action: 'CUTTING_RECORDED', summary: 'recorded cutting — 2,084 pcs', createdAt: new Date(poDate.getTime() + 9 * 86_400_000) },
   ];
   for (const p of DEMO_PRODUCTION.filter((x) => x.operation === 'SEWING')) {
@@ -557,12 +530,6 @@ async function main(): Promise<void> {
   // ── Notifications for the coordinator ─────────────────────────────────────
   await prisma.notification.createMany({
     data: [
-      {
-        userId: coordinator.id, orderId: order.id, type: 'APPROVAL_REQUESTED',
-        title: `Print approval still outstanding on ${ORDER.poNumber}`,
-        body: 'Full-piece printing cannot be released to AGE until the customer approves the artwork.',
-        link: `/orders/${order.id}?tab=approvals`,
-      },
       {
         userId: coordinator.id, orderId: order.id, type: 'MATERIAL_SHORTAGE',
         title: `All ${BOM.length} material lines outstanding on ${ORDER.poNumber}`,

@@ -31,9 +31,6 @@ function healthy(over: Partial<GateContext> = {}): GateContext {
     hasMarkers: true,
     markerCoversRequirement: true,
     markerShortfall: 0,
-    hasPendingBlockingApproval: false,
-    pendingApprovalLabel: null,
-    externalOpsBlocked: 0,
     hasOpenQualityFailure: false,
     qualityInspected: true,
     packingApproved: true,
@@ -76,13 +73,10 @@ describe('the cutting gate', () => {
     assert.match(r.blockers[0]!.detail, /120/);
   });
 
-  test('a pending customer approval blocks it', () => {
-    const r = cutting(healthy({
-      hasPendingBlockingApproval: true,
-      pendingApprovalLabel: 'Print artwork approval',
-    }));
-    assert.equal(r.canStart, false);
-    assert.match(r.blockers[0]!.detail, /Print artwork approval/);
+  test('customer approval is not something cutting waits for', () => {
+    // The factory does not use customer approvals, so no gate mentions one.
+    const r = cutting(healthy({}));
+    assert.equal(r.blockers.some((b) => /approv/i.test(b.requirement + b.detail)), false);
   });
 
   test('several problems are reported together, not one at a time', () => {
@@ -92,9 +86,8 @@ describe('the cutting gate', () => {
       materialShortageCount: 2,
       hasMarkers: false,
       markerCoversRequirement: false,
-      hasPendingBlockingApproval: true,
     }));
-    assert.equal(r.blockers.length, 3);
+    assert.equal(r.blockers.length, 2);
   });
 
   test('unissued material is a warning, not a blocker', () => {
@@ -139,10 +132,10 @@ describe('other gated stages', () => {
     assert.match(r.blockers[0]!.detail, /not been approved/i);
   });
 
-  test('an external operation awaiting approval blocks release', () => {
-    const r = evaluateStageGates(StageKey.EXTERNAL_ORDER, healthy({ externalOpsBlocked: 4 }), 'External');
-    assert.equal(r.canStart, false);
-    assert.match(r.blockers[0]!.detail, /4 external operations/);
+  test('outside work is never held for customer approval', () => {
+    const r = evaluateStageGates(StageKey.EXTERNAL_ORDER, healthy({}), 'External');
+    assert.equal(r.canStart, true);
+    assert.equal(r.blockers.length, 0);
   });
 
   test('an ungated stage is never blocked', () => {

@@ -10,7 +10,7 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { ChangeCategory, NotificationPriority, CATEGORY_LABEL } from '@opsflow/shared';
+import { ChangeCategory, NotificationPriority, CATEGORY_LABEL, RETIRED_CATEGORIES } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
@@ -18,7 +18,7 @@ import { asyncHandler } from '../util/async-handler.js';
 export const notificationPreferencesRouter = Router();
 notificationPreferencesRouter.use(authenticate);
 
-const CATEGORIES = Object.values(ChangeCategory);
+const CATEGORIES = Object.values(ChangeCategory).filter((c) => !RETIRED_CATEGORIES.includes(c));
 
 notificationPreferencesRouter.get('/', asyncHandler(async (req, res) => {
   const actor = currentUser(req);

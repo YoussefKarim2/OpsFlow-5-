@@ -37,9 +37,6 @@ export interface GateContext {
   hasMarkers: boolean;
   markerCoversRequirement: boolean;
   markerShortfall: number;
-  hasPendingBlockingApproval: boolean;
-  pendingApprovalLabel: string | null;
-  externalOpsBlocked: number;
   hasOpenQualityFailure: boolean;
   qualityInspected: boolean;
   packingApproved: boolean;
@@ -127,15 +124,6 @@ export const STAGE_GATES: Partial<Record<StageKey, GateRequirement[]>> = {
       action: () => ({ label: 'Complete the lay plan', tab: 'cutting' }),
     },
     {
-      key: 'approvals-clear',
-      label: 'Customer approvals obtained',
-      severity: 'BLOCKER',
-      test: (c) => !c.hasPendingBlockingApproval,
-      explain: (c) =>
-        `${c.pendingApprovalLabel ?? 'A customer approval'} is still outstanding, and work that depends on it cannot start.`,
-      action: () => ({ label: 'Chase the approval', tab: 'approvals' }),
-    },
-    {
       key: 'materials-issued',
       label: 'Materials issued to the floor',
       severity: 'WARNING',
@@ -157,17 +145,9 @@ export const STAGE_GATES: Partial<Record<StageKey, GateRequirement[]>> = {
   ],
 
 
-  [StageKey.EXTERNAL_ORDER]: [
-    {
-      key: 'external-approval',
-      label: 'Approval obtained before release',
-      severity: 'BLOCKER',
-      test: (c) => c.externalOpsBlocked === 0,
-      explain: (c) =>
-        `${c.externalOpsBlocked} external operation${c.externalOpsBlocked === 1 ? '' : 's'} require customer approval before release.`,
-      action: () => ({ label: 'Open external operations', tab: 'external' }),
-    },
-  ],
+  // No gate on outside work: the factory does not wait on customer approval
+  // before sending work out, so nothing here can block it.
+  [StageKey.EXTERNAL_ORDER]: [],
 
   [StageKey.PRODUCTION_FOLLOW_UP]: [
     {

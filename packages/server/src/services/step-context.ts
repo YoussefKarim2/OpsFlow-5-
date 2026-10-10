@@ -49,7 +49,7 @@ export interface StepOrderInput {
   quantities: Array<{ ledger: string; qty: number }>;
   markers: Array<unknown>;
   bomItems: Array<{ requiredQty: unknown; issuedQty: unknown }>;
-  externalOperations: Array<{ status: string; requiresApproval: boolean; approval?: { status: string } | null }>;
+  externalOperations: Array<{ status: string }>;
   productionRecords: Array<{ qty: number; operation: string }>;
   qualityAudits: Array<{ result: string; correctiveActionClosed: boolean; createdAt?: Date | null }>;
   packingLists: Array<{ approved: boolean; cartons: Array<{ qty: number }> }>;
@@ -196,11 +196,6 @@ export function buildStepContext(
     // waits for; counting it would keep External Work open for good.
     externalOpCount: order.externalOperations.filter((op) => op.status !== 'CANCELLED').length,
     externalOpsReturned: order.externalOperations.filter((op) => op.status === 'RETURNED').length,
-    externalOpsBlocked: order.externalOperations.filter(
-      // A cancelled operation is never going to be sent, so it waits on nothing.
-      (op) => op.requiresApproval && op.approval?.status !== 'APPROVED'
-        && op.status !== 'RETURNED' && op.status !== 'CANCELLED',
-    ).length,
 
     producedQty,
     productionRecordCount: order.productionRecords.length,

@@ -57,15 +57,6 @@ export class ConflictError extends AppError {
  * failure. These are the rules the spreadsheet could only state in prose.
  */
 
-export class ApprovalRequiredError extends AppError {
-  constructor(operation: string) {
-    super(
-      `"${operation}" requires customer approval before it can start. Record the approval first.`,
-      409, 'APPROVAL_REQUIRED',
-    );
-  }
-}
-
 export class QuantityRuleError extends AppError {
   constructor(message: string, details?: unknown) {
     super(message, 422, 'QUANTITY_RULE_VIOLATION', details);

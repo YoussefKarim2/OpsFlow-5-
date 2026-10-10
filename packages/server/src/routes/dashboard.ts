@@ -53,7 +53,6 @@ dashboardRouter.get('/', requirePermission('order:read'), asyncHandler(async (re
       (s) => (s.daysRemaining != null && s.daysRemaining < 0 && s.status !== OrderStatus.COMPLETED && s.status !== OrderStatus.SHIPPED) ||
         s.status === OrderStatus.PRODUCTION_DELAYED,
     ).length,
-    waitingApproval: summaries.filter((s) => s.status === OrderStatus.WAITING_APPROVAL).length,
     inProduction: summaries.filter(
       (s) => s.status === OrderStatus.IN_PRODUCTION || s.status === OrderStatus.PRODUCTION_DELAYED,
     ).length,
@@ -236,7 +235,7 @@ dashboardRouter.get('/', requirePermission('order:read'), asyncHandler(async (re
  * The Follow-Up Centre — section 20.
  *
  * Every open action in the factory, flattened into one ranked list: overdue
- * tasks, pending approvals, material shortages, late external operations and
+ * tasks, material shortages, late external operations and
  * open quality failures. Nothing here is a new calculation; it is the alert
  * engine plus the task list, projected into one shape.
  */
@@ -268,8 +267,7 @@ dashboardRouter.get('/follow-up', requirePermission('order:read'), asyncHandler(
       items.push({
         id: `${order.id}:${alert.code}:${alert.entityId ?? ''}`,
         kind:
-          alert.code === 'APPROVAL_PENDING' ? 'APPROVAL'
-          : alert.code === 'MATERIAL_SHORTAGE' ? 'SHORTAGE'
+          alert.code === 'MATERIAL_SHORTAGE' ? 'SHORTAGE'
           : alert.code.startsWith('EXTERNAL') ? 'EXTERNAL'
           : alert.code === 'QUALITY_FAILED' ? 'QUALITY'
           : 'TASK',

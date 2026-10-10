@@ -10,7 +10,6 @@ export const PERMISSIONS = [
   'material:read', 'material:issue', 'material:edit',
   'cutting:read', 'cutting:write',
   'external:read', 'external:write',
-  'approval:read', 'approval:request', 'approval:record',
   'quality:read', 'quality:audit',
   'packing:read', 'packing:write', 'packing:approve',
   'shipment:read', 'shipment:write', 'shipment:override',
@@ -66,7 +65,7 @@ export type RoleKey = (typeof ROLE_KEYS)[number];
 
 const READ_ONLY: Permission[] = [
   'order:read', 'task:read', 'production:read', 'material:read',
-  'cutting:read', 'external:read', 'approval:read', 'quality:read',
+  'cutting:read', 'external:read', 'quality:read',
   'packing:read', 'shipment:read', 'report:read',
 ];
 
@@ -115,7 +114,6 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
     // order unable to record its production at all.
     'production:write',
     'external:write',
-    'approval:request', 'approval:record',
     'packing:write', 'packing:approve',
     'shipment:write',
     'costing:read', 'costing:write',
@@ -129,7 +127,6 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
     'production:write',
     'cutting:write',
     'import:laying',
-    'approval:record',
     'costing:read',
   ],
 
@@ -143,7 +140,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
 
   QUALITY: [...READ_ONLY, 'quality:audit', 'task:complete', 'task:assign'],
 
-  EXTERNAL_OPS: [...READ_ONLY, 'external:write', 'approval:request', 'task:complete'],
+  EXTERNAL_OPS: [...READ_ONLY, 'external:write', 'task:complete'],
 
   PACKING: [...READ_ONLY, 'packing:write', 'task:complete'],
 
