@@ -104,7 +104,7 @@ export function StepRail({
   onJump: (step: OrderStepState) => void;
 }) {
   return (
-    <nav aria-label="Order steps" className="flex h-full w-64 shrink-0 flex-col border-r border-ink-200 bg-white">
+    <nav aria-label="Order steps" className="flex h-full w-48 shrink-0 flex-col border-r border-ink-200 bg-white">
       <div className="border-b border-ink-200 px-3 py-2.5">
         <div className="flex items-baseline justify-between">
           <span className="text-2xs font-semibold uppercase tracking-wider text-ink-500">
@@ -136,14 +136,14 @@ export function StepRail({
                 onClick={() => onJump(s)}
                 aria-current={s.isCurrent ? 'step' : undefined}
                 className={clsx(
-                  'flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors',
+                  'flex w-full items-start gap-2 px-2.5 py-2 text-left transition-colors',
                   isActive ? 'bg-accent-50' : 'hover:bg-ink-50',
                   s.isCurrent && !isActive && 'bg-accent-50/50',
                 )}
               >
                 <StepDot state={s.state} number={s.order} />
                 <span className="min-w-0 flex-1">
-                  <span className={clsx('block truncate text-sm font-medium', look.row)}>
+                  <span className={clsx('block truncate text-sm font-medium', look.row)} title={s.label}>
                     {s.label}
                   </span>
                   {s.isCurrent ? (

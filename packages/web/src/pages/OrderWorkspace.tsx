@@ -151,83 +151,76 @@ export function OrderWorkspacePage() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Header — questions 1–3 of the brief answered before you scroll. */}
+      {/* Header — questions 1–3 of the brief answered before you scroll.
+          Kept to three short rows so the step below has the height: the
+          title row with the progress at its right, the facts, and the next
+          thing to do. */}
       <div className="shrink-0 border-b border-ink-200 bg-white">
-        <div className="px-5 pt-3">
-          <Link to="/orders" className="mb-2 inline-flex items-center gap-1 text-xs text-ink-500 hover:text-ink-800">
-            <ChevronLeft className="h-3.5 w-3.5" /> Orders
-          </Link>
+        <div className="px-5 pt-2">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+            <Link to="/orders" className="inline-flex items-center gap-0.5 text-xs text-ink-500 hover:text-ink-800">
+              <ChevronLeft className="h-3.5 w-3.5" /> Orders
+            </Link>
+            <h1 className="text-lg font-semibold uppercase leading-tight tracking-tight text-ink-900">
+              {order.orderName}
+            </h1>
+            <span className="rounded bg-ink-100 px-1.5 py-0.5 font-mono text-xs font-semibold text-ink-700">
+              PO {order.poNumber}
+            </span>
+            <StatusBadge status={order.status} />
+            <HealthBadge health={order.health} />
+            <PriorityBadge priority={order.priority} />
 
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2.5">
-                <h1 className="text-xl font-semibold uppercase tracking-tight text-ink-900">
-                  {order.orderName}
-                </h1>
-                <span className="rounded bg-ink-100 px-1.5 py-0.5 font-mono text-xs font-semibold text-ink-700">
-                  PO {order.poNumber}
-                </span>
-                <StatusBadge status={order.status} />
-                <HealthBadge health={order.health} />
-                <PriorityBadge priority={order.priority} />
-              </div>
-
-              {/* The nine facts a coordinator checks before doing anything.
-                  Quantity and delivery are here because "how many, by when" is
-                  the question behind every other one. */}
-              <dl className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs">
-                <HeaderFact label="Client" value={order.client.name} />
-                <HeaderFact label="Style" value={order.styleNumber} />
-                <HeaderFact label="Coordinator" value={order.coordinator?.name} />
-                <HeaderFact label="Factory" value={order.externalFactory?.name ?? order.factory?.name} />
-                <HeaderFact label="Fabric" value={order.fabric} />
-                <HeaderFact
-                  label="Quantity"
-                  value={order.stockDeduction.customerOrderQty
-                    ? `${order.stockDeduction.customerOrderQty.toLocaleString()} pcs`
-                    : null}
-                />
-                <HeaderFact label="Delivery" value={fmtDate(order.requiredDeliveryDate)} />
-                <HeaderFact label="Season" value={order.season} />
-              </dl>
-            </div>
-
-            <div className="w-full max-w-xs shrink-0">
+            {/* Progress, in the title row rather than a block of its own. The
+                sentence about where the number comes from is the tooltip. */}
+            <div
+              className="ml-auto flex items-center gap-2"
+              title={`Calculated from ${order.stages.reduce((a, s) => a + s.completedTasks, 0)} of ${order.stages.reduce((a, s) => a + s.totalTasks, 0)} workflow tasks — never typed in.`}
+            >
+              <span className="text-2xs font-semibold uppercase tracking-wider text-ink-500">Progress</span>
+              <ProgressBar value={order.progressPct} height="md" className="w-28" />
+              <span className="tnum text-sm font-semibold text-ink-900">{order.progressPct}%</span>
               {/*
                 Deleting an order is a super-admin action and nothing else. It
                 is not behind a permission because permissions are a table an
                 administrator can edit, and this is the one action with no undo.
               */}
               {isSuperAdmin && (
-                <div className="mb-2 flex justify-end">
-                  <button
-                    type="button"
-                    className="btn-ghost btn-sm text-red-600 hover:bg-red-50"
-                    onClick={() => { setConfirmText(''); setDeleting(true); }}
-                  >
-                    <Trash2 className="h-3.5 w-3.5" /> Delete order
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  className="btn-ghost btn-sm ml-2 text-red-600 hover:bg-red-50"
+                  onClick={() => { setConfirmText(''); setDeleting(true); }}
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Delete order
+                </button>
               )}
-              <div className="mb-1 flex items-baseline justify-between">
-                <span className="text-2xs font-semibold uppercase tracking-wider text-ink-500">
-                  Order Progress
-                </span>
-                <span className="tnum text-lg font-semibold text-ink-900">{order.progressPct}%</span>
-              </div>
-              <ProgressBar value={order.progressPct} height="lg" />
-              <p className="mt-1 text-2xs text-ink-500">
-                Calculated from {order.stages.reduce((a, s) => a + s.completedTasks, 0)} of{' '}
-                {order.stages.reduce((a, s) => a + s.totalTasks, 0)} workflow tasks — never typed in.
-              </p>
             </div>
           </div>
+
+          {/* The nine facts a coordinator checks before doing anything.
+              Quantity and delivery are here because "how many, by when" is
+              the question behind every other one. */}
+          <dl className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
+            <HeaderFact label="Client" value={order.client.name} />
+            <HeaderFact label="Style" value={order.styleNumber} />
+            <HeaderFact label="Coordinator" value={order.coordinator?.name} />
+            <HeaderFact label="Factory" value={order.externalFactory?.name ?? order.factory?.name} />
+            <HeaderFact label="Fabric" value={order.fabric} />
+            <HeaderFact
+              label="Quantity"
+              value={order.stockDeduction.customerOrderQty
+                ? `${order.stockDeduction.customerOrderQty.toLocaleString()} pcs`
+                : null}
+            />
+            <HeaderFact label="Delivery" value={fmtDate(order.requiredDeliveryDate)} />
+            <HeaderFact label="Season" value={order.season} />
+          </dl>
 
           {/* The next thing to do, stated once, at the top. */}
           {steps?.current && (
             <button
               onClick={() => setTab(steps.current!.tab)}
-              className="mt-3 flex w-full items-center gap-2 rounded-md border border-accent-200 bg-accent-50 px-3 py-2 text-left transition-colors hover:bg-accent-100"
+              className="mt-2 flex w-full items-center gap-2 rounded-md border border-accent-200 bg-accent-50 px-3 py-1 text-left transition-colors hover:bg-accent-100"
             >
               <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-600 text-[10px] font-semibold text-white">
                 {steps.current.order}
