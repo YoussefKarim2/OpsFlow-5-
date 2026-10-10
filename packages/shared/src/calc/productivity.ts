@@ -1,10 +1,24 @@
 /**
- * Factory-wide productivity — Phase 1.
+ * Factory-wide productivity.
  *
- * Everything here is an aggregation of records the application already keeps.
- * Nothing is estimated: a figure the data cannot support is `null`, and the
- * reason is reported next to it, so the screen can say "not recorded" instead
- * of showing a zero that nobody entered.
+ * The measures a sewing floor is managed by, computed the way the trade
+ * computes them (the industrial-engineering formulas every garment factory's
+ * daily production report uses):
+ *
+ *   line efficiency % = Σ(pieces × SAM) ÷ (manpower × minutes worked) × 100,
+ *     manpower = operators + helpers, lost time NOT deducted (overall efficiency)
+ *   produced minutes (SAH × 60) = Σ pieces × SAM
+ *   pieces per operator-day, pieces per machine-day
+ *   DHU = defects per hundred units inspected
+ *   right first time % = audits passed on first inspection ÷ audits decided
+ *   on-time delivery % = shipments on or before the promise ÷ shipments
+ *   cut-to-ship ratio = pieces cut ÷ pieces shipped
+ *
+ * Everything is an aggregation of entered records: production entries, the
+ * factory day log, order SAMs, audits, cutting records and shipments. Nothing
+ * is estimated: a figure the data cannot support is `null`, and the reason is
+ * reported next to it, so the screen can say "not recorded" instead of showing
+ * a zero that nobody entered.
  *
  * Zero versus missing, precisely:
  *
@@ -119,25 +133,14 @@ export function periodRange(period: ProductivityPeriod, anchor: string): DayRang
 
 // ── Output ──────────────────────────────────────────────────────────────────
 
+/** Every operation the factory records, as offered in the entry form. */
 export const PRODUCTION_OPERATIONS: readonly ProductionOperation[] = [
   ProductionOperation.CUTTING, ProductionOperation.SEWING, ProductionOperation.PRINTING,
-  ProductionOperation.EMBROIDERY, ProductionOperation.WASHING, ProductionOperation.FINISHING,
-  ProductionOperation.PACKING,
+  ProductionOperation.EMBROIDERY, ProductionOperation.PACKING,
 ];
 
 /** The operation whose output is the factory's throughput. */
 export const PRIMARY_OPERATION: ProductionOperation = ProductionOperation.SEWING;
-
-/**
- * The operations a person can pick as the primary one. Washing and finishing
- * are not stages this factory manages by, so they are not offered. They stay
- * in the enum and in `PRODUCTION_OPERATIONS`: a record already filed under
- * them must still be counted and shown.
- */
-export const PRIMARY_OPERATION_CHOICES: readonly ProductionOperation[] = [
-  ProductionOperation.CUTTING, ProductionOperation.SEWING, ProductionOperation.PRINTING,
-  ProductionOperation.EMBROIDERY, ProductionOperation.PACKING,
-];
 
 /**
  * Operations in the order a garment meets them. Used to lay out stage
@@ -146,8 +149,7 @@ export const PRIMARY_OPERATION_CHOICES: readonly ProductionOperation[] = [
  */
 export const STAGE_ORDER: readonly ProductionOperation[] = [
   ProductionOperation.CUTTING, ProductionOperation.PRINTING, ProductionOperation.EMBROIDERY,
-  ProductionOperation.SEWING, ProductionOperation.WASHING, ProductionOperation.FINISHING,
-  ProductionOperation.PACKING,
+  ProductionOperation.SEWING, ProductionOperation.PACKING,
 ];
 
 export interface ProductivityRecordInput {
@@ -533,5 +535,270 @@ export function summariseFactory(
     operationsRecorded: stages.filter((s) => s.recorded).map((s) => s.operation),
     operationsUnrecorded: stages.filter((s) => !s.recorded).map((s) => s.operation),
     days: out.days,
+  };
+}
+
+// ── Labour: efficiency, produced minutes, pieces per operator and machine ───
+//
+// The sewing floor's own arithmetic. A day's output is turned into the
+// standard minutes it represents (pieces × the style's SAM) and set against
+// the minutes the people on the floor attended (manpower × minutes worked).
+// Manpower is operators plus helpers, because the garment SAM includes the
+// helpers' operations; lost time is not deducted, which makes this the
+// "overall" efficiency the trade reports rather than an on-standard figure.
+//
+// A day counts towards efficiency only when every sewn piece that day has a
+// SAM and the day log has manpower and minutes. Counting a day with half its
+// pieces un-timed would understate the floor; guessing a SAM would invent it.
+// The figures are pooled over the countable days — total produced minutes
+// over total attended minutes — not an average of daily percentages, so a
+// big day weighs more than a small one, as it should.
+
+export interface DayLogInput {
+  date: string | Date;
+  operators: number | null;
+  helpers: number | null;
+  /** Minutes worked per person after breaks. */
+  workingMinutes: number | null;
+  machinesRunning: number | null;
+}
+
+export interface OrderSamInput {
+  orderId: string;
+  /** Standard allowed minutes to sew one garment; null when not entered. */
+  samMinutes: number | null;
+}
+
+export interface LabourDay {
+  date: string;
+  sewn: number | null;
+  /** Pieces sewn that day whose order has no SAM. */
+  sewnWithoutSam: number;
+  producedMinutes: number | null;
+  manpower: number | null;
+  attendedMinutes: number | null;
+  efficiencyPct: number | null;
+  hasLog: boolean;
+  /** Why the day is not in the efficiency figure, when it is not. */
+  excluded: 'NO_SEWING' | 'NO_LOG' | 'LOG_INCOMPLETE' | 'SAM_MISSING' | null;
+}
+
+export interface LabourSummary {
+  /** Σ produced minutes ÷ Σ attended minutes × 100, over countable days. */
+  efficiencyPct: number | null;
+  producedMinutes: number | null;
+  attendedMinutes: number | null;
+  /** Standard allowed hours produced: produced minutes ÷ 60. */
+  producedSah: number | null;
+  /** Σ sewn ÷ Σ operators over days with both: pieces per operator per day. */
+  piecesPerOperatorDay: number | null;
+  /** Σ sewn ÷ Σ machines running over days with both. */
+  piecesPerMachineDay: number | null;
+  /** Average manpower on the countable days. */
+  avgManpower: number | null;
+  /** Days in the period with a sewing record. */
+  sewingDays: number;
+  /** Sewing days that also have a day log. */
+  loggedDays: number;
+  /** Days that went into the efficiency figure. */
+  countedDays: number;
+  /** Sewing days left out, by reason. */
+  excluded: { noLog: number; logIncomplete: number; samMissing: number };
+  /** Orders that sewed in the period but have no SAM — what to enter to complete the figure. */
+  ordersWithoutSam: string[];
+  days: LabourDay[];
+  reason: 'NO_SEWING' | 'NO_LOGS' | 'NO_COUNTABLE_DAYS' | null;
+}
+
+export function summariseLabour(
+  records: readonly ProductivityRecordInput[],
+  logs: readonly DayLogInput[],
+  sams: readonly OrderSamInput[],
+  range: DayRange,
+): LabourSummary {
+  const samByOrder = new Map(sams.map((s) => [s.orderId, s.samMinutes]));
+  const logByDay = new Map<string, DayLogInput>();
+  for (const l of logs) logByDay.set(dayKeyOf(l.date), l);
+
+  const dayMap = new Map<string, { sewn: number; sewnWithoutSam: number; produced: number; orders: Set<string> }>();
+  const days = enumerateDays(range);
+  for (const d of days) dayMap.set(d, { sewn: 0, sewnWithoutSam: 0, produced: 0, orders: new Set() });
+  const sewingDaysSet = new Set<string>();
+  const ordersWithoutSam = new Set<string>();
+
+  for (const r of records) {
+    if (r.operation !== ProductionOperation.SEWING || !Number.isFinite(r.qty)) continue;
+    const key = dayKeyOf(r.date);
+    const b = dayMap.get(key);
+    if (!b) continue;
+    sewingDaysSet.add(key);
+    b.sewn += r.qty;
+    const sam = samByOrder.get(r.orderId);
+    if (sam != null && Number.isFinite(sam) && sam > 0) b.produced += r.qty * sam;
+    else { b.sewnWithoutSam += r.qty; ordersWithoutSam.add(r.orderId); }
+  }
+
+  const rows: LabourDay[] = days.map((date) => {
+    const b = dayMap.get(date)!;
+    const log = logByDay.get(date);
+    const isSewing = sewingDaysSet.has(date);
+    const manpower = log && log.operators != null ? log.operators + (log.helpers ?? 0) : null;
+    const attended = manpower != null && log?.workingMinutes != null ? manpower * log.workingMinutes : null;
+    const produced = isSewing && b.sewnWithoutSam === 0 ? b.produced : null;
+    let excluded: LabourDay['excluded'] = null;
+    if (!isSewing) excluded = 'NO_SEWING';
+    else if (!log) excluded = 'NO_LOG';
+    else if (attended == null || attended <= 0) excluded = 'LOG_INCOMPLETE';
+    else if (produced == null) excluded = 'SAM_MISSING';
+    return {
+      date,
+      sewn: isSewing ? b.sewn : null,
+      sewnWithoutSam: b.sewnWithoutSam,
+      producedMinutes: produced,
+      manpower,
+      attendedMinutes: attended,
+      efficiencyPct: excluded == null ? safePct(produced, attended) : null,
+      hasLog: !!log,
+      excluded,
+    };
+  });
+
+  const counted = rows.filter((r) => r.excluded == null);
+  const producedMinutes = counted.length > 0 ? sum(counted.map((r) => r.producedMinutes)) : null;
+  const attendedMinutes = counted.length > 0 ? sum(counted.map((r) => r.attendedMinutes)) : null;
+
+  // Pieces per operator and per machine need only the sewn count and the
+  // headcount, not a SAM, so they pool over a wider set of days.
+  const opDays = rows.filter((r) => r.sewn != null && logByDay.get(r.date)?.operators != null && logByDay.get(r.date)!.operators! > 0);
+  const mcDays = rows.filter((r) => r.sewn != null && logByDay.get(r.date)?.machinesRunning != null && logByDay.get(r.date)!.machinesRunning! > 0);
+  const sewingDays = rows.filter((r) => r.sewn != null);
+
+  return {
+    efficiencyPct: counted.length > 0 ? safePct(producedMinutes, attendedMinutes) : null,
+    producedMinutes,
+    attendedMinutes,
+    producedSah: producedMinutes == null ? null : safeDiv(producedMinutes, 60),
+    piecesPerOperatorDay: opDays.length > 0
+      ? safeDiv(sum(opDays.map((r) => r.sewn)), sum(opDays.map((r) => logByDay.get(r.date)!.operators))) : null,
+    piecesPerMachineDay: mcDays.length > 0
+      ? safeDiv(sum(mcDays.map((r) => r.sewn)), sum(mcDays.map((r) => logByDay.get(r.date)!.machinesRunning))) : null,
+    avgManpower: counted.length > 0 ? safeDiv(sum(counted.map((r) => r.manpower)), counted.length) : null,
+    sewingDays: sewingDays.length,
+    loggedDays: sewingDays.filter((r) => r.hasLog).length,
+    countedDays: counted.length,
+    excluded: {
+      noLog: rows.filter((r) => r.excluded === 'NO_LOG').length,
+      logIncomplete: rows.filter((r) => r.excluded === 'LOG_INCOMPLETE').length,
+      samMissing: rows.filter((r) => r.excluded === 'SAM_MISSING').length,
+    },
+    ordersWithoutSam: [...ordersWithoutSam],
+    days: rows,
+    reason: sewingDays.length === 0 ? 'NO_SEWING'
+      : sewingDays.every((r) => !r.hasLog) ? 'NO_LOGS'
+      : counted.length === 0 ? 'NO_COUNTABLE_DAYS' : null,
+  };
+}
+
+// ── Right first time ────────────────────────────────────────────────────────
+//
+// Of the audits decided in the period, the share that passed on their first
+// inspection. A re-inspection is not a first inspection, so it is neither a
+// pass nor a fail here; it is the consequence of an earlier fail.
+
+export interface RftAuditInput {
+  id: string;
+  inspectionDate: string | Date;
+  result: 'PASS' | 'FAIL' | 'PENDING';
+  /** True when this audit re-inspects after an earlier failure. */
+  isReinspection: boolean;
+}
+
+export interface RftSummary {
+  rftPct: number | null;
+  firstInspections: number;
+  passedFirstTime: number;
+  failedFirstTime: number;
+  reinspections: number;
+  pending: number;
+  reason: 'NO_AUDITS' | 'NO_DECIDED_FIRST_INSPECTIONS' | null;
+}
+
+export function summariseRft(audits: readonly RftAuditInput[], range: DayRange): RftSummary {
+  const days = new Set(enumerateDays(range));
+  const inRange = audits.filter((a) => days.has(dayKeyOf(a.inspectionDate)));
+  const first = inRange.filter((a) => !a.isReinspection && a.result !== 'PENDING');
+  const passed = first.filter((a) => a.result === 'PASS').length;
+  return {
+    rftPct: first.length > 0 ? safePct(passed, first.length) : null,
+    firstInspections: first.length,
+    passedFirstTime: passed,
+    failedFirstTime: first.length - passed,
+    reinspections: inRange.filter((a) => a.isReinspection).length,
+    pending: inRange.filter((a) => a.result === 'PENDING').length,
+    reason: inRange.length === 0 ? 'NO_AUDITS' : first.length === 0 ? 'NO_DECIDED_FIRST_INSPECTIONS' : null,
+  };
+}
+
+// ── Delivery: on-time and cut-to-ship ───────────────────────────────────────
+
+export interface DeliveryShipmentInput {
+  id: string;
+  orderId: string;
+  qty: number;
+  actualShippingDate: string | Date | null;
+  promisedShippingDate: string | Date | null;
+}
+
+export interface OrderLedgerInput {
+  orderId: string;
+  /** Pieces cut for the order to date; null when nothing recorded. */
+  cutQty: number | null;
+  /** Pieces shipped for the order to date; null when nothing shipped. */
+  shippedQty: number | null;
+}
+
+export interface DeliverySummary {
+  /** Shipments on or before their promised day ÷ shipments with a promise × 100. */
+  onTimePct: number | null;
+  shipments: number;
+  onTime: number;
+  late: number;
+  /** Shipments in the period with no promised date to measure against. */
+  noPromise: number;
+  piecesShipped: number;
+  /** Σ cut ÷ Σ shipped over the orders shipped in the period, to date. 1.00 is perfect. */
+  cutToShipRatio: number | null;
+  cutToShipOrders: number;
+  /** Orders shipped in the period with no cut figure or nothing shipped to date — excluded. */
+  cutToShipExcluded: number;
+  reason: 'NO_SHIPMENTS' | 'NO_PROMISES' | null;
+}
+
+export function summariseDelivery(
+  shipments: readonly DeliveryShipmentInput[],
+  ledgers: readonly OrderLedgerInput[],
+  range: DayRange,
+): DeliverySummary {
+  const days = new Set(enumerateDays(range));
+  const inRange = shipments.filter((s) => s.actualShippingDate != null && days.has(dayKeyOf(s.actualShippingDate)));
+  const promised = inRange.filter((s) => s.promisedShippingDate != null);
+  const onTime = promised.filter((s) => dayKeyOf(s.actualShippingDate!) <= dayKeyOf(s.promisedShippingDate!)).length;
+
+  const shippedOrders = new Set(inRange.map((s) => s.orderId));
+  const ledgerRows = ledgers.filter((l) => shippedOrders.has(l.orderId));
+  const countable = ledgerRows.filter((l) => l.cutQty != null && l.cutQty > 0 && l.shippedQty != null && l.shippedQty > 0);
+
+  return {
+    onTimePct: promised.length > 0 ? safePct(onTime, promised.length) : null,
+    shipments: inRange.length,
+    onTime,
+    late: promised.length - onTime,
+    noPromise: inRange.length - promised.length,
+    piecesShipped: sum(inRange.map((s) => s.qty)),
+    cutToShipRatio: countable.length > 0
+      ? safeDiv(sum(countable.map((l) => l.cutQty)), sum(countable.map((l) => l.shippedQty))) : null,
+    cutToShipOrders: countable.length,
+    cutToShipExcluded: shippedOrders.size - countable.length,
+    reason: inRange.length === 0 ? 'NO_SHIPMENTS' : promised.length === 0 ? 'NO_PROMISES' : null,
   };
 }

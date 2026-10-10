@@ -73,6 +73,7 @@ model User {
   coordinatedOrders       Order[]                  @relation("OrderCoordinator")
   externalManagedOrders   Order[]                  @relation("OrderOutsideWorkManager")
   productionRecords       ProductionRecord[]
+  productionDayLogs       ProductionDayLog[]
   proformaInvoices        ProformaInvoice[]        @relation("ProformaPreparedBy")
   qualityAudits           QualityAudit[]
   savedColumnMappings     SavedColumnMapping[]
@@ -193,6 +194,12 @@ model Order {
   shippingMethod           String?
   /// Unit selling price in USD. 7.25 for A302059B.
   pricePerPieceUsd         Decimal?              @db.Decimal(10, 4)
+  /// Standard allowed minutes to sew one garment of this style — the SAM (or
+  /// SMV) from the industrial engineer's time study. Line efficiency is
+  /// (pieces × SAM) ÷ (people × minutes worked), so without it a day's output
+  /// cannot be turned into earned minutes. Null until somebody enters it;
+  /// nothing else in the application knows the value.
+  samMinutes               Decimal?              @db.Decimal(8, 3)
   /// Cut allowance, stored as a fraction (0.05 = 5%). Drives the cut matrix.
   cutPercentage            Decimal               @default(0.05) @db.Decimal(5, 4)
   /// When the cut order was last written. Set even when it came out empty
@@ -953,6 +960,35 @@ model ProductionRecord {
   @@index([orderId, date])
   @@index([orderId, operation])
   @@map("production_records")
+}
+
+/// One row per calendar day for the whole factory: who was on the floor and
+/// for how long. The daily production report every sewing floor keeps, and
+/// the denominator of every labour measure — efficiency, pieces per operator,
+/// pieces per machine. Output is NOT stored here; it is the production records
+/// for the day, so the two can never disagree.
+///
+/// Every figure is nullable: a day with the sheet half filled in is recorded
+/// as exactly that, and a measure that needs the missing half stays blank.
+model ProductionDayLog {
+  id              String   @id @default(cuid())
+  /// Calendar day at UTC midnight, the same convention as production records.
+  date            DateTime @unique
+  /// Sewing operators present.
+  operators       Int?
+  /// Helpers, ironers and other manual workers on the line. Counted in
+  /// manpower because the garment SAM includes their operations.
+  helpers         Int?
+  /// Minutes actually worked per person, after breaks and stoppages.
+  workingMinutes  Int?
+  machinesRunning Int?
+  notes           String?
+  recordedById    String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  recordedBy      User?    @relation(fields: [recordedById], references: [id])
+
+  @@map("production_day_logs")
 }
 
 model QualityAudit {
@@ -1738,8 +1774,6 @@ enum ProductionOperation {
   SEWING
   PRINTING
   EMBROIDERY
-  WASHING
-  FINISHING
   PACKING
 }
 

@@ -632,6 +632,7 @@ export async function getOrderDetail(orderId: string, today = new Date()): Promi
     fabric: order.fabric,
     shippingMethod: order.shippingMethod,
     pricePerPieceUsd: dec(order.pricePerPieceUsd),
+    samMinutes: dec(order.samMinutes),
     cutPercentage: cutPct,
     accessoryPercentage: Number(order.accessoryPercentage.toString()),
     externalReference: order.externalReference,

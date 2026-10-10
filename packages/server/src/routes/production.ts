@@ -16,7 +16,7 @@ import { assertValidQuantity, assertProductionWithinReason } from '../services/r
 export const productionRouter = Router();
 productionRouter.use(authenticate);
 
-const OPERATIONS = ['CUTTING', 'SEWING', 'PRINTING', 'EMBROIDERY', 'WASHING', 'FINISHING', 'PACKING'] as const;
+const OPERATIONS = ['CUTTING', 'SEWING', 'PRINTING', 'EMBROIDERY', 'PACKING'] as const;
 
 productionRouter.get('/:orderId', requirePermission('production:read'), asyncHandler(async (req, res) => {
   const order = await prisma.order.findFirst({

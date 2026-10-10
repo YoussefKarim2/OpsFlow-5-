@@ -4,7 +4,7 @@ import type { Server } from 'node:http';
 import { ROLE_PERMISSIONS, ROLE_KEYS } from '@opsflow/shared';
 import { createApp } from '../app.js';
 import {
-  sectionsFor, parseRange, productivityQuery, PRODUCTIVITY_PERMISSION, MAX_RANGE_DAYS,
+  sectionsFor, parseRange, productivityQuery, dayLogSchema, PRODUCTIVITY_PERMISSION, MAX_RANGE_DAYS,
 } from './productivity.js';
 
 /**
@@ -23,11 +23,19 @@ describe('productivity permissions', () => {
     }
   });
 
-  test('the quality section follows quality:read and the fabric section cutting:read', () => {
-    assert.deepEqual(sectionsFor(['production:read']), { quality: false, fabric: false });
-    assert.deepEqual(sectionsFor(['production:read', 'quality:read']), { quality: true, fabric: false });
-    assert.deepEqual(sectionsFor(['production:read', 'cutting:read']), { quality: false, fabric: true });
-    assert.deepEqual(sectionsFor(ROLE_PERMISSIONS.ADMIN), { quality: true, fabric: true });
+  test('the quality, fabric and delivery sections follow quality:read, cutting:read and shipment:read', () => {
+    assert.deepEqual(sectionsFor(['production:read']), { quality: false, fabric: false, delivery: false });
+    assert.deepEqual(sectionsFor(['production:read', 'quality:read']), { quality: true, fabric: false, delivery: false });
+    assert.deepEqual(sectionsFor(['production:read', 'cutting:read']), { quality: false, fabric: true, delivery: false });
+    assert.deepEqual(sectionsFor(['production:read', 'shipment:read']), { quality: false, fabric: false, delivery: true });
+    assert.deepEqual(sectionsFor(ROLE_PERMISSIONS.ADMIN), { quality: true, fabric: true, delivery: true });
+  });
+
+  test('the day log is written with production:write, the same permission as recording output', () => {
+    for (const role of ['COORDINATOR', 'FACTORY_MANAGER', 'PRODUCTION_MANAGER', 'FOLLOW_UP'] as const) {
+      assert.ok(ROLE_PERMISSIONS[role].includes('production:write'), `${role} cannot file the day sheet`);
+    }
+    assert.equal(ROLE_PERMISSIONS.FINANCE.includes('production:write'), false);
   });
 
   test('nothing on the page needs costing:read — there is no cost figure to protect', () => {
@@ -62,12 +70,28 @@ describe('productivity range validation', () => {
       { from: '2026-02-30', to: '2026-03-01' },
       { from: '2026-10-05T00:00:00Z', to: '2026-10-11' },
       { from: '2026-10-05', to: '2026-10-11', primary: 'IRONING' },
-      // Still a real operation, just not one the dropdown offers as primary.
+      // Operations the factory does not have, and never did as far as the enum is concerned.
       { from: '2026-10-05', to: '2026-10-11', primary: 'WASHING' },
       { from: '2026-10-05', to: '2026-10-11', primary: 'FINISHING' },
     ]) {
       assert.equal(productivityQuery.safeParse(bad).success, false, JSON.stringify(bad));
     }
+  });
+});
+
+describe('the day log sheet', () => {
+  test('a blank box is recorded as unknown, not as zero', () => {
+    const r = dayLogSchema.parse({ operators: 30, helpers: '', workingMinutes: undefined, machinesRunning: NaN });
+    assert.equal(r.operators, 30);
+    assert.equal(r.helpers, null);
+    assert.equal(r.workingMinutes, null);
+    assert.equal(r.machinesRunning, null);
+  });
+
+  test('an implausible figure is refused rather than stored', () => {
+    assert.equal(dayLogSchema.safeParse({ operators: -1, helpers: null, workingMinutes: null, machinesRunning: null }).success, false);
+    assert.equal(dayLogSchema.safeParse({ operators: 30, helpers: null, workingMinutes: 25 * 60, machinesRunning: null }).success, false);
+    assert.equal(dayLogSchema.safeParse({ operators: 30.5, helpers: null, workingMinutes: null, machinesRunning: null }).success, false);
   });
 });
 
@@ -91,6 +115,13 @@ describe('the productivity endpoint', () => {
   test('is refused with a token that is not a session', async () => {
     const res = await fetch(`${base}/api/productivity?from=2026-10-05&to=2026-10-11`, {
       headers: { Authorization: 'Bearer not-a-real-token' },
+    });
+    assert.equal(res.status, 401);
+  });
+
+  test('the day log cannot be written without a session', async () => {
+    const res = await fetch(`${base}/api/productivity/day-log/2026-10-05`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ operators: 30 }),
     });
     assert.equal(res.status, 401);
   });

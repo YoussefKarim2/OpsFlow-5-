@@ -11,7 +11,7 @@ import type {
   MatrixResponseDto, NotificationDto, ActivityDto, ImportPreviewDto, Paginated,
   StockPosition, MaterialPosition, InventorySummary, ImportConcept, ColumnAnalysis,
   OrderStepsResult, Blocker, StageKey, StageStatus,
-  NotificationPriority, ChangeCategory, ShipmentDto, ProductivityDto, ProductionOperation,
+  NotificationPriority, ChangeCategory, ShipmentDto, ProductivityDto, ProductivityDayLogDto, ProductionOperation,
 } from '@opsflow/shared';
 
 const BASE = import.meta.env.VITE_API_URL ?? '/api';
@@ -718,6 +718,10 @@ export const api = {
   productivity: {
     get: (params: { from: string; to: string; primary?: ProductionOperation }) =>
       get<ProductivityDto>(`/productivity${qs(params)}`),
+    /** The factory day log for one calendar day: people, minutes, machines. */
+    saveDayLog: (date: string, body: {
+      operators: number | null; helpers: number | null; workingMinutes: number | null; machinesRunning: number | null; notes?: string | null;
+    }) => put<ProductivityDayLogDto>(`/productivity/day-log/${date}`, body),
   },
 
   /**

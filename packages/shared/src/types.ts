@@ -14,6 +14,7 @@ import type { StageProgress } from './calc/progress.js';
 import type { ProductionAnalytics } from './calc/production.js';
 import type {
   DayRange, OutputSummary, Trend, DefectRateSummary, FabricUtilisationSummary, OperationOutput, FactoryOverview,
+  LabourSummary, DeliverySummary, RftSummary,
 } from './calc/productivity.js';
 import type { BomSummary } from './calc/materials.js';
 import type { CostingResult } from './calc/costing.js';
@@ -88,6 +89,8 @@ export interface OrderDetailDto {
   fabric: string | null;
   shippingMethod: string | null;
   pricePerPieceUsd: number | null;
+  /** Standard allowed minutes to sew one garment. Null until entered. */
+  samMinutes: number | null;
   cutPercentage: number;
   accessoryPercentage: number;
   externalReference: string | null;
@@ -435,10 +438,22 @@ export interface ProductivityOrderRowDto {
   orderName: string;
   clientName: string;
   factoryName: string | null;
+  /** Standard allowed minutes per garment, when the order has one. */
+  samMinutes: number | null;
   byOperation: OperationOutput;
   primary: number | null;
   recordedDays: number;
   recordCount: number;
+}
+
+/** A factory day log as stored: what was on the floor that day. */
+export interface ProductivityDayLogDto {
+  date: string;
+  operators: number | null;
+  helpers: number | null;
+  workingMinutes: number | null;
+  machinesRunning: number | null;
+  notes: string | null;
 }
 
 /** One production record, as the drill-down from a day shows it. */
@@ -465,6 +480,8 @@ export interface ProductivityAuditRowDto {
   /** Defects found — occurrences, not defective pieces. */
   defectQty: number | null;
   result: 'PASS' | 'FAIL' | 'PENDING';
+  /** True when this audit re-inspects after an earlier failure. */
+  isReinspection: boolean;
   /** False when the audit could not be counted in the rate. */
   counted: boolean;
 }
@@ -487,6 +504,13 @@ export interface ProductivityDto {
   overview: FactoryOverview;
   /** Garments sewn per recorded day, this period against the one before. */
   overviewTrend: Trend;
+  /** Line efficiency and pieces per operator, from the day logs and order SAMs. */
+  labour: LabourSummary;
+  /** Line efficiency, this period against the one before. */
+  efficiencyTrend: Trend;
+  /** On-time delivery and cut-to-ship for the shipments of the period. Absent without shipment:read. */
+  delivery: DeliverySummary | null;
+  dayLogs: ProductivityDayLogDto[];
   primaryOperation: ProductionOperation;
   output: OutputSummary;
   /** Primary-operation average per recorded day, this period against the one before. */
@@ -496,7 +520,7 @@ export interface ProductivityDto {
   orders: ProductivityOrderRowDto[];
   records: ProductivityRecordDto[];
   /** Absent when the account lacks quality:read. */
-  quality: { summary: DefectRateSummary; audits: ProductivityAuditRowDto[] } | null;
+  quality: { summary: DefectRateSummary; rft: RftSummary; audits: ProductivityAuditRowDto[] } | null;
   /** Absent when the account lacks cutting:read. */
   fabric: { summary: FabricUtilisationSummary; records: ProductivityCuttingRowDto[] } | null;
 }

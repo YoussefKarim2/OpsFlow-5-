@@ -1,17 +1,19 @@
-import { useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   ComposedChart, Bar, Line, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell,
 } from 'recharts';
-import { ChevronLeft, ChevronRight, ChevronDown, ArrowRight, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ChevronDown, ArrowRight, TrendingUp, TrendingDown, Minus, Check } from 'lucide-react';
 import {
   fmtDate, fmtDateShort, fmtNumber, fmtPct,
-  PRODUCTION_OPERATIONS, PRIMARY_OPERATION, PRIMARY_OPERATION_CHOICES, periodRange, shiftDay, daysInRange, isDayKey,
+  PRODUCTION_OPERATIONS, PRIMARY_OPERATION, periodRange, shiftDay, daysInRange, isDayKey,
   type ProductionOperation, type ProductivityDto, type ProductivityPeriod, type Trend, type DayRange, type FactoryOverview,
+  type LabourSummary, type DeliverySummary, type RftSummary, type ProductivityDayLogDto,
 } from '@opsflow/shared';
 import { api } from '../lib/api';
-import { Card, CardHeader, StatTile, Spinner, ErrorNote, EmptyState, clsx } from '../components/ui';
+import { useAuth } from '../lib/auth';
+import { Card, CardHeader, StatTile, Spinner, ErrorNote, EmptyState, useToast, clsx } from '../components/ui';
 
 /**
  * Factory productivity — Phase 1.
@@ -40,8 +42,7 @@ function opLabel(op: string): string {
 
 /** One colour per operation, so a stage reads the same in every chart. */
 const OP_COLOR: Record<ProductionOperation, string> = {
-  CUTTING: '#0ea5e9', PRINTING: '#a855f7', EMBROIDERY: '#ec4899', SEWING: '#2563eb',
-  WASHING: '#14b8a6', FINISHING: '#f59e0b', PACKING: '#16a34a',
+  CUTTING: '#0ea5e9', PRINTING: '#a855f7', EMBROIDERY: '#ec4899', SEWING: '#2563eb', PACKING: '#16a34a',
 };
 
 export function ProductivityPage() {
@@ -51,7 +52,7 @@ export function ProductivityPage() {
   const mode: Mode = (MODES.find((m) => m.key === params.get('mode'))?.key) ?? 'week';
   const anchor = isDayKey(params.get('anchor')) ? params.get('anchor')! : today;
   const primary: ProductionOperation =
-    (PRIMARY_OPERATION_CHOICES.find((o) => o === params.get('primary'))) ?? PRIMARY_OPERATION;
+    (PRODUCTION_OPERATIONS.find((o) => o === params.get('primary'))) ?? PRIMARY_OPERATION;
 
   const range: DayRange = useMemo(() => {
     if (mode === 'custom') {
@@ -141,7 +142,7 @@ export function ProductivityPage() {
           Primary operation
           <select className="input !py-1 text-xs" value={primary}
             onChange={(e) => update({ primary: e.target.value === PRIMARY_OPERATION ? null : e.target.value })}>
-            {PRIMARY_OPERATION_CHOICES.map((o) => <option key={o} value={o}>{opLabel(o)}</option>)}
+            {PRODUCTION_OPERATIONS.map((o) => <option key={o} value={o}>{opLabel(o)}</option>)}
           </select>
         </label>
       </div>
@@ -171,14 +172,19 @@ function ProductivityBody({ data }: { data: ProductivityDto }) {
 
   const nothingAtAll = out.recordedDays === 0 && !data.quality?.summary.auditCount && !data.fabric?.summary.recordCount;
 
-  // Columns: the operations a person can choose, plus any other operation that
-  // actually has a record in this period, so history is never hidden.
-  const visibleOps = PRODUCTION_OPERATIONS.filter((o) =>
-    PRIMARY_OPERATION_CHOICES.includes(o) || out.byOperation.some((b) => b.operation === o && b.recordedDays > 0));
+  const visibleOps = PRODUCTION_OPERATIONS;
 
   return (
     <>
       <OverviewSection overview={data.overview} trend={data.overviewTrend} />
+      <LabourSection labour={data.labour} trend={data.efficiencyTrend} dayLogs={data.dayLogs} orders={data.orders} />
+      {(data.quality || data.delivery) && (
+        <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+          {data.quality && <RftCard rft={data.quality.rft} />}
+          {data.delivery && <DeliveryCard delivery={data.delivery} />}
+        </div>
+      )}
+      <NotMeasuredCard labour={data.labour} />
 
       <div className="pt-1">
         <h2 className="text-base font-semibold text-ink-900">{label} in detail</h2>
@@ -382,8 +388,6 @@ function ProductivityBody({ data }: { data: ProductivityDto }) {
       <Card>
         <CardHeader title="Not shown on this page" subtitle="Figures the records cannot support yet, rather than estimates" />
         <ul className="divide-y divide-ink-100 text-sm">
-          <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Cost per piece and daily running cost.</span> <span className="text-ink-600">No daily factory cost is recorded. The daily cost on an order's costing sheet is a typed input for that order, not a record of a day.</span></li>
-          <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Pieces per worker-hour and line efficiency.</span> <span className="text-ink-600">No attendance, hours or standard minutes per piece are recorded.</span></li>
           <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Marker efficiency by period.</span> <span className="text-ink-600">Markers are a plan with no date, so they cannot be placed in a day, week or month. Each order's Cutting &amp; Marker tab shows them.</span></li>
           <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Output by line.</span> <span className="text-ink-600">The line on a production record is free text, so the same line can appear under several spellings. It is shown per order on the Production tab.</span></li>
         </ul>
@@ -528,16 +532,238 @@ function OverviewSection({ overview: f, trend }: { overview: FactoryOverview; tr
         </Card>
       </div>
 
-      <Card>
-        <CardHeader title="Not measured yet" subtitle="Factory-wide figures the records cannot support, and what each would need" />
-        <ul className="divide-y divide-ink-100 text-sm">
-          <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Pieces per worker-hour.</span> <span className="text-ink-600">Needs the workers present and hours worked each day. Nothing records attendance.</span></li>
-          <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Cost per garment and daily running cost.</span> <span className="text-ink-600">Needs a daily factory cost. The daily cost on an order's costing sheet is a typed input for that one order, not a record of a day.</span></li>
-          <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Line efficiency.</span> <span className="text-ink-600">Needs the standard minutes per garment for each style, plus the hours above. Neither is recorded.</span></li>
-          <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Daily margin or profit.</span> <span className="text-ink-600">Selling price exists per order, but without a daily cost there is nothing to set against it.</span></li>
-        </ul>
-      </Card>
     </section>
+  );
+}
+
+// ── Labour: efficiency, SAH, pieces per operator and machine ────────────────
+//
+// The sewing floor's standard arithmetic: produced minutes (pieces × SAM)
+// over attended minutes (operators + helpers, × minutes worked). The day log
+// is the denominator, entered here one row per day; the SAM lives on each
+// order's Details tab.
+
+function LabourSection({ labour: l, trend, dayLogs, orders }: {
+  labour: LabourSummary; trend: Trend; dayLogs: ProductivityDayLogDto[]; orders: ProductivityDto['orders'];
+}) {
+  const noSam = orders.filter((o) => l.ordersWithoutSam.includes(o.orderId));
+  const effTone = l.efficiencyPct == null ? 'neutral' : l.efficiencyPct >= 75 ? 'emerald' : l.efficiencyPct >= 50 ? 'amber' : 'red';
+  return (
+    <section className="space-y-4">
+      <div>
+        <h2 className="text-base font-semibold text-ink-900">Labour productivity</h2>
+        <p className="text-xs text-ink-500">
+          Line efficiency is the standard minutes the floor produced (garments sewn × each style's SAM) over the minutes it attended (operators + helpers × minutes worked), lost time not deducted. A day counts only when its sheet is filled and every garment sewn has a SAM.
+        </p>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatTile
+          label="Line efficiency"
+          tone={effTone}
+          value={l.efficiencyPct == null ? <Unrecorded text={labourReason(l)} /> : fmtPct(l.efficiencyPct, 1)}
+          sub={l.efficiencyPct == null ? labourSub(l) : <>
+            {fmtNumber(l.producedMinutes)} produced min over {fmtNumber(l.attendedMinutes)} attended, {l.countedDays} of {l.sewingDays} sewing day{l.sewingDays === 1 ? '' : 's'} counted. Trade benchmark 75%.
+            <TrendNote trend={trend} what="rate" unit="pct" />
+          </>}
+        />
+        <StatTile
+          label="Standard hours produced"
+          value={l.producedSah == null ? <Unrecorded /> : fmtNumber(l.producedSah, { places: 1 })}
+          sub={l.producedSah == null ? 'SAH: garments sewn × SAM ÷ 60, on the counted days' : `SAH on the ${l.countedDays} counted day${l.countedDays === 1 ? '' : 's'}, with ${fmtNumber(l.avgManpower, { places: 1 })} people on average`}
+        />
+        <StatTile
+          label="Garments per operator-day"
+          value={l.piecesPerOperatorDay == null ? <Unrecorded /> : fmtNumber(l.piecesPerOperatorDay, { places: 1 })}
+          sub={l.piecesPerOperatorDay == null ? 'Needs the operator count on a day with sewing' : 'Garments sewn ÷ operator-days, on days with both. Needs no SAM.'}
+        />
+        <StatTile
+          label="Garments per machine-day"
+          value={l.piecesPerMachineDay == null ? <Unrecorded /> : fmtNumber(l.piecesPerMachineDay, { places: 1 })}
+          sub={l.piecesPerMachineDay == null ? 'Needs the machines running on a day with sewing' : 'Garments sewn ÷ machine-days, on days with both.'}
+        />
+      </div>
+
+      {noSam.length > 0 && (
+        <div className="rounded-md border border-amber-200 bg-amber-50/60 px-4 py-2.5 text-xs text-amber-800">
+          <span className="font-medium">No SAM on {noSam.length} order{noSam.length === 1 ? '' : 's'} that sewed in this period:</span>{' '}
+          {noSam.map((o, i) => (
+            <span key={o.orderId}>{i > 0 && ', '}<Link to={`/orders/${o.orderId}?tab=details`} className="underline">{o.poNumber}</Link></span>
+          ))}
+          . Enter the standard minutes per garment on each order's Details tab and those days will count.
+        </div>
+      )}
+
+      <DayLogSheet labour={l} dayLogs={dayLogs} />
+    </section>
+  );
+}
+
+function labourReason(l: LabourSummary): string {
+  return l.reason === 'NO_SEWING' ? 'No sewing' : l.reason === 'NO_LOGS' ? 'No day sheet' : 'Incomplete';
+}
+function labourSub(l: LabourSummary): string {
+  if (l.reason === 'NO_SEWING') return 'No sewing recorded in this period, so there is no output to measure.';
+  if (l.reason === 'NO_LOGS') return `${l.sewingDays} sewing day${l.sewingDays === 1 ? '' : 's'}, none with a day sheet. Fill in the people and minutes below.`;
+  const parts: string[] = [];
+  if (l.excluded.noLog) parts.push(`${l.excluded.noLog} without a sheet`);
+  if (l.excluded.logIncomplete) parts.push(`${l.excluded.logIncomplete} with operators or minutes missing`);
+  if (l.excluded.samMissing) parts.push(`${l.excluded.samMissing} with garments that have no SAM`);
+  return `${l.sewingDays} sewing day${l.sewingDays === 1 ? '' : 's'}: ${parts.join(', ')}.`;
+}
+
+/** The daily sheet: one row per day of the period, saved a row at a time. */
+function DayLogSheet({ labour, dayLogs }: { labour: LabourSummary; dayLogs: ProductivityDayLogDto[] }) {
+  const { can } = useAuth();
+  const editable = can('production:write');
+  const byDate = useMemo(() => new Map(dayLogs.map((d) => [d.date, d])), [dayLogs]);
+  return (
+    <Card>
+      <CardHeader
+        title="Factory day sheet"
+        subtitle={editable
+          ? 'Who was on the floor and for how long, one row per day. Output is not entered here: it comes from the production records.'
+          : 'Who was on the floor and for how long. Recording production is needed to edit it.'}
+      />
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead className="border-b border-ink-200 bg-ink-50">
+            <tr>
+              <th className="th">Date</th>
+              <th className="th text-right">Sewn</th>
+              <th className="th text-right">Operators</th>
+              <th className="th text-right">Helpers</th>
+              <th className="th text-right">Minutes/person</th>
+              <th className="th text-right">Machines</th>
+              <th className="th text-right">Produced min</th>
+              <th className="th text-right">Efficiency</th>
+              <th className="th">Counted</th>
+              {editable && <th className="th" />}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-ink-100">
+            {labour.days.map((d) => (
+              <DayLogRow key={d.date} day={d} log={byDate.get(d.date) ?? null} editable={editable} />
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function DayLogRow({ day, log, editable }: { day: LabourSummary['days'][number]; log: ProductivityDayLogDto | null; editable: boolean }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const blank = { operators: '', helpers: '', workingMinutes: '', machinesRunning: '' };
+  const fromLog = (l: ProductivityDayLogDto | null) => l ? {
+    operators: l.operators == null ? '' : String(l.operators),
+    helpers: l.helpers == null ? '' : String(l.helpers),
+    workingMinutes: l.workingMinutes == null ? '' : String(l.workingMinutes),
+    machinesRunning: l.machinesRunning == null ? '' : String(l.machinesRunning),
+  } : blank;
+  const [form, setForm] = useState(fromLog(log));
+  useEffect(() => { setForm(fromLog(log)); }, [log]); // eslint-disable-line react-hooks/exhaustive-deps
+  const dirty = JSON.stringify(form) !== JSON.stringify(fromLog(log));
+  const save = useMutation({
+    mutationFn: () => api.productivity.saveDayLog(day.date, {
+      operators: form.operators === '' ? null : Number(form.operators),
+      helpers: form.helpers === '' ? null : Number(form.helpers),
+      workingMinutes: form.workingMinutes === '' ? null : Number(form.workingMinutes),
+      machinesRunning: form.machinesRunning === '' ? null : Number(form.machinesRunning),
+    }),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['productivity'] }); toast.success(`Day sheet for ${fmtDate(day.date)} saved`); },
+    onError: (e) => toast.error(e),
+  });
+  const cell = (k: keyof typeof form, max: number) => editable ? (
+    <input type="number" min={0} max={max} value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })}
+      className="input !w-20 !py-0.5 text-right text-xs" placeholder="—" />
+  ) : <Qty value={log ? log[k] : null} />;
+  const excludedWhy = day.excluded === 'NO_SEWING' ? 'no sewing' : day.excluded === 'NO_LOG' ? 'no sheet'
+    : day.excluded === 'LOG_INCOMPLETE' ? 'operators or minutes missing' : day.excluded === 'SAM_MISSING' ? 'a garment has no SAM' : null;
+  return (
+    <tr className={clsx(day.sewn == null && 'text-ink-400', day.excluded == null && 'bg-emerald-50/30')}>
+      <td className="td whitespace-nowrap font-medium">{fmtDate(day.date)}</td>
+      <td className="td text-right"><Qty value={day.sewn} /></td>
+      <td className="td text-right">{cell('operators', 5000)}</td>
+      <td className="td text-right">{cell('helpers', 5000)}</td>
+      <td className="td text-right">{cell('workingMinutes', 1440)}</td>
+      <td className="td text-right">{cell('machinesRunning', 5000)}</td>
+      <td className="td text-right"><Qty value={day.producedMinutes} /></td>
+      <td className="td text-right font-medium"><Qty value={day.efficiencyPct} places={1} suffix="%" /></td>
+      <td className="td text-xs">
+        {day.excluded == null
+          ? <span className="chip bg-emerald-50 text-emerald-700 ring-emerald-500/20">Counted</span>
+          : <span className="text-ink-400">{excludedWhy}</span>}
+      </td>
+      {editable && (
+        <td className="td text-right">
+          <button className="btn-secondary btn-sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+            <Check className="h-3 w-3" /> Save
+          </button>
+        </td>
+      )}
+    </tr>
+  );
+}
+
+function RftCard({ rft }: { rft: RftSummary }) {
+  return (
+    <Card>
+      <CardHeader title="Right first time" subtitle="Audits that passed on their first inspection, over first inspections decided. Re-inspections are the consequence of a fail, so they are neither." />
+      <div className="grid gap-3 p-4 sm:grid-cols-3">
+        <StatTile
+          label="Right first time"
+          tone={rft.rftPct == null ? 'neutral' : rft.rftPct >= 98 ? 'emerald' : rft.rftPct >= 90 ? 'amber' : 'red'}
+          value={rft.rftPct == null ? <Unrecorded text={rft.reason === 'NO_AUDITS' ? 'No audits' : 'None decided'} /> : fmtPct(rft.rftPct, 1)}
+          sub={rft.rftPct == null ? 'No first inspection was decided in this period' : `${rft.passedFirstTime} of ${rft.firstInspections} first inspections passed. Trade benchmark 98%.`}
+        />
+        <StatTile label="Failed first time" tone={rft.failedFirstTime > 0 ? 'red' : 'neutral'} value={fmtNumber(rft.failedFirstTime)} sub="Each one costs a rework and a re-inspection" />
+        <StatTile label="Re-inspections" value={fmtNumber(rft.reinspections)} sub={`${rft.pending} audit${rft.pending === 1 ? '' : 's'} still pending`} />
+      </div>
+    </Card>
+  );
+}
+
+function DeliveryCard({ delivery: d }: { delivery: DeliverySummary }) {
+  return (
+    <Card>
+      <CardHeader title="Delivery" subtitle="Shipments that left in this period, against the date promised, and how much was cut for what was shipped." />
+      <div className="grid gap-3 p-4 sm:grid-cols-3">
+        <StatTile
+          label="On-time delivery"
+          tone={d.onTimePct == null ? 'neutral' : d.onTimePct >= 98 ? 'emerald' : d.onTimePct >= 90 ? 'amber' : 'red'}
+          value={d.onTimePct == null ? <Unrecorded text={d.reason === 'NO_SHIPMENTS' ? 'No shipments' : 'No promises'} /> : fmtPct(d.onTimePct, 0)}
+          sub={d.reason === 'NO_SHIPMENTS' ? 'No shipment has an actual shipping date in this period'
+            : d.reason === 'NO_PROMISES' ? `${d.shipments} shipment${d.shipments === 1 ? '' : 's'}, none with a promised date to measure against`
+            : `${d.onTime} on time, ${d.late} late${d.noPromise ? `, ${d.noPromise} with no promised date` : ''}. Trade benchmark 98%.`}
+        />
+        <StatTile label="Pieces shipped" value={fmtNumber(d.piecesShipped)} sub={`in ${d.shipments} shipment${d.shipments === 1 ? '' : 's'}`} />
+        <StatTile
+          label="Cut-to-ship ratio"
+          tone={d.cutToShipRatio == null ? 'neutral' : d.cutToShipRatio <= 1.02 ? 'emerald' : d.cutToShipRatio <= 1.05 ? 'amber' : 'red'}
+          value={d.cutToShipRatio == null ? <Unrecorded /> : fmtNumber(d.cutToShipRatio, { places: 3 })}
+          sub={d.cutToShipRatio == null ? 'Needs a cut figure and shipped pieces for an order shipped in this period'
+            : `Pieces cut ÷ pieces shipped to date, over ${d.cutToShipOrders} order${d.cutToShipOrders === 1 ? '' : 's'}${d.cutToShipExcluded ? `, ${d.cutToShipExcluded} without a cut figure` : ''}. 1.000 is perfect; a part-shipped order reads high until it ships out.`}
+        />
+      </div>
+    </Card>
+  );
+}
+
+function NotMeasuredCard({ labour }: { labour: LabourSummary }) {
+  return (
+    <Card>
+      <CardHeader title="Not measured yet" subtitle="Figures the records cannot support, and what each would need" />
+      <ul className="divide-y divide-ink-100 text-sm">
+        <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Labour cost per minute and per garment.</span> <span className="text-ink-600">Needs the floor's daily wage bill. Set against the attended minutes above it gives cost per minute; against produced minutes, the labour cost of each garment.</span></li>
+        <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Daily running cost and margin.</span> <span className="text-ink-600">Needs a daily factory cost. The daily cost on an order's costing sheet is a typed input for that one order, not a record of a day.</span></li>
+        <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Lost time and on-standard efficiency.</span> <span className="text-ink-600">Needs the minutes lost to breakdowns, waiting and line setting each day. The efficiency above is the overall figure, which the trade reports without deducting them.</span></li>
+        {labour.reason != null && (
+          <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Line efficiency for this period.</span> <span className="text-ink-600">{labourSub(labour)}</span></li>
+        )}
+      </ul>
+    </Card>
   );
 }
 
@@ -628,7 +854,7 @@ function QualityCard({ quality }: { quality: NonNullable<ProductivityDto['qualit
                 <tr key={a.id} className={clsx(!a.counted && 'text-ink-500')} title={a.counted ? undefined : 'Not counted: no sample size or defect count'}>
                   <td className="td whitespace-nowrap">{fmtDate(a.inspectionDate)}</td>
                   <td className="td font-medium">{a.poNumber}</td>
-                  <td className="td text-xs">{opLabelWords(a.auditType)}</td>
+                  <td className="td text-xs">{opLabelWords(a.auditType)}{a.isReinspection && <span className="ml-1 text-ink-400">(re-inspection)</span>}</td>
                   <td className="td text-right"><Qty value={a.sampleSize} /></td>
                   <td className="td text-right"><Qty value={a.defectQty} /></td>
                   <td className="td">
@@ -695,7 +921,7 @@ function Unrecorded({ text = 'Not recorded' }: { text?: string }) {
   return <span className="text-base font-medium italic text-ink-400">{text}</span>;
 }
 
-function TrendNote({ trend, what }: { trend: Trend; what: 'total' | 'rate' }) {
+function TrendNote({ trend, what, unit = 'number' }: { trend: Trend; what: 'total' | 'rate'; unit?: 'number' | 'pct' }) {
   if (trend.changePct == null) {
     const why = trend.reason === 'NO_PREVIOUS' ? 'nothing recorded in the period before'
       : trend.reason === 'PREVIOUS_ZERO' ? 'the period before recorded zero'
@@ -708,7 +934,7 @@ function TrendNote({ trend, what }: { trend: Trend; what: 'total' | 'rate' }) {
     <span className={clsx('mt-0.5 flex items-center gap-1', flat ? 'text-ink-500' : up ? 'text-emerald-600' : 'text-red-600')}>
       <Icon className="h-3 w-3" />
       {flat ? 'Level with' : `${fmtPct(Math.abs(trend.changePct), 0)} ${up ? 'above' : 'below'}`} the previous period's {what}
-      {' '}({fmtNumber(trend.previous)})
+      {' '}({unit === 'pct' ? fmtPct(trend.previous, 1) : fmtNumber(trend.previous)})
     </span>
   );
 }

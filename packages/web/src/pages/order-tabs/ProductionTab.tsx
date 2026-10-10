@@ -20,7 +20,7 @@ import {
   Spinner, ErrorNote, EmptyState,
 } from '../../components/ui';
 
-const OPERATIONS = ['CUTTING', 'SEWING', 'PRINTING', 'EMBROIDERY', 'WASHING', 'FINISHING', 'PACKING'] as const;
+const OPERATIONS = ['CUTTING', 'SEWING', 'PRINTING', 'EMBROIDERY', 'PACKING'] as const;
 
 export function ProductionTab({ order }: { order: OrderDetailDto }) {
   const qc = useQueryClient();

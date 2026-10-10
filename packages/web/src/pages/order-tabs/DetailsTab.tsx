@@ -76,6 +76,7 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
     fabric: order.fabric ?? '',
     shippingMethod: order.shippingMethod ?? '',
     pricePerPieceUsd: order.pricePerPieceUsd ?? 0,
+    samMinutes: order.samMinutes == null ? '' : String(order.samMinutes),
     cutPercentage: order.cutPercentage,
     accessoryPercentage: order.accessoryPercentage,
     poDate: order.poDate?.slice(0, 10) ?? '',
@@ -125,6 +126,7 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
       api.orders.update(order.id, {
         ...form,
         pricePerPieceUsd: Number(form.pricePerPieceUsd),
+        samMinutes: form.samMinutes === '' ? null : Number(form.samMinutes),
         cutPercentage: Number(form.cutPercentage),
         accessoryPercentage: Number(form.accessoryPercentage),
         notes: {
@@ -251,6 +253,10 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
             <Edit label="Price in US$" editing={editing} type="number" step="0.01" value={String(form.pricePerPieceUsd)}
               onChange={(v) => setForm({ ...form, pricePerPieceUsd: Number(v) })}
               display={order.pricePerPieceUsd != null ? `$${order.pricePerPieceUsd.toFixed(2)}` : null} />
+            <Edit label="SAM (minutes per garment)" editing={editing} type="number" step="0.001" value={form.samMinutes}
+              onChange={(v) => setForm({ ...form, samMinutes: v })}
+              display={order.samMinutes != null ? `${order.samMinutes} min` : null}
+              hint="Standard allowed minutes to sew one piece, from the time study. Needed for line efficiency on the Productivity page." />
             <Select label="Method of shipping" editing={editing} value={form.shippingMethod} options={values.SHIPPING_METHOD?.map((v) => v.value) ?? []}
               onChange={(v) => setForm({ ...form, shippingMethod: v })} display={order.shippingMethod} />
             <Edit label="Cut percentage" editing={editing} type="number" step="0.01" value={String(form.cutPercentage)}

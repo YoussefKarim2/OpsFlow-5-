@@ -13,7 +13,8 @@ import { ProductionOperation } from '../enums.js';
 import {
   summariseOutput, summariseByOrder, summariseDefectRate, summariseFabricUtilisation, summariseFactory,
   compareTrend, periodRange, previousRange, rangeBounds, daysInRange, enumerateDays,
-  isDayKey, shiftDay, PRIMARY_OPERATION_CHOICES, PRODUCTION_OPERATIONS, STAGE_ORDER,
+  isDayKey, shiftDay, PRODUCTION_OPERATIONS, STAGE_ORDER,
+  summariseLabour, summariseRft, summariseDelivery,
   type ProductivityRecordInput,
 } from './productivity.js';
 
@@ -90,7 +91,7 @@ describe('daily output by operation', () => {
     const s = summariseOutput([], WEEK);
     assert.deepEqual(
       s.byOperation.map((o) => o.operation),
-      ['CUTTING', 'SEWING', 'PRINTING', 'EMBROIDERY', 'WASHING', 'FINISHING', 'PACKING'],
+      ['CUTTING', 'SEWING', 'PRINTING', 'EMBROIDERY', 'PACKING'],
     );
   });
 
@@ -313,9 +314,9 @@ describe('factory overview', () => {
   test('stage throughput is in manufacturing order and says which stages were recorded', () => {
     const f = summariseFactory(flow, WEEK);
     assert.deepEqual(f.stages.map((s) => s.operation), STAGE_ORDER);
-    assert.deepEqual(f.stages.map((s) => s.operation), ['CUTTING', 'PRINTING', 'EMBROIDERY', 'SEWING', 'WASHING', 'FINISHING', 'PACKING']);
+    assert.deepEqual(f.stages.map((s) => s.operation), ['CUTTING', 'PRINTING', 'EMBROIDERY', 'SEWING', 'PACKING']);
     assert.deepEqual(f.operationsRecorded, ['CUTTING', 'PRINTING', 'SEWING', 'PACKING']);
-    assert.deepEqual(f.operationsUnrecorded, ['EMBROIDERY', 'WASHING', 'FINISHING']);
+    assert.deepEqual(f.operationsUnrecorded, ['EMBROIDERY']);
     const embroidery = f.stages.find((s) => s.operation === 'EMBROIDERY')!;
     assert.equal(embroidery.qty, null, 'not recorded is null, not zero');
     assert.equal(embroidery.recorded, false);
@@ -349,23 +350,156 @@ describe('factory overview', () => {
     assert.equal(f.recordCount, 0);
     assert.equal(f.activeOrders, 0);
     assert.deepEqual(f.operationsRecorded, []);
-    assert.equal(f.operationsUnrecorded.length, 7);
+    assert.equal(f.operationsUnrecorded.length, 5);
     assert.equal(JSON.stringify(f).includes('NaN'), false);
   });
 
-  test('a record filed under washing or finishing is still counted, though neither is a dropdown choice', () => {
-    const f = summariseFactory([rec('2026-10-05', 'WASHING', 30), rec('2026-10-05', 'FINISHING', 20)], WEEK);
-    assert.equal(f.stages.find((s) => s.operation === 'WASHING')!.qty, 30);
-    assert.equal(f.stages.find((s) => s.operation === 'FINISHING')!.qty, 20);
-    assert.deepEqual(f.operationsRecorded, ['WASHING', 'FINISHING']);
+});
+
+describe('operations', () => {
+  test('the factory records exactly five operations; washing and finishing do not exist', () => {
+    assert.deepEqual(PRODUCTION_OPERATIONS, ['CUTTING', 'SEWING', 'PRINTING', 'EMBROIDERY', 'PACKING']);
+    assert.deepEqual(STAGE_ORDER, ['CUTTING', 'PRINTING', 'EMBROIDERY', 'SEWING', 'PACKING']);
+    assert.equal((PRODUCTION_OPERATIONS as readonly string[]).includes('WASHING'), false);
+    assert.equal((PRODUCTION_OPERATIONS as readonly string[]).includes('FINISHING'), false);
   });
 });
 
-describe('primary operation choices', () => {
-  test('washing and finishing are not offered, but remain valid operations', () => {
-    assert.deepEqual(PRIMARY_OPERATION_CHOICES, ['CUTTING', 'SEWING', 'PRINTING', 'EMBROIDERY', 'PACKING']);
-    assert.ok(PRODUCTION_OPERATIONS.includes('WASHING'));
-    assert.ok(PRODUCTION_OPERATIONS.includes('FINISHING'));
-    for (const c of PRIMARY_OPERATION_CHOICES) assert.ok(PRODUCTION_OPERATIONS.includes(c));
+describe('labour: line efficiency the way the floor computes it', () => {
+  // The textbook example: 30 people for 8 hours (480 min), 410 pieces at a
+  // 20-minute SAM → 8,200 produced minutes over 14,400 attended → 56.9%.
+  const log = (date: string, operators: number | null, helpers: number | null, workingMinutes: number | null, machinesRunning: number | null = null) =>
+    ({ date, operators, helpers, workingMinutes, machinesRunning });
+  const sams = [{ orderId: 'o1', samMinutes: 20 }, { orderId: 'nosam', samMinutes: null }];
+
+  test('efficiency = produced minutes over attended minutes, manpower including helpers, lost time not deducted', () => {
+    const l = summariseLabour([rec('2026-10-05', 'SEWING', 410)], [log('2026-10-05', 25, 5, 480, 24)], sams, WEEK);
+    assert.equal(l.producedMinutes, 8200);
+    assert.equal(l.attendedMinutes, 14400);
+    assert.equal(Math.round(l.efficiencyPct! * 10) / 10, 56.9);
+    assert.equal(Math.round(l.producedSah! * 100) / 100, 136.67);
+    assert.equal(l.piecesPerOperatorDay, 410 / 25, 'per operator, not per head');
+    assert.equal(l.piecesPerMachineDay, 410 / 24);
+    assert.equal(l.avgManpower, 30);
+    assert.equal(l.countedDays, 1);
+    assert.equal(l.reason, null);
+  });
+
+  test('the period figure is pooled, not an average of daily percentages', () => {
+    const l = summariseLabour(
+      [rec('2026-10-05', 'SEWING', 410), rec('2026-10-06', 'SEWING', 100)],
+      [log('2026-10-05', 30, 0, 480), log('2026-10-06', 30, 0, 480)],
+      sams, WEEK,
+    );
+    // 10,200 produced over 28,800 attended = 35.4%; the mean of 56.9% and 13.9% would be 35.4% here too,
+    // so use unequal days: the big day must weigh more.
+    const m = summariseLabour(
+      [rec('2026-10-05', 'SEWING', 410), rec('2026-10-06', 'SEWING', 100)],
+      [log('2026-10-05', 30, 0, 480), log('2026-10-06', 10, 0, 480)],
+      sams, WEEK,
+    );
+    assert.equal(Math.round(l.efficiencyPct! * 10) / 10, 35.4);
+    assert.equal(Math.round(m.efficiencyPct! * 10) / 10, Math.round((10200 / 19200) * 1000) / 10);
+  });
+
+  test('a sewing day without a day log is excluded and counted as such — never assumed', () => {
+    const l = summariseLabour([rec('2026-10-05', 'SEWING', 410), rec('2026-10-06', 'SEWING', 400)], [log('2026-10-05', 30, 0, 480)], sams, WEEK);
+    assert.equal(l.sewingDays, 2);
+    assert.equal(l.loggedDays, 1);
+    assert.equal(l.countedDays, 1);
+    assert.equal(l.excluded.noLog, 1);
+    assert.equal(l.producedMinutes, 8200, 'only the countable day');
+  });
+
+  test('a day with sewn pieces that have no SAM is excluded, and the order is named', () => {
+    const l = summariseLabour(
+      [rec('2026-10-05', 'SEWING', 410, 'o1'), rec('2026-10-05', 'SEWING', 50, 'nosam')],
+      [log('2026-10-05', 30, 0, 480)], sams, WEEK,
+    );
+    assert.equal(l.efficiencyPct, null);
+    assert.equal(l.excluded.samMissing, 1);
+    assert.deepEqual(l.ordersWithoutSam, ['nosam']);
+    assert.equal(l.reason, 'NO_COUNTABLE_DAYS');
+    // Pieces per operator needs no SAM, so it still stands.
+    assert.equal(l.piecesPerOperatorDay, 460 / 30);
+  });
+
+  test('a half-filled log — no minutes, or no operators — cannot give an efficiency', () => {
+    const a = summariseLabour([rec('2026-10-05', 'SEWING', 410)], [log('2026-10-05', 30, 0, null)], sams, WEEK);
+    assert.equal(a.efficiencyPct, null);
+    assert.equal(a.excluded.logIncomplete, 1);
+    const b = summariseLabour([rec('2026-10-05', 'SEWING', 410)], [log('2026-10-05', null, 5, 480)], sams, WEEK);
+    assert.equal(b.efficiencyPct, null);
+    assert.equal(b.piecesPerOperatorDay, null, 'no operator count, no per-operator figure');
+  });
+
+  test('a zero-output day with a full log is a real 0%, not a missing figure', () => {
+    const l = summariseLabour([rec('2026-10-05', 'SEWING', 0)], [log('2026-10-05', 30, 0, 480)], sams, WEEK);
+    assert.equal(l.efficiencyPct, 0);
+    assert.equal(l.countedDays, 1);
+  });
+
+  test('no sewing, or no logs at all, say so', () => {
+    assert.equal(summariseLabour([], [log('2026-10-05', 30, 0, 480)], sams, WEEK).reason, 'NO_SEWING');
+    assert.equal(summariseLabour([rec('2026-10-05', 'SEWING', 10)], [], sams, WEEK).reason, 'NO_LOGS');
+  });
+
+  test('a log outside the range is ignored', () => {
+    const l = summariseLabour([rec('2026-10-05', 'SEWING', 410)], [log('2026-10-04', 30, 0, 480)], sams, WEEK);
+    assert.equal(l.loggedDays, 0);
+  });
+});
+
+describe('right first time', () => {
+  const a = (date: string, result: 'PASS' | 'FAIL' | 'PENDING', isReinspection = false) => ({ id: date + result, inspectionDate: date, result, isReinspection });
+
+  test('is first inspections passed over first inspections decided; re-inspections are neither', () => {
+    const r = summariseRft([a('2026-10-05', 'PASS'), a('2026-10-06', 'FAIL'), a('2026-10-07', 'PASS', true), a('2026-10-08', 'PENDING')], WEEK);
+    assert.equal(r.rftPct, 50);
+    assert.equal(r.firstInspections, 2);
+    assert.equal(r.reinspections, 1);
+    assert.equal(r.pending, 1);
+  });
+
+  test('nothing decided gives no figure and a reason', () => {
+    assert.equal(summariseRft([], WEEK).reason, 'NO_AUDITS');
+    assert.equal(summariseRft([a('2026-10-05', 'PENDING')], WEEK).reason, 'NO_DECIDED_FIRST_INSPECTIONS');
+  });
+});
+
+describe('delivery', () => {
+  const ship = (id: string, orderId: string, qty: number, actual: string | null, promised: string | null) =>
+    ({ id, orderId, qty, actualShippingDate: actual, promisedShippingDate: promised });
+
+  test('on time means shipped on or before the promised day', () => {
+    const d = summariseDelivery([
+      ship('s1', 'a', 100, '2026-10-05', '2026-10-05'),
+      ship('s2', 'b', 100, '2026-10-06', '2026-10-05'),
+      ship('s3', 'c', 100, '2026-10-07', '2026-10-09'),
+      ship('s4', 'd', 100, '2026-10-07', null),
+      ship('s5', 'e', 100, '2026-10-01', '2026-10-01'),
+    ], [], WEEK);
+    assert.equal(d.shipments, 4, 'the 1 October shipment is outside the week');
+    assert.equal(d.onTime, 2);
+    assert.equal(d.late, 1);
+    assert.equal(d.noPromise, 1);
+    assert.equal(Math.round(d.onTimePct!), 67);
+    assert.equal(d.piecesShipped, 400);
+  });
+
+  test('cut-to-ship is total cut over total shipped for the orders shipped in the period', () => {
+    const d = summariseDelivery(
+      [ship('s1', 'a', 20000, '2026-10-05', '2026-10-05'), ship('s2', 'b', 100, '2026-10-06', '2026-10-06')],
+      [{ orderId: 'a', cutQty: 20200, shippedQty: 20000 }, { orderId: 'b', cutQty: null, shippedQty: 100 }, { orderId: 'z', cutQty: 5, shippedQty: 1 }],
+      WEEK,
+    );
+    assert.equal(d.cutToShipRatio, 1.01);
+    assert.equal(d.cutToShipOrders, 1);
+    assert.equal(d.cutToShipExcluded, 1, 'order b has no cut figure');
+  });
+
+  test('no shipments, or none with a promise, say so', () => {
+    assert.equal(summariseDelivery([], [], WEEK).reason, 'NO_SHIPMENTS');
+    assert.equal(summariseDelivery([ship('s', 'a', 1, '2026-10-05', null)], [], WEEK).reason, 'NO_PROMISES');
   });
 });

@@ -331,8 +331,6 @@ export const ProductionOperation = {
   SEWING: 'SEWING',
   PRINTING: 'PRINTING',
   EMBROIDERY: 'EMBROIDERY',
-  WASHING: 'WASHING',
-  FINISHING: 'FINISHING',
   PACKING: 'PACKING',
 } as const;
 export type ProductionOperation = (typeof ProductionOperation)[keyof typeof ProductionOperation];

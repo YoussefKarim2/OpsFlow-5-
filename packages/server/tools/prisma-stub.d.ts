@@ -1,12 +1,13 @@
 // AUTO-GENERATED type stub for offline typechecking. Not the real client.
 declare module '@prisma/client' {
+  export type ImportTarget = 'NEW_ORDER' | 'LAYING_MARKING';
   export type Department = 'COORDINATOR' | 'FACTORY_MANAGER' | 'PRODUCTION_MANAGER' | 'CUTTING_MARKER' | 'WAREHOUSE' | 'EXTERNAL_OPS' | 'PACKING' | 'QUALITY' | 'FOLLOW_UP' | 'FINANCE' | 'ADMIN';
-  export type RefKind = 'SEASON' | 'FABRIC' | 'FIT' | 'BLOCK_PATTERN' | 'ITEM_TYPE' | 'GENDER' | 'SHIPPING_METHOD' | 'EXTERNAL_WORK_SORT' | 'EXTERNAL_WORK_TYPE' | 'POSITION' | 'UNIT' | 'ITEM_SORT' | 'THREAD_COLOR' | 'REFERENCE' | 'COLLAR' | 'CUFF' | 'SIZE_LABEL' | 'FABRIC_COMPOSITION' | 'BRAND_LOGO';
+  export type RefKind = 'SEASON' | 'FABRIC' | 'FIT' | 'BLOCK_PATTERN' | 'ITEM_TYPE' | 'GENDER' | 'SHIPPING_METHOD' | 'EXTERNAL_WORK_SORT' | 'EXTERNAL_WORK_TYPE' | 'POSITION' | 'UNIT' | 'ITEM_SORT' | 'THREAD_COLOR' | 'REFERENCE' | 'COLLAR' | 'CUFF' | 'SIZE_LABEL' | 'FABRIC_COMPOSITION' | 'BRAND_LOGO' | 'BOM_ITEM_TYPE' | 'SHIPPING_ADDRESS';
   export type Priority = 'LOW' | 'MEDIUM' | 'HIGH' | 'URGENT';
   export type OrderStatus = 'DRAFT' | 'WAITING_APPROVAL' | 'READY_FOR_PRODUCTION' | 'IN_PRODUCTION' | 'PRODUCTION_DELAYED' | 'QUALITY_CHECK' | 'QUALITY_BLOCKED' | 'PACKING' | 'READY_TO_SHIP' | 'SHIPPED' | 'COMPLETED' | 'CANCELLED';
   export type QtyLedger = 'ORDER' | 'STOCK' | 'CUT' | 'IN_LINE' | 'OUT_LINE' | 'PACKED' | 'SHIPPED' | 'SECOND_DEGREE';
   export type NoteKind = 'GENERAL' | 'SPREAD' | 'CUT' | 'PACKING' | 'EXTERNAL';
-  export type StageKey = 'CUSTOMER_ORDER_REF' | 'ORDER_DETAILS' | 'MAIN_ORDER' | 'PROFORMA_INVOICE' | 'PROGRESS_STATUS' | 'CUT_ORDER' | 'LAYING_FABRIC' | 'BILL_OF_MATERIAL' | 'CUSTOM_INSTRUCTIONS' | 'EXTERNAL_ORDER' | 'STOCK' | 'FOLLOW_UP' | 'PRODUCTION_FOLLOW_UP' | 'PACKING' | 'AUDIT' | 'ACTUAL_COSTING' | 'DATABASE' | 'INVOICE' | 'COMPLETED';
+  export type StageKey = 'CUSTOMER_ORDER_REF' | 'ORDER_DETAILS' | 'MAIN_ORDER' | 'PROGRESS_STATUS' | 'CUT_ORDER' | 'LAYING_FABRIC' | 'BILL_OF_MATERIAL' | 'CUSTOM_INSTRUCTIONS' | 'EXTERNAL_ORDER' | 'STOCK' | 'PRODUCTION_FOLLOW_UP' | 'PACKING' | 'AUDIT' | 'ACTUAL_COSTING' | 'DATABASE' | 'INVOICE' | 'COMPLETED' | 'PROFORMA_INVOICE';
   export type StageStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'WAITING' | 'COMPLETED' | 'BLOCKED' | 'OVERDUE' | 'NOT_REQUIRED';
   export type TaskStatus = 'NOT_STARTED' | 'IN_PROGRESS' | 'WAITING' | 'COMPLETED' | 'BLOCKED';
   export type BomCategory = 'FABRIC' | 'THREAD' | 'LABEL' | 'TRANSFER' | 'BADGE' | 'LOGO' | 'SPONSOR' | 'SIZE' | 'POLY_BAG' | 'BUTTER_PAPER' | 'STICKY_TAPE' | 'BARCODE_PAPER' | 'HALF_BOX' | 'CARTON' | 'TAPE' | 'ACCESSORY' | 'OTHER';
@@ -17,17 +18,18 @@ declare module '@prisma/client' {
   export type ExternalOpStatus = 'NOT_SENT' | 'WAITING_APPROVAL' | 'SENT' | 'IN_PROGRESS' | 'RETURNED' | 'CANCELLED';
   export type ApprovalType = 'PRINT_ARTWORK' | 'EMBROIDERY' | 'COLOR' | 'SAMPLE' | 'LABEL' | 'PACKING' | 'PRODUCTION';
   export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'CHANGES_REQUESTED';
-  export type ProductionOperation = 'CUTTING' | 'SEWING' | 'PRINTING' | 'EMBROIDERY' | 'WASHING' | 'FINISHING' | 'PACKING';
+  export type ProductionOperation = 'CUTTING' | 'SEWING' | 'PRINTING' | 'EMBROIDERY' | 'PACKING';
   export type AuditType = 'FINAL_AUDIT' | 'BEFORE_IRON' | 'BEFORE_PACKING' | 'IN_PACKING' | 'INLINE';
   export type AuditResult = 'PENDING' | 'PASS' | 'FAIL';
   export type DefectCategory = 'COLOR_COMBINATION' | 'FABRIC_DEFECT' | 'CONSTRUCTION_STITCHING' | 'TRIMMING' | 'PRINT_EMBROIDERY' | 'CLEANLINESS' | 'PACKING' | 'MEASUREMENTS';
   export type ShipmentStatus = 'NOT_READY' | 'READY' | 'BOOKED' | 'SHIPPED' | 'DELIVERED';
+  export type CostSource = 'DERIVED' | 'MANUAL';
   export type CostGroup = 'FABRIC' | 'ACCESSORY' | 'EXTERNAL' | 'LABOUR' | 'OTHER';
   export type DocumentType = 'CUSTOMER_PO' | 'CUSTOMER_REFERENCE' | 'ARTWORK' | 'TECH_PACK' | 'FABRIC_PHOTO' | 'SAMPLE_PHOTO' | 'MARKER_FILE' | 'BOM' | 'EXTERNAL_OP_DOC' | 'PACKING_LIST' | 'QUALITY_REPORT' | 'INVOICE' | 'SHIPPING_DOC' | 'PROFORMA_INVOICE' | 'OTHER';
+  export type NotificationType = 'TASK_ASSIGNED' | 'TASK_OVERDUE' | 'TASK_COMPLETED' | 'APPROVAL_REQUESTED' | 'APPROVAL_RECEIVED' | 'MATERIAL_SHORTAGE' | 'MATERIAL_UPDATED' | 'PRODUCTION_DELAY' | 'PRODUCTION_UPDATED' | 'QUALITY_FAILURE' | 'QUALITY_UPDATED' | 'PACKING_COMPLETED' | 'SHIPMENT_READY' | 'ORDER_OVERDUE' | 'ORDER_UPDATED' | 'SYSTEM_UPDATE' | 'MENTIONED';
   export type NotificationPriority = 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT';
   export type ChangeCategory = 'ORDER' | 'PRODUCTION' | 'INVENTORY' | 'MATERIALS' | 'TASKS' | 'QUALITY' | 'SHIPMENT' | 'APPROVALS' | 'DOCUMENTS' | 'ADMIN';
   export type EmailStatus = 'PENDING' | 'SENT' | 'FAILED';
-  export type NotificationType = 'TASK_ASSIGNED' | 'TASK_OVERDUE' | 'APPROVAL_REQUESTED' | 'APPROVAL_RECEIVED' | 'MATERIAL_SHORTAGE' | 'PRODUCTION_DELAY' | 'QUALITY_FAILURE' | 'PACKING_COMPLETED' | 'SHIPMENT_READY' | 'ORDER_OVERDUE' | 'MENTIONED';
   export type ImportStatus = 'UPLOADED' | 'DETECTED' | 'MAPPED' | 'VALIDATED' | 'COMMITTED' | 'FAILED';
 
   export interface Role {
@@ -37,9 +39,9 @@ declare module '@prisma/client' {
     description: string | null;
     permissions: string[];
     isSystem: boolean;
-    users: User[];
     createdAt: Date;
     updatedAt: Date;
+    users: User[];
     _count: any;
   }
   export interface User {
@@ -55,40 +57,42 @@ declare module '@prisma/client' {
     disabledAt: Date | null;
     disabledReason: string | null;
     disabledById: string | null;
-    disabledBy: User | null;
-    disabledUsers: User[];
     createdById: string | null;
-    createdBy: User | null;
-    createdUsers: User[];
     mustChangePassword: boolean;
     passwordChangedAt: Date | null;
     failedLoginCount: number;
     lockedUntil: Date | null;
     roleId: string;
-    role: Role;
-    coordinatedOrders: Order[];
-    externalManagedOrders: Order[];
-    assignedTasks: Task[];
-    completedTasks: Task[];
-    taskComments: TaskComment[];
+    createdAt: Date;
+    updatedAt: Date;
     activityLogs: ActivityLog[];
-    auditTrails: AuditTrail[];
-    notifications: Notification[];
+    approvalsRequested: Approval[];
     attachments: Attachment[];
-    savedColumnMappings: SavedColumnMapping[];
-    productionRecords: ProductionRecord[];
+    auditTrails: AuditTrail[];
+    changeEvents: ChangeEvent[];
+    importJobs: ImportJob[];
     materialIssuesGiven: MaterialIssue[];
     materialIssuesTaken: MaterialIssue[];
     materialMovements: MaterialMovement[];
     materialReservations: MaterialReservation[];
-    qualityAudits: QualityAudit[];
-    approvalsRequested: Approval[];
-    importJobs: ImportJob[];
+    notifications: Notification[];
+    notificationPreferences: NotificationPreference[];
     completedStages: OrderStage[];
-    changeEvents: ChangeEvent[];
+    coordinatedOrders: Order[];
+    externalManagedOrders: Order[];
+    productionRecords: ProductionRecord[];
+    productionDayLogs: ProductionDayLog[];
     proformaInvoices: ProformaInvoice[];
-    createdAt: Date;
-    updatedAt: Date;
+    qualityAudits: QualityAudit[];
+    savedColumnMappings: SavedColumnMapping[];
+    taskComments: TaskComment[];
+    assignedTasks: Task[];
+    completedTasks: Task[];
+    createdBy: User | null;
+    createdUsers: User[];
+    disabledBy: User | null;
+    disabledUsers: User[];
+    role: Role;
     _count: any;
   }
   export interface Client {
@@ -102,10 +106,10 @@ declare module '@prisma/client' {
     billingAddress: string | null;
     notes: string | null;
     active: boolean;
-    orders: Order[];
-    columnMappings: SavedColumnMapping[];
     createdAt: Date;
     updatedAt: Date;
+    orders: Order[];
+    columnMappings: SavedColumnMapping[];
     _count: any;
   }
   export interface Factory {
@@ -117,12 +121,12 @@ declare module '@prisma/client' {
     phone: string | null;
     isExternal: boolean;
     active: boolean;
-    orders: Order[];
-    externalOrders: Order[];
-    externalOperations: ExternalOperation[];
-    qualityAudits: QualityAudit[];
     createdAt: Date;
     updatedAt: Date;
+    externalOperations: ExternalOperation[];
+    externalOrders: Order[];
+    orders: Order[];
+    qualityAudits: QualityAudit[];
     _count: any;
   }
   export interface RefColor {
@@ -131,8 +135,8 @@ declare module '@prisma/client' {
     hex: string | null;
     position: number;
     active: boolean;
-    orderColors: OrderColor[];
     bomItems: BomItem[];
+    orderColors: OrderColor[];
     _count: any;
   }
   export interface RefSize {
@@ -169,9 +173,13 @@ declare module '@prisma/client' {
     fabricDescription: string | null;
     shippingMethod: string | null;
     pricePerPieceUsd: Prisma.Decimal | null;
+    samMinutes: Prisma.Decimal | null;
     cutPercentage: Prisma.Decimal;
+    cutOrderGeneratedAt: Date | null;
     accessoryPercentage: Prisma.Decimal;
     poDate: Date | null;
+    internalPoDate: Date | null;
+    productionSample: boolean | null;
     promisedShippingDate: Date | null;
     requiredDeliveryDate: Date | null;
     fabricDeliveryToSupplier: Date | null;
@@ -188,107 +196,109 @@ declare module '@prisma/client' {
     cachedStatus: OrderStatus | null;
     cachedStageKey: StageKey | null;
     clientId: string;
-    client: Client;
     factoryId: string | null;
-    factory: Factory | null;
     externalFactoryId: string | null;
-    externalFactory: Factory | null;
     coordinatorId: string | null;
-    coordinator: User | null;
     outsideWorkManagerId: string | null;
-    outsideWorkManager: User | null;
-    colors: OrderColor[];
-    sizes: OrderSize[];
-    quantities: StageQuantity[];
-    notes: OrderNote[];
-    stages: OrderStage[];
-    tasks: Task[];
+    createdAt: Date;
+    updatedAt: Date;
+    activityLogs: ActivityLog[];
+    approvals: Approval[];
+    attachments: Attachment[];
+    auditTrails: AuditTrail[];
     bomItems: BomItem[];
+    changeEvents: ChangeEvent[];
+    costing: CostingRecord | null;
+    customInstructions: CustomInstruction[];
+    cuttingRecords: CuttingRecord[];
+    externalOperations: ExternalOperation[];
+    fabricRecords: FabricRecord[];
+    layingImportJobs: ImportJob[];
+    markers: Marker[];
     materialIssues: MaterialIssue[];
     materialMovements: MaterialMovement[];
     materialReservations: MaterialReservation[];
-    cuttingRecords: CuttingRecord[];
-    markers: Marker[];
-    fabricRecords: FabricRecord[];
-    externalOperations: ExternalOperation[];
-    approvals: Approval[];
-    customInstructions: CustomInstruction[];
-    proformaInvoices: ProformaInvoice[];
-    productionRecords: ProductionRecord[];
-    qualityAudits: QualityAudit[];
-    packingLists: PackingList[];
-    shipments: Shipment[];
-    costing: CostingRecord | null;
-    attachments: Attachment[];
-    activityLogs: ActivityLog[];
-    auditTrails: AuditTrail[];
     notifications: Notification[];
-    changeEvents: ChangeEvent[];
-    createdAt: Date;
-    updatedAt: Date;
+    colors: OrderColor[];
+    notes: OrderNote[];
+    sizes: OrderSize[];
+    stages: OrderStage[];
+    client: Client;
+    coordinator: User | null;
+    externalFactory: Factory | null;
+    factory: Factory | null;
+    outsideWorkManager: User | null;
+    packingLists: PackingList[];
+    productionRecords: ProductionRecord[];
+    proformaInvoices: ProformaInvoice[];
+    qualityAudits: QualityAudit[];
+    shipments: Shipment[];
+    quantities: StageQuantity[];
+    tasks: Task[];
     _count: any;
   }
   export interface OrderColor {
     id: string;
     orderId: string;
-    order: Order;
     colorId: string;
-    color: RefColor;
     productName: string | null;
     position: number;
-    quantities: StageQuantity[];
     cartons: Carton[];
+    color: RefColor;
+    order: Order;
+    quantities: StageQuantity[];
     _count: any;
   }
   export interface OrderSize {
     id: string;
     orderId: string;
-    order: Order;
     sizeId: string;
-    size: RefSize;
     position: number;
-    quantities: StageQuantity[];
     cartons: Carton[];
+    order: Order;
+    size: RefSize;
+    quantities: StageQuantity[];
+    cartonLines: CartonLine[];
     _count: any;
   }
   export interface StageQuantity {
     id: string;
     orderId: string;
-    order: Order;
     orderColorId: string;
-    orderColor: OrderColor;
     orderSizeId: string;
-    orderSize: OrderSize;
     ledger: QtyLedger;
     qty: number;
     updatedAt: Date;
+    orderColor: OrderColor;
+    order: Order;
+    orderSize: OrderSize;
     _count: any;
   }
   export interface OrderNote {
     id: string;
     orderId: string;
-    order: Order;
     kind: NoteKind;
     body: string;
     updatedAt: Date;
+    order: Order;
     _count: any;
   }
   export interface OrderStage {
     id: string;
     orderId: string;
-    order: Order;
     stageKey: StageKey;
     startedAt: Date | null;
     dueDate: Date | null;
     completedAt: Date | null;
     notes: string | null;
-    statusOverride: StageStatus | null;
-    notRequiredReason: string | null;
     completedById: string | null;
-    completedBy: User | null;
-    tasks: Task[];
-    attachments: Attachment[];
+    notRequiredReason: string | null;
+    statusOverride: StageStatus | null;
     updatedAt: Date;
+    attachments: Attachment[];
+    completedBy: User | null;
+    order: Order;
+    tasks: Task[];
     _count: any;
   }
   export interface TaskTemplate {
@@ -310,12 +320,9 @@ declare module '@prisma/client' {
   export interface Task {
     id: string;
     orderId: string;
-    order: Order;
     orderStageId: string;
-    orderStage: OrderStage;
     stageKey: StageKey;
     templateKey: string | null;
-    template: TaskTemplate | null;
     title: string;
     requirementEn: string | null;
     requirementAr: string | null;
@@ -331,43 +338,43 @@ declare module '@prisma/client' {
     notes: string | null;
     blockedReason: string | null;
     assigneeId: string | null;
-    assignee: User | null;
     completedById: string | null;
-    completedBy: User | null;
     blockedByTaskId: string | null;
-    blockedBy: Task | null;
-    blocking: Task[];
     isCorrectiveAction: boolean;
     sourceAuditId: string | null;
-    comments: TaskComment[];
-    attachments: Attachment[];
     createdAt: Date;
     updatedAt: Date;
+    attachments: Attachment[];
+    comments: TaskComment[];
+    assignee: User | null;
+    blockedBy: Task | null;
+    blocking: Task[];
+    completedBy: User | null;
+    order: Order;
+    orderStage: OrderStage;
+    template: TaskTemplate | null;
     _count: any;
   }
   export interface TaskComment {
     id: string;
     taskId: string;
-    task: Task;
     authorId: string;
-    author: User;
     body: string;
     createdAt: Date;
+    author: User;
+    task: Task;
     _count: any;
   }
   export interface BomItem {
     id: string;
     orderId: string;
-    order: Order;
     category: BomCategory;
     position: string | null;
     item: string;
     description: string | null;
     colorId: string | null;
-    color: RefColor | null;
     colorText: string | null;
     materialId: string | null;
-    material: Material | null;
     consumptionPerPiece: Prisma.Decimal | null;
     requiredQty: Prisma.Decimal;
     unit: string;
@@ -376,30 +383,36 @@ declare module '@prisma/client' {
     issuedToName: string | null;
     issuedAt: Date | null;
     purchaseOrderRef: string | null;
+    unitPriceUsd: Prisma.Decimal | null;
+    supplier: string | null;
     notes: string | null;
     position_: number;
+    createdAt: Date;
+    updatedAt: Date;
+    color: RefColor | null;
+    material: Material | null;
+    order: Order;
     issues: MaterialIssue[];
     movements: MaterialMovement[];
     reservations: MaterialReservation[];
-    createdAt: Date;
-    updatedAt: Date;
+    sizes: BomItemSize[];
     _count: any;
   }
   export interface MaterialIssue {
     id: string;
     orderId: string;
-    order: Order;
     bomItemId: string;
-    bomItem: BomItem;
     qty: Prisma.Decimal;
     unit: string;
     issuedAt: Date;
     issuedById: string | null;
-    issuedBy: User | null;
     issuedToId: string | null;
-    issuedTo: User | null;
     issuedToName: string | null;
     notes: string | null;
+    bomItem: BomItem;
+    issuedBy: User | null;
+    issuedTo: User | null;
+    order: Order;
     _count: any;
   }
   export interface StockRecord {
@@ -433,12 +446,12 @@ declare module '@prisma/client' {
     unitCostUsd: Prisma.Decimal | null;
     notes: string | null;
     active: boolean;
-    stock: MaterialStock[];
-    movements: MaterialMovement[];
-    reservations: MaterialReservation[];
-    bomItems: BomItem[];
     createdAt: Date;
     updatedAt: Date;
+    bomItems: BomItem[];
+    movements: MaterialMovement[];
+    reservations: MaterialReservation[];
+    stock: MaterialStock[];
     _count: any;
   }
   export interface InventoryLocation {
@@ -448,75 +461,74 @@ declare module '@prisma/client' {
     kind: string;
     notes: string | null;
     active: boolean;
-    stock: MaterialStock[];
-    movements: MaterialMovement[];
     createdAt: Date;
+    movements: MaterialMovement[];
+    stock: MaterialStock[];
     _count: any;
   }
   export interface MaterialStock {
     id: string;
     materialId: string;
-    material: Material;
     locationId: string | null;
-    location: InventoryLocation | null;
     physicalQty: Prisma.Decimal;
     binRef: string | null;
     updatedAt: Date;
+    location: InventoryLocation | null;
+    material: Material;
     _count: any;
   }
   export interface MaterialMovement {
     id: string;
     materialId: string;
-    material: Material;
     locationId: string | null;
-    location: InventoryLocation | null;
     type: MovementType;
     qty: Prisma.Decimal;
     unit: UnitOfMeasure;
     balanceAfter: Prisma.Decimal;
     orderId: string | null;
-    order: Order | null;
     reservationId: string | null;
-    reservation: MaterialReservation | null;
     bomItemId: string | null;
-    bomItem: BomItem | null;
     reason: string | null;
     batchLot: string | null;
     reference: string | null;
     stage: StageKey | null;
     actorId: string | null;
-    actor: User | null;
     actorName: string;
     occurredAt: Date;
     createdAt: Date;
+    actor: User | null;
+    bomItem: BomItem | null;
+    location: InventoryLocation | null;
+    material: Material;
+    order: Order | null;
+    reservation: MaterialReservation | null;
     _count: any;
   }
   export interface MaterialReservation {
     id: string;
     materialId: string;
-    material: Material;
     orderId: string;
-    order: Order;
     bomItemId: string | null;
-    bomItem: BomItem | null;
     qty: Prisma.Decimal;
     consumedQty: Prisma.Decimal;
     unit: UnitOfMeasure;
     status: ReservationStatus;
     reservedById: string | null;
-    reservedBy: User | null;
     releasedAt: Date | null;
     releaseReason: string | null;
     notes: string | null;
-    movements: MaterialMovement[];
     createdAt: Date;
     updatedAt: Date;
+    movements: MaterialMovement[];
+    bomItem: BomItem | null;
+    material: Material;
+    order: Order;
+    reservedBy: User | null;
     _count: any;
   }
   export interface CuttingRecord {
     id: string;
     orderId: string;
-    order: Order;
     cutDate: Date | null;
     cuttingTeam: string | null;
     cutByName: string | null;
@@ -527,14 +539,16 @@ declare module '@prisma/client' {
     actualCutQty: number | null;
     fabricUsedM: Prisma.Decimal | null;
     notes: string | null;
+    importJobId: string | null;
     createdAt: Date;
     updatedAt: Date;
+    order: Order;
+    importJob: ImportJob | null;
     _count: any;
   }
   export interface Marker {
     id: string;
     orderId: string;
-    order: Order;
     markerNumber: string | null;
     fabricName: string;
     fabricColor: string | null;
@@ -542,20 +556,24 @@ declare module '@prisma/client' {
     sizeRatio: string;
     layers: number;
     markerLengthM: Prisma.Decimal;
+    markerWidthM: Prisma.Decimal | null;
     totalLengthM: Prisma.Decimal | null;
     nestPcs: number | null;
     efficiencyPct: Prisma.Decimal | null;
+    wastagePct: Prisma.Decimal | null;
     maxLayer: number | null;
     notes: string | null;
     position: number;
+    importJobId: string | null;
     createdAt: Date;
     updatedAt: Date;
+    order: Order;
+    importJob: ImportJob | null;
     _count: any;
   }
   export interface FabricRecord {
     id: string;
     orderId: string;
-    order: Order;
     fabricName: string;
     colorName: string | null;
     fabricType: string | null;
@@ -568,14 +586,15 @@ declare module '@prisma/client' {
     responsibleName: string | null;
     recordedAt: Date;
     notes: string | null;
+    importJobId: string | null;
+    order: Order;
+    importJob: ImportJob | null;
     _count: any;
   }
   export interface ExternalOperation {
     id: string;
     orderId: string;
-    order: Order;
     externalFactoryId: string | null;
-    externalFactory: Factory | null;
     externalReference: string | null;
     operationType: string;
     operationTypeAr: string | null;
@@ -589,51 +608,74 @@ declare module '@prisma/client' {
     status: ExternalOpStatus;
     requiresApproval: boolean;
     approvalId: string | null;
-    approval: Approval | null;
     notes: string | null;
     colorIds: string[];
-    attachments: Attachment[];
     createdAt: Date;
     updatedAt: Date;
+    attachments: Attachment[];
+    approval: Approval | null;
+    externalFactory: Factory | null;
+    order: Order;
     _count: any;
   }
   export interface Approval {
     id: string;
     orderId: string;
-    order: Order;
     type: ApprovalType;
     status: ApprovalStatus;
     blocking: boolean;
     requestedDate: Date | null;
     requestedById: string | null;
-    requestedBy: User | null;
     sentTo: string | null;
     approvedDate: Date | null;
     approvedByName: string | null;
     comment: string | null;
-    externalOperation: ExternalOperation | null;
-    attachments: Attachment[];
     createdAt: Date;
     updatedAt: Date;
+    order: Order;
+    requestedBy: User | null;
+    attachments: Attachment[];
+    externalOperation: ExternalOperation | null;
+    _count: any;
+  }
+  export interface BomItemSize {
+    id: string;
+    bomItemId: string;
+    sizeLabel: string;
+    qty: Prisma.Decimal;
+    position: number;
+    bomItem: BomItem;
+    _count: any;
+  }
+  export interface InstructionLine {
+    id: string;
+    instructionId: string;
+    name: string | null;
+    number: string | null;
+    sizeLabel: string | null;
+    qty: Prisma.Decimal | null;
+    note: string | null;
+    position: number;
+    instruction: CustomInstruction;
     _count: any;
   }
   export interface CustomInstruction {
     id: string;
     orderId: string;
-    order: Order;
     title: string;
     body: string;
     visibleTo: Department[];
     position: number;
-    attachments: Attachment[];
     createdAt: Date;
     updatedAt: Date;
+    attachments: Attachment[];
+    lines: InstructionLine[];
+    order: Order;
     _count: any;
   }
   export interface ProductionRecord {
     id: string;
     orderId: string;
-    order: Order;
     date: Date;
     operation: ProductionOperation;
     qty: number;
@@ -641,17 +683,30 @@ declare module '@prisma/client' {
     team: string | null;
     notes: string | null;
     recordedById: string | null;
-    recordedBy: User | null;
     createdAt: Date;
+    order: Order;
+    recordedBy: User | null;
+    _count: any;
+  }
+  export interface ProductionDayLog {
+    id: string;
+    date: Date;
+    operators: number | null;
+    helpers: number | null;
+    workingMinutes: number | null;
+    machinesRunning: number | null;
+    notes: string | null;
+    recordedById: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    recordedBy: User | null;
     _count: any;
   }
   export interface QualityAudit {
     id: string;
     orderId: string;
-    order: Order;
     inspectionDate: Date;
     factoryId: string | null;
-    factory: Factory | null;
     auditType: AuditType;
     availableQty: number;
     sampleSize: number | null;
@@ -665,60 +720,62 @@ declare module '@prisma/client' {
     reinspectionOf: string | null;
     reinspectFor: string | null;
     auditorId: string | null;
-    auditor: User | null;
     factoryRepName: string | null;
     colorsInspected: string[];
     sizesInspected: string[];
-    defects: QualityDefect[];
-    attachments: Attachment[];
     createdAt: Date;
     updatedAt: Date;
+    attachments: Attachment[];
+    auditor: User | null;
+    factory: Factory | null;
+    order: Order;
+    defects: QualityDefect[];
     _count: any;
   }
   export interface QualityDefect {
     id: string;
     auditId: string;
-    audit: QualityAudit;
     category: DefectCategory;
     qty: number;
     comment: string | null;
     isReinspection: boolean;
+    audit: QualityAudit;
     _count: any;
   }
   export interface PackingList {
     id: string;
     orderId: string;
-    order: Order;
     reference: string | null;
     approved: boolean;
     approvedAt: Date | null;
     approvedByName: string | null;
     notes: string | null;
-    cartons: Carton[];
     createdAt: Date;
     updatedAt: Date;
+    cartons: Carton[];
+    order: Order;
     _count: any;
   }
   export interface Carton {
     id: string;
     packingListId: string;
-    packingList: PackingList;
     cartonNumber: string;
     cartonSize: string | null;
     orderColorId: string | null;
-    orderColor: OrderColor | null;
     orderSizeId: string | null;
-    orderSize: OrderSize | null;
     qty: number;
     grossWeightKg: Prisma.Decimal | null;
     netWeightKg: Prisma.Decimal | null;
     position: number;
+    orderColor: OrderColor | null;
+    orderSize: OrderSize | null;
+    packingList: PackingList;
+    lines: CartonLine[];
     _count: any;
   }
   export interface Shipment {
     id: string;
     orderId: string;
-    order: Order;
     method: string | null;
     status: ShipmentStatus;
     qty: number;
@@ -735,48 +792,65 @@ declare module '@prisma/client' {
     notes: string | null;
     overrideApproved: boolean;
     overrideReason: string | null;
-    attachments: Attachment[];
     createdAt: Date;
     updatedAt: Date;
+    attachments: Attachment[];
+    order: Order;
+    _count: any;
+  }
+  export interface CartonLine {
+    id: string;
+    cartonId: string;
+    orderSizeId: string | null;
+    sizeLabel: string | null;
+    qty: number;
+    position: number;
+    carton: Carton;
+    orderSize: OrderSize | null;
     _count: any;
   }
   export interface CostingRecord {
     id: string;
     orderId: string;
-    order: Order;
     costingDate: Date | null;
-    dollarRate: Prisma.Decimal;
+    dollarRate: Prisma.Decimal | null;
     dailyCostEgp: Prisma.Decimal | null;
     machineCount: number | null;
     machineDaysUsed: number | null;
     daysInLine: number | null;
+    lineMachineQty: number | null;
     productionLineMachines: Prisma.JsonValue | null;
+    overrides: Prisma.JsonValue | null;
+    hiddenCostRefs: string[];
     sublimationCostUsd: Prisma.Decimal | null;
     embroideryCostUsd: Prisma.Decimal | null;
     externalOpCostUsd: Prisma.Decimal | null;
     notes: string | null;
-    lines: CostLine[];
     createdAt: Date;
     updatedAt: Date;
+    lines: CostLine[];
+    order: Order;
     _count: any;
   }
   export interface CostLine {
     id: string;
     costingId: string;
-    costing: CostingRecord;
     group: CostGroup;
     label: string;
     quantity: Prisma.Decimal | null;
     unit: string;
     unitPriceUsd: Prisma.Decimal | null;
     unitPriceEgp: Prisma.Decimal | null;
+    source: CostSource;
+    sourceRef: string | null;
+    note: string | null;
     position: number;
+    costing: CostingRecord;
     _count: any;
   }
   export interface ProformaInvoice {
     id: string;
     orderId: string;
-    order: Order;
     number: string | null;
     date: Date;
     consignee: string | null;
@@ -792,42 +866,35 @@ declare module '@prisma/client' {
     terms: string | null;
     sentAt: Date | null;
     preparedById: string | null;
-    preparedBy: User | null;
-    lines: ProformaInvoiceLine[];
     createdAt: Date;
     updatedAt: Date;
+    lines: ProformaInvoiceLine[];
+    order: Order;
+    preparedBy: User | null;
     _count: any;
   }
   export interface ProformaInvoiceLine {
     id: string;
     invoiceId: string;
-    invoice: ProformaInvoice;
     description: string;
     quantity: Prisma.Decimal | null;
     unit: string;
     unitPrice: Prisma.Decimal | null;
     position: number;
+    invoice: ProformaInvoice;
     _count: any;
   }
   export interface Attachment {
     id: string;
     orderId: string | null;
-    order: Order | null;
     orderStageId: string | null;
-    orderStage: OrderStage | null;
     stageKey: StageKey | null;
     taskId: string | null;
-    task: Task | null;
     approvalId: string | null;
-    approval: Approval | null;
     externalOperationId: string | null;
-    externalOperation: ExternalOperation | null;
     qualityAuditId: string | null;
-    qualityAudit: QualityAudit | null;
     shipmentId: string | null;
-    shipment: Shipment | null;
     customInstructionId: string | null;
-    customInstruction: CustomInstruction | null;
     fileName: string;
     documentType: DocumentType;
     mimeType: string;
@@ -837,16 +904,22 @@ declare module '@prisma/client' {
     version: number;
     checksum: string | null;
     uploadedById: string;
-    uploadedBy: User;
     createdAt: Date;
+    approval: Approval | null;
+    customInstruction: CustomInstruction | null;
+    externalOperation: ExternalOperation | null;
+    order: Order | null;
+    orderStage: OrderStage | null;
+    qualityAudit: QualityAudit | null;
+    shipment: Shipment | null;
+    task: Task | null;
+    uploadedBy: User;
     _count: any;
   }
   export interface ActivityLog {
     id: string;
     orderId: string | null;
-    order: Order | null;
     actorId: string | null;
-    actor: User | null;
     actorName: string;
     action: string;
     summary: string;
@@ -854,12 +927,13 @@ declare module '@prisma/client' {
     entityId: string | null;
     meta: Prisma.JsonValue | null;
     createdAt: Date;
+    actor: User | null;
+    order: Order | null;
     _count: any;
   }
   export interface AuditTrail {
     id: string;
     orderId: string | null;
-    order: Order | null;
     entityType: string;
     entityId: string;
     action: string;
@@ -867,26 +941,49 @@ declare module '@prisma/client' {
     oldValue: string | null;
     newValue: string | null;
     actorId: string | null;
-    actor: User | null;
     actorName: string;
     reason: string | null;
     createdAt: Date;
+    actor: User | null;
+    order: Order | null;
     _count: any;
   }
   export interface Notification {
     id: string;
     userId: string;
-    user: User;
     orderId: string | null;
-    order: Order | null;
+    changeEventId: string | null;
     type: NotificationType;
+    priority: NotificationPriority;
     title: string;
     body: string | null;
     link: string | null;
-    priority: NotificationPriority;
-    changeEventId: string | null;
-    changeEvent: ChangeEvent | null;
     readAt: Date | null;
+    createdAt: Date;
+    changeEvent: ChangeEvent | null;
+    order: Order | null;
+    user: User;
+    _count: any;
+  }
+  export interface NotificationPreference {
+    id: string;
+    userId: string;
+    category: ChangeCategory;
+    minPriority: NotificationPriority;
+    inApp: boolean;
+    email: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+    user: User;
+    _count: any;
+  }
+  export interface AlertState {
+    id: string;
+    code: string;
+    entityType: string;
+    entityId: string;
+    lastSnapshot: string;
+    lastNotifiedAt: Date;
     createdAt: Date;
     _count: any;
   }
@@ -900,33 +997,32 @@ declare module '@prisma/client' {
     summary: string;
     priority: NotificationPriority;
     orderId: string | null;
-    order: Order | null;
     actorId: string | null;
-    actor: User | null;
     actorName: string;
     link: string | null;
     reason: string | null;
+    createdAt: Date;
+    order: Order | null;
+    actor: User | null;
     fields: ChangeEventField[];
     notifications: Notification[];
-    emails: EmailDelivery[];
-    createdAt: Date;
+    emailDeliveries: EmailDelivery[];
     _count: any;
   }
   export interface ChangeEventField {
     id: string;
     changeEventId: string;
-    changeEvent: ChangeEvent;
     field: string;
     label: string;
     oldValue: string | null;
     newValue: string | null;
     position: number;
+    changeEvent: ChangeEvent;
     _count: any;
   }
   export interface EmailDelivery {
     id: string;
     changeEventId: string | null;
-    changeEvent: ChangeEvent | null;
     recipients: string[];
     subject: string;
     bodyHtml: string;
@@ -934,10 +1030,10 @@ declare module '@prisma/client' {
     status: EmailStatus;
     attempts: number;
     lastError: string | null;
-    nextAttemptAt: Date;
     sentAt: Date | null;
+    nextAttemptAt: Date;
     createdAt: Date;
-    updatedAt: Date;
+    changeEvent: ChangeEvent | null;
     _count: any;
   }
   export interface ImportJob {
@@ -954,24 +1050,39 @@ declare module '@prisma/client' {
     createdOrderId: string | null;
     errorMessage: string | null;
     uploadedById: string;
-    uploadedBy: User;
     createdAt: Date;
     committedAt: Date | null;
+    uploadedBy: User;
+    target: ImportTarget;
+    targetOrderId: string | null;
+    targetOrder: Order | null;
+    markers: Marker[];
+    cuttingRecords: CuttingRecord[];
+    fabricRecords: FabricRecord[];
     _count: any;
   }
   export interface SavedColumnMapping {
     id: string;
     clientId: string | null;
-    client: Client | null;
     label: string;
     headerFingerprint: string;
     mapping: Prisma.JsonValue;
     useCount: number;
     lastUsedAt: Date | null;
     createdById: string | null;
-    createdBy: User | null;
     createdAt: Date;
     updatedAt: Date;
+    client: Client | null;
+    createdBy: User | null;
+    _count: any;
+  }
+  export interface StoredFile {
+    key: string;
+    fileName: string;
+    mimeType: string;
+    size: number;
+    bytes: Buffer;
+    createdAt: Date;
     _count: any;
   }
 
@@ -1171,6 +1282,18 @@ declare module '@prisma/client' {
     export type ApprovalCreateManyInput = Record<string, any>;
     export type ApprovalCreateInput = Record<string, any>;
     export type ApprovalUpdateInput = Record<string, any>;
+    export type BomItemSizeGetPayload<T = any> = BomItemSize & Record<string, any>;
+    export type BomItemSizeInclude = Record<string, any>;
+    export type BomItemSizeWhereInput = Record<string, any>;
+    export type BomItemSizeCreateManyInput = Record<string, any>;
+    export type BomItemSizeCreateInput = Record<string, any>;
+    export type BomItemSizeUpdateInput = Record<string, any>;
+    export type InstructionLineGetPayload<T = any> = InstructionLine & Record<string, any>;
+    export type InstructionLineInclude = Record<string, any>;
+    export type InstructionLineWhereInput = Record<string, any>;
+    export type InstructionLineCreateManyInput = Record<string, any>;
+    export type InstructionLineCreateInput = Record<string, any>;
+    export type InstructionLineUpdateInput = Record<string, any>;
     export type CustomInstructionGetPayload<T = any> = CustomInstruction & Record<string, any>;
     export type CustomInstructionInclude = Record<string, any>;
     export type CustomInstructionWhereInput = Record<string, any>;
@@ -1183,6 +1306,12 @@ declare module '@prisma/client' {
     export type ProductionRecordCreateManyInput = Record<string, any>;
     export type ProductionRecordCreateInput = Record<string, any>;
     export type ProductionRecordUpdateInput = Record<string, any>;
+    export type ProductionDayLogGetPayload<T = any> = ProductionDayLog & Record<string, any>;
+    export type ProductionDayLogInclude = Record<string, any>;
+    export type ProductionDayLogWhereInput = Record<string, any>;
+    export type ProductionDayLogCreateManyInput = Record<string, any>;
+    export type ProductionDayLogCreateInput = Record<string, any>;
+    export type ProductionDayLogUpdateInput = Record<string, any>;
     export type QualityAuditGetPayload<T = any> = QualityAudit & Record<string, any>;
     export type QualityAuditInclude = Record<string, any>;
     export type QualityAuditWhereInput = Record<string, any>;
@@ -1213,6 +1342,12 @@ declare module '@prisma/client' {
     export type ShipmentCreateManyInput = Record<string, any>;
     export type ShipmentCreateInput = Record<string, any>;
     export type ShipmentUpdateInput = Record<string, any>;
+    export type CartonLineGetPayload<T = any> = CartonLine & Record<string, any>;
+    export type CartonLineInclude = Record<string, any>;
+    export type CartonLineWhereInput = Record<string, any>;
+    export type CartonLineCreateManyInput = Record<string, any>;
+    export type CartonLineCreateInput = Record<string, any>;
+    export type CartonLineUpdateInput = Record<string, any>;
     export type CostingRecordGetPayload<T = any> = CostingRecord & Record<string, any>;
     export type CostingRecordInclude = Record<string, any>;
     export type CostingRecordWhereInput = Record<string, any>;
@@ -1261,6 +1396,18 @@ declare module '@prisma/client' {
     export type NotificationCreateManyInput = Record<string, any>;
     export type NotificationCreateInput = Record<string, any>;
     export type NotificationUpdateInput = Record<string, any>;
+    export type NotificationPreferenceGetPayload<T = any> = NotificationPreference & Record<string, any>;
+    export type NotificationPreferenceInclude = Record<string, any>;
+    export type NotificationPreferenceWhereInput = Record<string, any>;
+    export type NotificationPreferenceCreateManyInput = Record<string, any>;
+    export type NotificationPreferenceCreateInput = Record<string, any>;
+    export type NotificationPreferenceUpdateInput = Record<string, any>;
+    export type AlertStateGetPayload<T = any> = AlertState & Record<string, any>;
+    export type AlertStateInclude = Record<string, any>;
+    export type AlertStateWhereInput = Record<string, any>;
+    export type AlertStateCreateManyInput = Record<string, any>;
+    export type AlertStateCreateInput = Record<string, any>;
+    export type AlertStateUpdateInput = Record<string, any>;
     export type ChangeEventGetPayload<T = any> = ChangeEvent & Record<string, any>;
     export type ChangeEventInclude = Record<string, any>;
     export type ChangeEventWhereInput = Record<string, any>;
@@ -1291,6 +1438,12 @@ declare module '@prisma/client' {
     export type SavedColumnMappingCreateManyInput = Record<string, any>;
     export type SavedColumnMappingCreateInput = Record<string, any>;
     export type SavedColumnMappingUpdateInput = Record<string, any>;
+    export type StoredFileGetPayload<T = any> = StoredFile & Record<string, any>;
+    export type StoredFileInclude = Record<string, any>;
+    export type StoredFileWhereInput = Record<string, any>;
+    export type StoredFileCreateManyInput = Record<string, any>;
+    export type StoredFileCreateInput = Record<string, any>;
+    export type StoredFileUpdateInput = Record<string, any>;
     export type EnumPriorityFilter = { equals?: any };
   }
 
@@ -1343,13 +1496,17 @@ declare module '@prisma/client' {
     fabricRecord: Delegate<FabricRecord>;
     externalOperation: Delegate<ExternalOperation>;
     approval: Delegate<Approval>;
+    bomItemSize: Delegate<BomItemSize>;
+    instructionLine: Delegate<InstructionLine>;
     customInstruction: Delegate<CustomInstruction>;
     productionRecord: Delegate<ProductionRecord>;
+    productionDayLog: Delegate<ProductionDayLog>;
     qualityAudit: Delegate<QualityAudit>;
     qualityDefect: Delegate<QualityDefect>;
     packingList: Delegate<PackingList>;
     carton: Delegate<Carton>;
     shipment: Delegate<Shipment>;
+    cartonLine: Delegate<CartonLine>;
     costingRecord: Delegate<CostingRecord>;
     costLine: Delegate<CostLine>;
     proformaInvoice: Delegate<ProformaInvoice>;
@@ -1358,11 +1515,14 @@ declare module '@prisma/client' {
     activityLog: Delegate<ActivityLog>;
     auditTrail: Delegate<AuditTrail>;
     notification: Delegate<Notification>;
+    notificationPreference: Delegate<NotificationPreference>;
+    alertState: Delegate<AlertState>;
     changeEvent: Delegate<ChangeEvent>;
     changeEventField: Delegate<ChangeEventField>;
     emailDelivery: Delegate<EmailDelivery>;
     importJob: Delegate<ImportJob>;
     savedColumnMapping: Delegate<SavedColumnMapping>;
+    storedFile: Delegate<StoredFile>;
     $connect(): Promise<void>;
     $disconnect(): Promise<void>;
     $use(mw: Prisma.Middleware): void;

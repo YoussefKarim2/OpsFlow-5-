@@ -123,6 +123,12 @@ const createSchema = z.object({
   supplierDeliveryDate: z.string().optional().nullable(),
   shippingMethod: shortText(),
   pricePerPieceUsd: money(),
+  // Standard allowed minutes per garment. A time-study figure, so three
+  // decimals; the ceiling only rules out a typed-in seconds or pieces count.
+  samMinutes: z.preprocess(
+    (v) => (v === '' || (typeof v === 'number' && Number.isNaN(v)) ? undefined : v),
+    z.number().nonnegative().max(600).nullable().optional(),
+  ),
   cutPercentage: optionalNumber(z.number()).default(0.05),
   accessoryPercentage: optionalNumber(z.number()).default(0.05),
   poDate: optionalDate,
@@ -184,6 +190,7 @@ ordersRouter.post('/', requirePermission('order:create'), asyncHandler(async (re
         fabric: input.fabric,
         shippingMethod: input.shippingMethod,
         pricePerPieceUsd: input.pricePerPieceUsd,
+        samMinutes: input.samMinutes,
         cutPercentage: input.cutPercentage,
         accessoryPercentage: input.accessoryPercentage,
         poDate,

@@ -158,7 +158,7 @@ frontend. Today an order enters the system only through the Excel import or a di
 Strong — this is the deepest part of the app.
 
 `ProductionRecord` = `{date, operation, qty, line, team, notes, recordedById}` with
-`operation ∈ {CUTTING, SEWING, PRINTING, EMBROIDERY, WASHING, FINISHING, PACKING}`. **Full history
+`operation ∈ {CUTTING, SEWING, PRINTING, EMBROIDERY, PACKING}`. **Full history
 is kept; totals are summed from records.** Nothing is a manually-entered percentage.
 
 `computeProductionAnalytics()` in `packages/shared/src/calc/production.ts` derives: produced,
