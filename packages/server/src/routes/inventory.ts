@@ -20,13 +20,14 @@ import {
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
-import { NotFoundError, ValidationError } from '../errors.js';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../errors.js';
 import {
   listMaterials, getMaterial, getMovements, receiveStock, adjustStock, recordWastage,
-  reserveForOrder, releaseReservation, issueToProduction, returnFromProduction,
+  reserveForOrder, releaseReservation, decideReservation, issueToProduction, returnFromProduction,
   getOrderMaterialPosition, reserveOrderMaterials, reconcileStock,
 } from '../services/inventory-service.js';
 import { logActivity } from '../services/activity-service.js';
+import { canDecideReservations } from '../config.js';
 
 export const inventoryRouter = Router();
 inventoryRouter.use(authenticate);
@@ -159,6 +160,58 @@ inventoryRouter.patch('/materials/:id', requirePermission('material:edit'), asyn
   res.json(await getMaterial(req.params.id));
 }));
 
+/**
+ * Why a material cannot be deleted, or null when it can.
+ *
+ * Deleting removes the row and everything that cascades from it, so a material
+ * with any stock history — movements, stock on hand, reservations, or bill of
+ * materials lines pointing at it — is refused: that history is the record of
+ * what the factory bought, held and used. Mark it inactive instead.
+ */
+export function materialDeletionBlocker(c: {
+  name: string; movements: number; reservations: number; bomLines: number; onHand: number;
+}): string | null {
+  const reasons: string[] = [];
+  if (c.movements > 0) reasons.push(`${c.movements} stock movement${c.movements === 1 ? '' : 's'}`);
+  if (c.onHand > 0) reasons.push('stock on hand');
+  if (c.reservations > 0) reasons.push(`${c.reservations} reservation${c.reservations === 1 ? '' : 's'}`);
+  if (c.bomLines > 0) reasons.push(`${c.bomLines} bill-of-materials line${c.bomLines === 1 ? '' : 's'}`);
+  return reasons.length === 0 ? null
+    : `${c.name} has ${reasons.join(', ')}, so deleting it would erase that history. Mark it inactive instead.`;
+}
+
+// Super administrators only: deleting is permanent, and the catalogue is shared
+// by every order.
+inventoryRouter.delete('/materials/:id', asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  if (!actor.isSuperAdmin) throw new ForbiddenError('Only a super administrator can delete materials.');
+  const material = await prisma.material.findUnique({
+    where: { id: req.params.id },
+    include: {
+      _count: { select: { movements: true, reservations: true, bomItems: true } },
+      stock: { select: { physicalQty: true } },
+    },
+  });
+  if (!material) throw new NotFoundError('Material');
+  const blocker = materialDeletionBlocker({
+    name: material.name,
+    movements: material._count.movements,
+    reservations: material._count.reservations,
+    bomLines: material._count.bomItems,
+    onHand: material.stock.reduce((a, s) => a + Number(s.physicalQty.toString()), 0),
+  });
+  if (blocker) throw new ConflictError(blocker);
+
+  await prisma.material.delete({ where: { id: material.id } });
+  await logActivity({
+    actorId: actor.id, actorName: actor.name, action: 'MATERIAL_DELETED',
+    summary: `deleted the material ${material.name} from the catalogue`,
+    entityType: 'Material', entityId: material.id,
+    meta: { code: material.code, type: material.type, unit: material.unit },
+  });
+  res.status(204).end();
+}));
+
 // ── Stock movements ─────────────────────────────────────────────────────────
 
 const receiveSchema = z.object({
@@ -212,13 +265,29 @@ const reserveSchema = z.object({
   allowPartial: z.boolean().optional(),
 });
 
-inventoryRouter.post('/reservations', requirePermission('material:edit'), asyncHandler(async (req, res) => {
+// Anyone who can see materials may ask for a reservation. Unless they decide
+// reservations themselves, it is a request that holds no stock until accepted.
+inventoryRouter.post('/reservations', requirePermission('material:read'), asyncHandler(async (req, res) => {
   res.status(201).json(await reserveForOrder(currentUser(req), reserveSchema.parse(req.body)));
 }));
 
-inventoryRouter.post('/reservations/:id/release', requirePermission('material:edit'), asyncHandler(async (req, res) => {
+// Releasing held stock needs material:edit; withdrawing one's own request does
+// not. The service decides which applies.
+inventoryRouter.post('/reservations/:id/release', requirePermission('material:read'), asyncHandler(async (req, res) => {
   const { reason } = z.object({ reason: z.string().optional() }).parse(req.body ?? {});
   res.json(await releaseReservation(currentUser(req), req.params.id, reason));
+}));
+
+const decisionSchema = z.object({ note: z.string().max(500).optional() });
+
+inventoryRouter.post('/reservations/:id/accept', requirePermission('material:read'), asyncHandler(async (req, res) => {
+  const { note } = decisionSchema.parse(req.body ?? {});
+  res.json(await decideReservation(currentUser(req), req.params.id, true, note));
+}));
+
+inventoryRouter.post('/reservations/:id/reject', requirePermission('material:read'), asyncHandler(async (req, res) => {
+  const { note } = decisionSchema.parse(req.body ?? {});
+  res.json(await decideReservation(currentUser(req), req.params.id, false, note));
 }));
 
 inventoryRouter.get('/reservations', requirePermission('material:read'), asyncHandler(async (req, res) => {
@@ -238,6 +307,7 @@ inventoryRouter.get('/reservations', requirePermission('material:read'), asyncHa
       material: { select: { id: true, name: true, code: true, unit: true, type: true } },
       order: { select: { id: true, poNumber: true, orderName: true, requiredDeliveryDate: true } },
       reservedBy: { select: { name: true } },
+      decidedBy: { select: { name: true } },
     },
     orderBy: { createdAt: 'desc' },
     take: 300,
@@ -260,8 +330,14 @@ inventoryRouter.get('/reservations', requirePermission('material:read'), asyncHa
       unit: r.unit,
       status: r.status,
       reservedByName: r.reservedBy?.name ?? null,
+      reservedById: r.reservedById,
+      decidedByName: r.decidedBy?.name ?? null,
+      decidedAt: r.decidedAt?.toISOString() ?? null,
+      decisionNote: r.decisionNote,
       createdAt: r.createdAt.toISOString(),
     })),
+    // Whether the person asking may accept or reject what is waiting.
+    canDecide: canDecideReservations(currentUser(req)),
   });
 }));
 
@@ -359,7 +435,7 @@ inventoryRouter.get('/orders/:orderId/position', requirePermission('material:rea
   res.json(await getOrderMaterialPosition(order.id));
 }));
 
-inventoryRouter.post('/orders/:orderId/reserve', requirePermission('material:edit'), asyncHandler(async (req, res) => {
+inventoryRouter.post('/orders/:orderId/reserve', requirePermission('material:read'), asyncHandler(async (req, res) => {
   const order = await prisma.order.findUnique({ where: { id: req.params.orderId }, select: { id: true } });
   if (!order) throw new NotFoundError('Order');
   res.json(await reserveOrderMaterials(currentUser(req), order.id));

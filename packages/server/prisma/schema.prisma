@@ -67,6 +67,7 @@ model User {
   materialIssuesTaken     MaterialIssue[]          @relation("IssuedTo")
   materialMovements       MaterialMovement[]
   materialReservations    MaterialReservation[]    @relation("ReservationBy")
+  reservationsDecided     MaterialReservation[]    @relation("ReservationDecidedBy")
   notifications           Notification[]
   notificationPreferences NotificationPreference[]
   completedStages         OrderStage[]             @relation("StageCompletedBy")
@@ -704,8 +705,13 @@ model MaterialReservation {
   releasedAt    DateTime?
   releaseReason String?
   notes         String?
+  /// Who accepted or rejected the request, when, and why if they said.
+  decidedById   String?
+  decidedAt     DateTime?
+  decisionNote  String?
   createdAt     DateTime           @default(now())
   updatedAt     DateTime           @updatedAt
+  decidedBy     User?              @relation("ReservationDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
   movements     MaterialMovement[]
   bomItem       BomItem?           @relation(fields: [bomItemId], references: [id])
   material      Material           @relation(fields: [materialId], references: [id], onDelete: Cascade)
@@ -1726,6 +1732,10 @@ enum ReservationStatus {
   FULFILLED
   RELEASED
   CANCELLED
+  /// Requested and waiting for a decision. Holds no stock until accepted.
+  PENDING
+  /// Requested and turned down. Never held stock.
+  REJECTED
 }
 
 enum UnitOfMeasure {

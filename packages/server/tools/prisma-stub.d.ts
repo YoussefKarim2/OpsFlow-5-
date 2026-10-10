@@ -13,7 +13,7 @@ declare module '@prisma/client' {
   export type BomCategory = 'FABRIC' | 'THREAD' | 'LABEL' | 'TRANSFER' | 'BADGE' | 'LOGO' | 'SPONSOR' | 'SIZE' | 'POLY_BAG' | 'BUTTER_PAPER' | 'STICKY_TAPE' | 'BARCODE_PAPER' | 'HALF_BOX' | 'CARTON' | 'TAPE' | 'ACCESSORY' | 'OTHER';
   export type MaterialType = 'FABRIC' | 'THREAD' | 'TRIM' | 'LABEL' | 'BUTTON' | 'ZIPPER' | 'ELASTIC' | 'PRINT_TRANSFER' | 'BADGE' | 'PACKAGING' | 'CARTON' | 'POLY_BAG' | 'ACCESSORY' | 'CHEMICAL' | 'OTHER';
   export type MovementType = 'RECEIPT' | 'ISSUE' | 'RETURN' | 'ADJUSTMENT' | 'WASTAGE' | 'TRANSFER_IN' | 'TRANSFER_OUT';
-  export type ReservationStatus = 'ACTIVE' | 'FULFILLED' | 'RELEASED' | 'CANCELLED';
+  export type ReservationStatus = 'ACTIVE' | 'FULFILLED' | 'RELEASED' | 'CANCELLED' | 'PENDING' | 'REJECTED';
   export type UnitOfMeasure = 'M' | 'CM' | 'YD' | 'KG' | 'G' | 'PCS' | 'DZN' | 'ROLL' | 'CONE' | 'SET' | 'BOX' | 'L';
   export type ExternalOpStatus = 'NOT_SENT' | 'WAITING_APPROVAL' | 'SENT' | 'IN_PROGRESS' | 'RETURNED' | 'CANCELLED';
   export type ApprovalType = 'PRINT_ARTWORK' | 'EMBROIDERY' | 'COLOR' | 'SAMPLE' | 'LABEL' | 'PACKING' | 'PRODUCTION';
@@ -75,6 +75,7 @@ declare module '@prisma/client' {
     materialIssuesTaken: MaterialIssue[];
     materialMovements: MaterialMovement[];
     materialReservations: MaterialReservation[];
+    reservationsDecided: MaterialReservation[];
     notifications: Notification[];
     notificationPreferences: NotificationPreference[];
     completedStages: OrderStage[];
@@ -517,8 +518,12 @@ declare module '@prisma/client' {
     releasedAt: Date | null;
     releaseReason: string | null;
     notes: string | null;
+    decidedById: string | null;
+    decidedAt: Date | null;
+    decisionNote: string | null;
     createdAt: Date;
     updatedAt: Date;
+    decidedBy: User | null;
     movements: MaterialMovement[];
     bomItem: BomItem | null;
     material: Material;

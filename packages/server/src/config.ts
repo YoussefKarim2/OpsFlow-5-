@@ -202,6 +202,14 @@ const schema = z.object({
    * which is the opposite of what turning it off during testing is for.
    */
   EMAIL_SENDING_ENABLED: envBool(true),
+
+  /**
+   * Who may accept or reject a material reservation request, besides the super
+   * administrators. Comma-separated addresses; adding a person needs no code
+   * change and no deploy beyond setting the variable. Anyone signed in may
+   * request a reservation; it holds no stock until one of these accepts it.
+   */
+  RESERVATION_DECIDER_EMAILS: z.string().default('mahmoud@soccertex.biz,samy@soccertex.biz,ibrahim@soccertex.biz'),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -276,6 +284,20 @@ if (config.NODE_ENV === 'production' && config.STORAGE_DRIVER === 'local') {
 }
 
 export const EMAIL_RECIPIENT_ALLOWLIST: readonly string[] = parseEmailList(config.EMAIL_RECIPIENT_ALLOWLIST);
+
+/** The `RESERVATION_DECIDER_EMAILS` setting, parsed once at boot. */
+export const RESERVATION_DECIDER_EMAILS: readonly string[] = parseEmailList(config.RESERVATION_DECIDER_EMAILS);
+
+/**
+ * Whether this person may accept or reject reservation requests: a super
+ * administrator (the flag and the allowlist, as everywhere), or a named decider.
+ */
+export function canDecideReservations(
+  user: { email: string; isSuperAdmin: boolean },
+  deciders: readonly string[] = RESERVATION_DECIDER_EMAILS,
+): boolean {
+  return user.isSuperAdmin || deciders.includes(user.email.trim().toLowerCase());
+}
 
 /**
  * Whether an address is *permitted* to be a super admin. Necessary, never

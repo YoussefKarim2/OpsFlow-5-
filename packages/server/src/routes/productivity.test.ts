@@ -126,3 +126,26 @@ describe('the productivity endpoint', () => {
     assert.equal(res.status, 401);
   });
 });
+
+describe('material and reservation routes without a session', () => {
+  let server: Server;
+  let base: string;
+  before(async () => {
+    server = createApp().listen(0);
+    await new Promise((r) => server.once('listening', r));
+    const addr = server.address();
+    base = `http://127.0.0.1:${typeof addr === 'object' && addr ? addr.port : 0}`;
+  });
+  after(() => { server.close(); });
+
+  test('deleting a material, and accepting or rejecting a request, all need a session', async () => {
+    for (const [method, path] of [
+      ['DELETE', '/api/inventory/materials/x'],
+      ['POST', '/api/inventory/reservations/x/accept'],
+      ['POST', '/api/inventory/reservations/x/reject'],
+    ] as const) {
+      const res = await fetch(base + path, { method, headers: { 'Content-Type': 'application/json' }, body: method === 'POST' ? '{}' : undefined });
+      assert.equal(res.status, 401, `${method} ${path}`);
+    }
+  });
+});

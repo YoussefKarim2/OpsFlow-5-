@@ -564,6 +564,11 @@ export interface ReservationRow {
   unit: string;
   status: string;
   reservedByName: string | null;
+  reservedById: string | null;
+  /** Who accepted or rejected the request, when, and why. */
+  decidedByName: string | null;
+  decidedAt: string | null;
+  decisionNote: string | null;
   createdAt: string;
 }
 
@@ -668,11 +673,17 @@ export const api = {
     reserve: (body: {
       materialId: string; orderId: string; qty: number; unit?: string; bomItemId?: string | null;
       allowPartial?: boolean; notes?: string;
-    }) => post<{ reservation: { id: string; qty: number }; material: MaterialRow; partial: boolean }>('/inventory/reservations', body),
+    }) => post<{ reservation: { id: string; qty: number }; material: MaterialRow; partial: boolean; pending: boolean }>('/inventory/reservations', body),
     releaseReservation: (id: string, reason?: string) =>
       post<MaterialRow>(`/inventory/reservations/${id}/release`, { reason }),
     reservations: (filters: Record<string, unknown> = {}) =>
-      get<{ data: ReservationRow[] }>(`/inventory/reservations${qs(filters)}`),
+      get<{ data: ReservationRow[]; canDecide: boolean }>(`/inventory/reservations${qs(filters)}`),
+    acceptReservation: (id: string, note?: string) =>
+      post<{ status: string }>(`/inventory/reservations/${id}/accept`, { note }),
+    rejectReservation: (id: string, note?: string) =>
+      post<{ status: string }>(`/inventory/reservations/${id}/reject`, { note }),
+    /** Super administrators only, and only for a material with no history. */
+    deleteMaterial: (id: string) => del(`/inventory/materials/${id}`),
 
     issue: (body: {
       materialId: string; orderId: string; qty: number; unit?: string; bomItemId?: string | null;
@@ -689,6 +700,7 @@ export const api = {
       reserved: Array<{ materialName: string; qty: number; unit: string }>;
       short: Array<{ materialName: string; shortQty: number; unit: string }>;
       skipped: number;
+      pending: boolean;
     }>(`/inventory/orders/${orderId}/reserve`),
     linkBom: (bomItemId: string, materialId: string | null) =>
       post<MaterialPosition>(`/inventory/bom/${bomItemId}/link`, { materialId }),

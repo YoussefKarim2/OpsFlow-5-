@@ -30,7 +30,8 @@ import {
   type StockPosition, type RequirementInput, type MaterialPosition,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
-import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../errors.js';
+import { canDecideReservations, RESERVATION_DECIDER_EMAILS, isAllowlistedSuperAdmin } from '../config.js';
 import { logActivity, logAndNotify } from './activity-service.js';
 import type { AuthUser } from '../middleware/auth.js';
 
@@ -447,7 +448,11 @@ export async function reserveForOrder(
     /** Reserve whatever is available when the full quantity is not. */
     allowPartial?: boolean;
   },
-): Promise<{ reservation: { id: string; qty: number }; material: MaterialRow; partial: boolean }> {
+): Promise<{ reservation: { id: string; qty: number }; material: MaterialRow; partial: boolean; pending: boolean }> {
+  // A decider's reservation takes effect at once. Anyone else's is a request:
+  // it holds no stock until a decider accepts it, and availability is checked
+  // again then.
+  const decides = canDecideReservations(actor);
   const result = await withSerializableRetry(() => prisma.$transaction(
     async (tx) => {
       const material = await tx.material.findUnique({
@@ -494,6 +499,25 @@ export async function reserveForOrder(
         }
       }
 
+      if (!decides) {
+        const request = await tx.materialReservation.create({
+          data: {
+            materialId: input.materialId,
+            orderId: input.orderId,
+            bomItemId: input.bomItemId ?? null,
+            qty,
+            unit: material.unit,
+            status: ReservationStatus.PENDING,
+            reservedById: actor.id,
+            notes: input.notes ?? null,
+          },
+        });
+        return {
+          reservationId: request.id, reservedQty: qty, partial: qtyCmp(qty, requested) < 0,
+          materialName: material.name, unit: material.unit, poNumber: order.poNumber, pending: true,
+        };
+      }
+
       // One reservation per (material, order, BOM line) — topped up rather than
       // duplicated, so the same requirement reserved twice does not double-count.
       const existing = await tx.materialReservation.findFirst({
@@ -519,6 +543,8 @@ export async function reserveForOrder(
               unit: material.unit,
               reservedById: actor.id,
               notes: input.notes ?? null,
+              decidedById: actor.id,
+              decidedAt: new Date(),
             },
           });
 
@@ -529,6 +555,7 @@ export async function reserveForOrder(
         materialName: material.name,
         unit: material.unit,
         poNumber: order.poNumber,
+        pending: false,
       };
     },
     { isolationLevel: 'Serializable' },
@@ -536,18 +563,29 @@ export async function reserveForOrder(
 
   await logActivity({
     orderId: input.orderId,
-    actorId: actor.id, actorName: actor.name, action: 'MATERIAL_RESERVED',
+    actorId: actor.id, actorName: actor.name,
+    action: result.pending ? 'MATERIAL_RESERVATION_REQUESTED' : 'MATERIAL_RESERVED',
     summary:
-      `reserved ${result.reservedQty.toLocaleString()} ${result.unit} of ${result.materialName}` +
-      (result.partial ? ' (partial — that is all that was available)' : ''),
+      `${result.pending ? 'requested' : 'reserved'} ${result.reservedQty.toLocaleString()} ${result.unit} of ${result.materialName}` +
+      (result.partial ? ' (partial — that is all that was available)' : '') +
+      (result.pending ? ' — waiting for a decision' : ''),
     entityType: 'MaterialReservation', entityId: result.reservationId,
-    meta: { materialId: input.materialId, qty: result.reservedQty, partial: result.partial },
+    meta: { materialId: input.materialId, qty: result.reservedQty, partial: result.partial, pending: result.pending },
   });
+
+  if (result.pending) {
+    await notifyDeciders({
+      orderId: input.orderId,
+      title: `Reservation request on ${result.poNumber}`,
+      body: `${actor.name} asks to reserve ${result.reservedQty.toLocaleString()} ${result.unit} of ${result.materialName}.`,
+    });
+  }
 
   return {
     reservation: { id: result.reservationId, qty: result.reservedQty },
     material: await getMaterial(input.materialId),
     partial: result.partial,
+    pending: result.pending,
   };
 }
 
@@ -562,8 +600,32 @@ export async function releaseReservation(
     include: { material: { select: { name: true, unit: true } } },
   });
   if (!reservation) throw new NotFoundError('Reservation');
+
+  // A request still waiting for a decision is withdrawn, not released: it never
+  // held stock. The person who asked, or a decider, may withdraw it.
+  if (reservation.status === ReservationStatus.PENDING) {
+    if (reservation.reservedById !== actor.id && !canDecideReservations(actor)) {
+      throw new ForbiddenError('Only the person who asked, or someone who decides reservations, can withdraw this request.');
+    }
+    await prisma.materialReservation.update({
+      where: { id: reservationId },
+      data: { status: ReservationStatus.CANCELLED, releasedAt: new Date(), releaseReason: reason?.trim() || 'Request withdrawn' },
+    });
+    await logActivity({
+      orderId: reservation.orderId,
+      actorId: actor.id, actorName: actor.name, action: 'MATERIAL_RESERVATION_WITHDRAWN',
+      summary: `withdrew the request for ${Number(reservation.qty.toString()).toLocaleString()} ${reservation.material.unit} of ${reservation.material.name}`,
+      entityType: 'MaterialReservation', entityId: reservationId,
+    });
+    return getMaterial(reservation.materialId);
+  }
+
   if (reservation.status !== ReservationStatus.ACTIVE) {
     throw new ConflictError('That reservation is no longer active.');
+  }
+  // Releasing stock that is held is a stock decision, not a request.
+  if (!actor.permissions.includes('material:edit') && !canDecideReservations(actor)) {
+    throw new ForbiddenError('Releasing a reservation needs permission to edit materials.');
   }
 
   await prisma.materialReservation.update({
@@ -586,6 +648,100 @@ export async function releaseReservation(
   });
 
   return getMaterial(reservation.materialId);
+}
+
+/**
+ * Accept or reject a reservation request.
+ *
+ * Accepting re-checks availability inside a serializable transaction: the
+ * request held nothing while it waited, so stock may have gone elsewhere. If
+ * it has, the decider is told the numbers rather than overbooking the shelf.
+ */
+export async function decideReservation(
+  actor: AuthUser,
+  reservationId: string,
+  accept: boolean,
+  note?: string,
+): Promise<{ status: string; material: MaterialRow }> {
+  if (!canDecideReservations(actor)) {
+    throw new ForbiddenError('Only the super administrators and the named reservation deciders can accept or reject requests.');
+  }
+
+  const outcome = await withSerializableRetry(() => prisma.$transaction(async (tx) => {
+    const r = await tx.materialReservation.findUnique({
+      where: { id: reservationId },
+      include: { material: { include: MATERIAL_INCLUDE }, order: { select: { poNumber: true } } },
+    });
+    if (!r) throw new NotFoundError('Reservation request');
+    if (r.status !== ReservationStatus.PENDING) {
+      throw new ConflictError('That request has already been decided or withdrawn.');
+    }
+    const qty = Number(r.qty.toString());
+    if (accept) {
+      const available = toMaterialRow(r.material).position.availableQty;
+      if (qtyCmp(qty, available) > 0) {
+        throw new ConflictError(
+          `Only ${available.toLocaleString()} ${r.material.unit} of ${r.material.name} is available now, ` +
+          `less than the ${qty.toLocaleString()} requested. Reject the request, or ask for a smaller quantity.`,
+        );
+      }
+    }
+    await tx.materialReservation.update({
+      where: { id: r.id },
+      data: {
+        status: accept ? ReservationStatus.ACTIVE : ReservationStatus.REJECTED,
+        decidedById: actor.id, decidedAt: new Date(), decisionNote: note?.trim() || null,
+      },
+    });
+    return {
+      orderId: r.orderId, materialId: r.materialId, requesterId: r.reservedById,
+      materialName: r.material.name, unit: r.material.unit, qty, poNumber: r.order.poNumber,
+    };
+  }, { isolationLevel: 'Serializable' }));
+
+  await logActivity({
+    orderId: outcome.orderId,
+    actorId: actor.id, actorName: actor.name,
+    action: accept ? 'MATERIAL_RESERVATION_ACCEPTED' : 'MATERIAL_RESERVATION_REJECTED',
+    summary: `${accept ? 'accepted' : 'rejected'} the request for ${outcome.qty.toLocaleString()} ${outcome.unit} of ${outcome.materialName}` +
+      (note?.trim() ? ` — ${note.trim()}` : ''),
+    entityType: 'MaterialReservation', entityId: reservationId,
+  });
+
+  if (outcome.requesterId && outcome.requesterId !== actor.id) {
+    await prisma.notification.create({
+      data: {
+        userId: outcome.requesterId, orderId: outcome.orderId, type: 'MATERIAL_UPDATED' as never,
+        title: `Reservation ${accept ? 'accepted' : 'rejected'} on ${outcome.poNumber}`,
+        body: `${actor.name} ${accept ? 'accepted' : 'rejected'} your request for ${outcome.qty.toLocaleString()} ${outcome.unit} of ${outcome.materialName}` +
+          (note?.trim() ? `: ${note.trim()}` : '.'),
+        link: '/inventory/reservations',
+      },
+    }).catch(() => undefined);
+  }
+
+  return { status: accept ? ReservationStatus.ACTIVE : ReservationStatus.REJECTED, material: await getMaterial(outcome.materialId) };
+}
+
+/**
+ * Tell everyone who can decide that a request is waiting. In-app only, so a
+ * burst of requests from an import is not a burst of email.
+ */
+async function notifyDeciders(input: { orderId: string; title: string; body: string }): Promise<void> {
+  const users = await prisma.user.findMany({
+    where: { active: true, OR: [{ isSuperAdmin: true }, { email: { in: [...RESERVATION_DECIDER_EMAILS] } }] },
+    select: { id: true, email: true, isSuperAdmin: true },
+  });
+  const deciders = users.filter((u) => canDecideReservations({
+    email: u.email, isSuperAdmin: u.isSuperAdmin && isAllowlistedSuperAdmin(u.email),
+  }));
+  if (deciders.length === 0) return;
+  await prisma.notification.createMany({
+    data: deciders.map((u) => ({
+      userId: u.id, orderId: input.orderId, type: 'MATERIAL_UPDATED' as never,
+      title: input.title, body: input.body, link: '/inventory/reservations',
+    })),
+  }).catch((err: unknown) => console.error('[reservations] could not notify deciders:', err));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -930,8 +1086,11 @@ export async function reserveOrderMaterials(
   reserved: Array<{ materialName: string; qty: number; unit: string }>;
   short: Array<{ materialName: string; shortQty: number; unit: string }>;
   skipped: number;
+  /** True when the lines were requested rather than reserved: they wait for a decision. */
+  pending: boolean;
 }> {
   const position = await getOrderMaterialPosition(orderId);
+  let pending = false;
   const reserved: Array<{ materialName: string; qty: number; unit: string }> = [];
   const short: Array<{ materialName: string; shortQty: number; unit: string }> = [];
   let skipped = 0;
@@ -943,7 +1102,7 @@ export async function reserveOrderMaterials(
     if (r.reservableQty > 0) {
       // The position is stated in the line's unit, so the reservation is
       // requested in it too and converted to the material's on the way in.
-      await reserveForOrder(actor, {
+      const made = await reserveForOrder(actor, {
         materialId: r.materialId,
         orderId,
         qty: r.reservableQty,
@@ -952,6 +1111,7 @@ export async function reserveOrderMaterials(
         allowPartial: true,
         notes: 'Reserved automatically when the order was confirmed',
       });
+      if (made.pending) pending = true;
       reserved.push({ materialName: r.materialName, qty: r.reservableQty, unit: r.unit });
     }
     if (r.shortQty > 0) {
@@ -963,14 +1123,14 @@ export async function reserveOrderMaterials(
     orderId,
     actorId: actor.id, actorName: actor.name, action: 'MATERIALS_RESERVED_BULK',
     summary:
-      `reserved materials for the order — ${reserved.length} line${reserved.length === 1 ? '' : 's'} secured` +
+      `${pending ? 'requested' : 'reserved'} materials for the order — ${reserved.length} line${reserved.length === 1 ? '' : 's'} ${pending ? 'waiting for a decision' : 'secured'}` +
       (short.length > 0 ? `, ${short.length} short` : '') +
       (skipped > 0 ? `, ${skipped} not linked to stock` : ''),
     entityType: 'Order', entityId: orderId,
     meta: { reservedCount: reserved.length, shortCount: short.length, skipped },
   });
 
-  return { reserved, short, skipped };
+  return { reserved, short, skipped, pending };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

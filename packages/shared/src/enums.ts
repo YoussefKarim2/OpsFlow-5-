@@ -490,6 +490,10 @@ export const ReservationStatus = {
   /** Given back to the pool without being issued. */
   RELEASED: 'RELEASED',
   CANCELLED: 'CANCELLED',
+  /** Requested, waiting for a decision. Holds no stock until accepted. */
+  PENDING: 'PENDING',
+  /** Requested and turned down. */
+  REJECTED: 'REJECTED',
 } as const;
 export type ReservationStatus = (typeof ReservationStatus)[keyof typeof ReservationStatus];
 

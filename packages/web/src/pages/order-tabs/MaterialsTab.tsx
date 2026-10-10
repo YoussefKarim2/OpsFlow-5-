@@ -54,7 +54,8 @@ export function MaterialsTab({ order }: { order: OrderDetailDto }) {
     onSuccess: (r) => {
       refresh();
       toast.success(
-        `Reserved ${r.reserved.length} line${r.reserved.length === 1 ? '' : 's'}` +
+        `${r.pending ? 'Requested' : 'Reserved'} ${r.reserved.length} line${r.reserved.length === 1 ? '' : 's'}` +
+        (r.pending ? ' — waiting for a decision' : '') +
         (r.short.length > 0 ? `. ${r.short.length} still short: ${r.short.map((s) => s.materialName).join(', ')}` : '.'),
       );
     },
@@ -72,7 +73,7 @@ export function MaterialsTab({ order }: { order: OrderDetailDto }) {
       bomItemId: r.id,
       allowPartial: true,
     }),
-    onSuccess: () => { refresh(); toast.success('Reserved.'); },
+    onSuccess: (r) => { refresh(); toast.success(r.pending ? 'Requested — waiting for a decision.' : 'Reserved.'); },
     onError: (e) => toast.error(e),
   });
 
@@ -138,7 +139,7 @@ export function MaterialsTab({ order }: { order: OrderDetailDto }) {
           title="Material requirements"
           subtitle="Required against what the store actually holds"
           action={
-            can('material:edit') && reservable.length > 0 && (
+            reservable.length > 0 && (
               <button
                 className="btn-primary btn-sm"
                 onClick={() => reserveAll.mutate()}
@@ -206,7 +207,7 @@ export function MaterialsTab({ order }: { order: OrderDetailDto }) {
                       </td>
                       <td className="td">
                         <div className="flex justify-end gap-1">
-                          {can('material:edit') && r.status === 'RESERVABLE' && (
+                          {r.status === 'RESERVABLE' && (
                             <button className="btn-ghost btn-sm" onClick={() => reserveOne.mutate(r)} disabled={reserveOne.isPending}>
                               Reserve
                             </button>
