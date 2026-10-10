@@ -12,6 +12,7 @@ import type {
   StockPosition, MaterialPosition, InventorySummary, ImportConcept, ColumnAnalysis,
   OrderStepsResult, Blocker, StageKey, StageStatus,
   NotificationPriority, ChangeCategory, ShipmentDto, ProductivityDto, ProductivityDayLogDto, ProductionOperation,
+  CostingOverviewDto,
 } from '@opsflow/shared';
 
 const BASE = import.meta.env.VITE_API_URL ?? '/api';
@@ -713,6 +714,9 @@ export const api = {
     markRead: (id: string) => post<{ ok: true }>(`/dashboard/notifications/${id}/read`),
     markAllRead: () => post<{ ok: true }>('/dashboard/notifications/read-all'),
   },
+
+  /** Every order's costing, as its own Costing tab computes it. */
+  costingOverview: () => get<CostingOverviewDto>('/costing/overview'),
 
   /** Factory-wide productivity, read from the records the orders already hold. */
   productivity: {

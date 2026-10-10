@@ -17,6 +17,7 @@ const named = <K extends string>(load: () => Promise<Record<K, ComponentType>>, 
   lazy(() => load().then((m) => ({ default: m[name] })));
 const DashboardPage = named(() => import('./pages/Dashboard'), 'DashboardPage');
 const ProductivityPage = named(() => import('./pages/Productivity'), 'ProductivityPage');
+const CostingOverviewPage = named(() => import('./pages/CostingOverview'), 'CostingOverviewPage');
 const OrderWorkspacePage = named(() => import('./pages/OrderWorkspace'), 'OrderWorkspacePage');
 const FollowUpPage = named(() => import('./pages/FollowUp'), 'FollowUpPage');
 const WhatChangedPage = named(() => import('./pages/WhatChanged'), 'WhatChangedPage');
@@ -29,7 +30,7 @@ const MovementsPage = named(() => import('./pages/inventory/MaterialDetailPage')
 const ImportWizardPage = named(() => import('./pages/ImportWizard'), 'ImportWizardPage');
 import {
   LoginPage, MyTasksPage, NotificationsPage, ReportsPage,
-  ModuleListPage, ClientsPage, FactoriesPage, SettingsPage,
+  ClientsPage, FactoriesPage, SettingsPage,
 } from './pages/Misc';
 
 const queryClient: QueryClient = new QueryClient({
@@ -135,14 +136,7 @@ export default function App() {
             <Route path="/packing"    element={<Navigate to="/orders?status=PACKING" replace />} />
             <Route path="/shipping"   element={<Navigate to="/orders?status=READY_TO_SHIP" replace />} />
 
-            <Route path="/costing" element={
-              <Protected requires="costing:read">
-                <ModuleListPage
-                  title="Costing" subtitle="Actual cost against selling price"
-                  columns={['qty', 'shipped']}
-                />
-              </Protected>
-            } />
+            <Route path="/costing" element={<Protected requires="costing:read"><CostingOverviewPage /></Protected>} />
 
             {/* Inventory — the factory's own stock, as opposed to one order's BOM. */}
             <Route path="/inventory" element={<Navigate to="/inventory/materials" replace />} />

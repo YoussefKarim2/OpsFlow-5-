@@ -8,7 +8,10 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { ROLE_LABEL, OrderStatus, QtyLedger } from '@opsflow/shared';
+import {
+  ROLE_LABEL, OrderStatus, QtyLedger, summariseCostingOverview, costingHeadlineReason,
+  type CostingOverviewDto, type CostingOverviewRow,
+} from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
@@ -205,6 +208,39 @@ referenceRouter.get('/orders/:orderId/attachments', requirePermission('order:rea
 // the authenticated block so a plain link or an <img> can reach it with a
 // signed URL. Serving it from here meant it could only ever be fetched by
 // JavaScript holding a bearer token.
+
+// ── Costing overview — the sidebar's Costing page ───────────────────────────
+//
+// Every live order's costing as its own screen computes it, in one list, so a
+// person can see the cost and the profit of each order without opening it.
+// The same `deriveOrder` the Costing tab uses, so the two cannot disagree.
+
+referenceRouter.get('/costing/overview', requirePermission('costing:read'), asyncHandler(async (_req, res) => {
+  const today = new Date();
+  const orders = await prisma.order.findMany({
+    where: { cancelled: false },
+    include: ORDER_INCLUDE,
+    orderBy: { createdAt: 'desc' },
+  });
+  const rows: CostingOverviewRow[] = orders.map((o) => {
+    const d = deriveOrder(o, today);
+    const c = d.costing;
+    return {
+      orderId: o.id, poNumber: o.poNumber, orderName: o.orderName, clientName: o.client.name,
+      status: d.status,
+      orderQty: c.orderQty, shippedQty: c.shippedQty,
+      hasRecord: c.hasRecord, costingDate: c.costingDate, dollarRate: c.dollarRate,
+      sellPriceUsd: c.sellPriceUsd,
+      fabricCostUsd: c.fabricCostUsd, accessoryCostUsd: c.accessoryCostUsd, externalCostUsd: c.externalCostUsd,
+      cmCostUsd: c.cmCostUsd, otherCostUsd: c.otherCostUsd, totalCostUsd: c.totalCostUsd,
+      unitActualCostUsd: c.unitActualCostUsd, profitPerUnitUsd: c.profitPerUnitUsd, profitPct: c.profitPct,
+      totalProfitUsd: c.totalProfitUsd, isProfitable: c.isProfitable,
+      waitingFor: c.profitPerUnitUsd == null ? costingHeadlineReason(c.waiting) : null,
+    };
+  });
+  const body: CostingOverviewDto = { summary: summariseCostingOverview(rows), rows };
+  res.json(body);
+}));
 
 // ── Reports — the brief's section 36 ────────────────────────────────────────
 

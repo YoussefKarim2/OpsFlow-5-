@@ -18,6 +18,7 @@ import type {
 } from './calc/productivity.js';
 import type { BomSummary } from './calc/materials.js';
 import type { CostingResult } from './calc/costing.js';
+import type { CostingOverviewRow, CostingOverviewSummary } from './calc/costing-overview.js';
 import type { MaterialPosition, ConsumptionVariance } from './calc/inventory.js';
 import type { Blocker } from './calc/workflow-gates.js';
 import type { QuantityMatrix, FunnelStep, ColorProgress, CutVariance, StockDeduction } from './calc/quantities.js';
@@ -523,6 +524,12 @@ export interface ProductivityDto {
   quality: { summary: DefectRateSummary; rft: RftSummary; audits: ProductivityAuditRowDto[] } | null;
   /** Absent when the account lacks cutting:read. */
   fabric: { summary: FabricUtilisationSummary; records: ProductivityCuttingRowDto[] } | null;
+}
+
+/** The Costing sidebar page: every order's costing before it is opened. */
+export interface CostingOverviewDto {
+  summary: CostingOverviewSummary;
+  rows: CostingOverviewRow[];
 }
 
 export interface FollowUpItemDto {
