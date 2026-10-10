@@ -123,6 +123,17 @@ export async function attemptDelivery(id: string): Promise<boolean> {
   // Switched off: leave anything already queued exactly as it is.
   if (!config.EMAIL_SENDING_ENABLED) return false;
 
+  // Claim the row before sending. The immediate attempt after enqueueing and
+  // the retry loop can both find the same PENDING row while Graph is still
+  // answering the first, and each would send it — the recipient got the email
+  // twice. Pushing the next attempt out in one conditional update means only
+  // one of them gets a row back; a crash mid-send just retries in ten minutes.
+  const claimed = await prisma.emailDelivery.updateMany({
+    where: { id, status: EmailStatus.PENDING as never, nextAttemptAt: row.nextAttemptAt },
+    data: { nextAttemptAt: new Date(Date.now() + 10 * 60_000) },
+  });
+  if (claimed.count !== 1) return false;
+
   if (!isGraphConfigured()) {
     // Not a failure — a message waiting for configuration. It stays PENDING
     // with its attempt count untouched, so turning the credentials on later

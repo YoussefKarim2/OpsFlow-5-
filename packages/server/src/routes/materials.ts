@@ -5,7 +5,7 @@ import { computeBomSummary, groupBomByCategory, computeMarkerPlan, computeFabric
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
-import { NotFoundError, ValidationError } from '../errors.js';
+import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 import { refreshOrderCache, ORDER_INCLUDE, deriveOrder } from '../services/order-service.js';
 import { logActivity, logAndNotify } from '../services/activity-service.js';
 import { issueToProduction, returnFromProduction } from '../services/inventory-service.js';
@@ -232,10 +232,25 @@ materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHa
   if (!order) throw new NotFoundError('Order');
 
   const existing = await prisma.bomItem.findMany({
-    where: { orderId: order.id }, select: { id: true },
+    where: { orderId: order.id },
+    select: { id: true, item: true, issuedQty: true, _count: { select: { issues: true } } },
   });
   const keep = new Set(rows.map((r) => r.id).filter((id): id is string => !!id));
-  const removed = existing.filter((e) => !keep.has(e.id)).map((e) => e.id);
+  const removedRows = existing.filter((e) => !keep.has(e.id));
+  const removed = removedRows.map((e) => e.id);
+
+  // A line material has been issued against is history, not a draft. Deleting
+  // it took its issue records with it (they cascade), the costing's actual
+  // consumption dropped, and the stock movements were left pointing at
+  // nothing. A save from a screen that never loaded the line did it silently.
+  const issuedRemoved = removedRows.filter((e) => Number(e.issuedQty) > 0 || e._count.issues > 0);
+  if (issuedRemoved.length > 0) {
+    throw new ConflictError(
+      `Material has already been issued against ${issuedRemoved.map((e) => e.item).join(', ')}, so `
+      + `${issuedRemoved.length === 1 ? 'it' : 'they'} cannot be removed from the bill of materials. `
+      + 'Reload the page if you did not mean to remove them.',
+    );
+  }
 
   // Issued figures on lines linked to stock, applied after the rows are saved.
   const linkedIssues: Array<{ id: string; issued: number }> = [];
@@ -378,9 +393,20 @@ materialsRouter.patch('/bom/:id', requirePermission('material:edit'), asyncHandl
 }));
 
 materialsRouter.delete('/bom/:id', requirePermission('material:edit'), asyncHandler(async (req, res) => {
-  const item = await prisma.bomItem.findUnique({ where: { id: req.params.id } });
+  const actor = currentUser(req);
+  const item = await prisma.bomItem.findUnique({
+    where: { id: req.params.id }, include: { _count: { select: { issues: true } } },
+  });
   if (!item) throw new NotFoundError('BOM item');
+  if (Number(item.issuedQty) > 0 || item._count.issues > 0) {
+    throw new ConflictError(`Material has already been issued against ${item.item}, so it cannot be removed.`);
+  }
   await prisma.bomItem.delete({ where: { id: item.id } });
+  await logActivity({
+    orderId: item.orderId, actorId: actor.id, actorName: actor.name,
+    action: 'BOM_ITEM_DELETED', summary: `removed ${item.item} from the bill of materials`,
+    entityType: 'BomItem', entityId: item.id,
+  });
   await refreshOrderCache(item.orderId);
   res.status(204).end();
 }));

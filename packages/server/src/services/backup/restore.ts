@@ -86,17 +86,38 @@ export async function restoreBackup(buffer: Buffer): Promise<RestoreResult> {
     )).map((r) => r.table_name),
   );
 
+  // A backup from a different schema version is refused. Restoring one put the
+  // migration history back to the dump's while the tables stayed at today's,
+  // and the next deploy's `migrate deploy` then failed re-creating a table that
+  // already existed — the site stayed down. Restore into a database at the
+  // dump's version (a scratch database migrated to that commit) instead.
+  const dumped = new Set(((payload.tables._prisma_migrations ?? []) as Array<{ migration_name?: string; finished_at?: unknown }>)
+    .filter((m) => m.finished_at != null && typeof m.migration_name === 'string').map((m) => m.migration_name as string));
+  const live = new Set((await prisma.$queryRawUnsafe<Array<{ migration_name: string }>>(
+    `SELECT migration_name FROM "_prisma_migrations" WHERE finished_at IS NOT NULL`,
+  )).map((m) => m.migration_name));
+  const onlyLive = [...live].filter((m) => !dumped.has(m));
+  const onlyDump = [...dumped].filter((m) => !live.has(m));
+  if (dumped.size > 0 && (onlyLive.length > 0 || onlyDump.length > 0)) {
+    throw new Error(
+      'This backup was taken at a different schema version and cannot be restored here. '
+      + (onlyLive.length ? `Applied here but not in the backup: ${onlyLive.join(', ')}. ` : '')
+      + (onlyDump.length ? `In the backup but not here: ${onlyDump.join(', ')}.` : ''),
+    );
+  }
+
   await prisma.$transaction(async (tx) => {
     await tx.$executeRawUnsafe(`SET LOCAL session_replication_role = 'replica'`);
     const casts = await columnCasts(tx);
 
     for (const table of Object.keys(payload.tables)) {
+      if (table === '_prisma_migrations') continue; // checked equal above; never rewritten
       if (!present.has(table)) { skipped.push(table); continue; }
       await tx.$executeRawUnsafe(`DELETE FROM "${table}"`);
     }
 
     for (const [table, tableRows] of Object.entries(payload.tables)) {
-      if (!present.has(table)) continue;
+      if (table === '_prisma_migrations' || !present.has(table)) continue;
       for (const raw of tableRows as Array<Record<string, unknown>>) {
         // A column dropped since the dump was taken is skipped, the same way a
         // dropped table is; otherwise one renamed field fails the whole restore.

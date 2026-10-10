@@ -46,7 +46,9 @@ export const requiredRelationId = z.preprocess(
 /** A date the form may have cleared. "" is not a date; it is no answer. */
 export const optionalDate = z.preprocess(
   (v) => (v === '' ? undefined : v),
-  z.string().optional(),
+  z.string().optional().refine((v) => v === undefined || isPlausibleDate(v), {
+    message: 'That date could not be understood — use a real date between 2000 and 2100.',
+  }),
 );
 
 /**
@@ -111,6 +113,28 @@ export const money = (maxValue = 999_999.9999) =>
 
 
 /**
+ * Whether a date string is one a person could mean.
+ *
+ * `new Date('20026-01-01')` is a valid Date in the year 20026, and
+ * `new Date('2026-02-31')` quietly becomes 3 March. Both were stored: an order
+ * promised for the year 20026 is never overdue, and its alerts never fire.
+ * The year must be 2000–2100, and a `YYYY-MM-DD` must be a day that exists.
+ */
+export function isPlausibleDate(v: string): boolean {
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return false;
+  const year = d.getUTCFullYear();
+  if (year < 2000 || year > 2100) return false;
+  const day = /^(\d{4})-(\d{2})-(\d{2})/.exec(v.trim());
+  if (day) {
+    const [, y, m, dd] = day;
+    const check = new Date(Date.UTC(Number(y), Number(m) - 1, Number(dd)));
+    if (check.getUTCFullYear() !== Number(y) || check.getUTCMonth() !== Number(m) - 1 || check.getUTCDate() !== Number(dd)) return false;
+  }
+  return true;
+}
+
+/**
  * A date the caller must supply, checked for being one.
  *
  * `z.string()` accepts "not-a-date", which becomes an Invalid Date, which
@@ -120,7 +144,7 @@ export const money = (maxValue = 999_999.9999) =>
  */
 export const requiredDate = z
   .string()
-  .refine((v) => !Number.isNaN(new Date(v).getTime()), 'That date could not be understood.');
+  .refine(isPlausibleDate, 'That date could not be understood — use a real date between 2000 and 2100.');
 
 /**
  * An optional date in a query string (`?from=`, `?dueBefore=`). Blank means
@@ -131,6 +155,6 @@ export const optionalQueryDate = z
   .string()
   .optional()
   .transform((v) => (v?.trim() ? v.trim() : undefined))
-  .refine((v) => v === undefined || !Number.isNaN(new Date(v).getTime()), {
+  .refine((v) => v === undefined || isPlausibleDate(v), {
     message: 'Enter a valid date (YYYY-MM-DD).',
   });

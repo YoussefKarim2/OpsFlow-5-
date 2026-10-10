@@ -25,6 +25,12 @@ import {
   normalisePoNumber, assertValidOrderDates, assertValidPercentage, assertValidQuantity,
 } from '../services/rules.js';
 
+/**
+ * A query-string value that is a single string, or nothing. `?search=a&search=b`
+ * arrives as an array, and `.trim()` on an array was a 500 for a typo in a URL.
+ */
+const queryText = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+
 export const ordersRouter = Router();
 ordersRouter.use(authenticate);
 
@@ -38,15 +44,15 @@ ordersRouter.get('/', requirePermission('order:read'), asyncHandler(async (req, 
 
   const { data, total } = await listOrders(
     {
-      search: req.query.search as string,
-      clientId: req.query.clientId as string,
-      coordinatorId: req.query.coordinatorId as string,
-      season: req.query.season as string,
-      status: req.query.status as string,
-      stage: req.query.stage as string,
-      factoryId: req.query.factoryId as string,
-      shippingMethod: req.query.shippingMethod as string,
-      priority: req.query.priority as string,
+      search: queryText(req.query.search),
+      clientId: queryText(req.query.clientId),
+      coordinatorId: queryText(req.query.coordinatorId),
+      season: queryText(req.query.season),
+      status: queryText(req.query.status),
+      stage: queryText(req.query.stage),
+      factoryId: queryText(req.query.factoryId),
+      shippingMethod: queryText(req.query.shippingMethod),
+      priority: queryText(req.query.priority),
       dueBefore,
       dueAfter,
       includeCancelled: req.query.includeCancelled === 'true',
@@ -59,7 +65,7 @@ ordersRouter.get('/', requirePermission('order:read'), asyncHandler(async (req, 
 
 /** Global search — the brief's section 37. Matches PO, name, style, client, coordinator, factory, external ref. */
 ordersRouter.get('/search', requirePermission('order:read'), asyncHandler(async (req, res) => {
-  const q = (req.query.q as string)?.trim();
+  const q = queryText(req.query.q)?.trim();
   if (!q || q.length < 2) return res.json({ data: [] });
 
   const orders = await prisma.order.findMany({

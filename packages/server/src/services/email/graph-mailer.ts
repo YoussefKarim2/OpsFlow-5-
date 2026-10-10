@@ -92,6 +92,8 @@ export async function getAccessToken(fetcher: Fetcher = fetch): Promise<string> 
   });
 
   const res = await fetcher(url, {
+    // A hung connection held the whole email queue for minutes; give up and retry.
+    signal: AbortSignal.timeout(30_000),
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
@@ -190,6 +192,8 @@ export async function sendMail(
   };
 
   const res = await fetcher(url, {
+    // A hung connection held the whole email queue for minutes; give up and retry.
+    signal: AbortSignal.timeout(30_000),
     method: 'POST',
     headers: {
       Authorization: `Bearer ${token}`,

@@ -41,7 +41,13 @@ const ORDER_INCLUDE = {
   notes: true,
   stages: true,
   tasks: {
-    include: { assignee: true, completedBy: true, _count: { select: { comments: true, attachments: true } } },
+    // Only what a task row shows. The full user rows, password hash included,
+    // were 40% of every task's payload on endpoints that load every order.
+    include: {
+      assignee: { select: { id: true, name: true, email: true } },
+      completedBy: { select: { id: true, name: true, email: true } },
+      _count: { select: { comments: true, attachments: true } },
+    },
     orderBy: [{ sequence: 'asc' }, { createdAt: 'asc' }],
   },
   // The material graph is selected, not included wholesale: a BOM line needs

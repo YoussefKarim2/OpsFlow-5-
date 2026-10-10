@@ -67,6 +67,9 @@ export function decode(value: unknown): unknown {
   return value;
 }
 
+/** Tables the in-app dump does not carry. See createBackup. */
+export const BACKUP_EXCLUDED_TABLES: readonly string[] = ['stored_files'];
+
 /** Every table in the public schema, alphabetically so two dumps are comparable. */
 export async function listTables(): Promise<string[]> {
   const rows = await prisma.$queryRawUnsafe<Array<{ table_name: string }>>(
@@ -89,7 +92,13 @@ export async function createBackup(): Promise<{
   buffer: Buffer;
   meta: Omit<BackupPayload, 'tables'>;
 }> {
-  const tables = await listTables();
+  // Uploaded files are left out. Their bytes, base64-encoded into one JSON
+  // string, made the dump about twelve times their size in memory — 823 MB for
+  // 59 MB of files — on a container that restarts when it runs out, and the
+  // dump runs at every start, so it could crash in a loop. Files are in the
+  // nightly pg_dump (docs/DISASTER-RECOVERY.md); restore leaves this table as
+  // it is, so restoring this dump cannot remove a file either.
+  const tables = (await listTables()).filter((t) => !BACKUP_EXCLUDED_TABLES.includes(t));
   const data: Record<string, unknown[]> = {};
   const counts: Record<string, number> = {};
 
@@ -117,7 +126,9 @@ export async function createBackup(): Promise<{
   };
 
   return {
-    buffer: gzipSync(Buffer.from(JSON.stringify(payload)), { level: 9 }),
+    // Level 6: nearly the same size as 9 for text like this, at a fraction of
+    // the time spent blocking every other request on the main thread.
+    buffer: gzipSync(Buffer.from(JSON.stringify(payload)), { level: 6 }),
     meta: { formatVersion: 1, takenAt: payload.takenAt, counts },
   };
 }

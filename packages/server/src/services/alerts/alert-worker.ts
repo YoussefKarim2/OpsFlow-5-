@@ -122,13 +122,18 @@ export async function runAlertSweep(): Promise<{ checked: number; announced: num
 }
 
 let timer: NodeJS.Timeout | null = null;
+let sweeping = false;
 
 export function startAlertWorker(): void {
   if (timer) return;
   timer = setInterval(() => {
+    // One sweep at a time: a slow sweep on a big order book must not have the
+    // next one start on top of it and double the memory and the announcements.
+    if (sweeping) return;
+    sweeping = true;
     void runAlertSweep().catch((err: unknown) => {
       console.error('ALERT SWEEP FAILED (will retry next interval):', err);
-    });
+    }).finally(() => { sweeping = false; });
   }, config.ALERT_SWEEP_INTERVAL_SECONDS * 1000);
   // Never hold the process open for the sake of the sweep timer.
   timer.unref();
