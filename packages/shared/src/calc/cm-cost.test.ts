@@ -201,3 +201,40 @@ describe('the Total follows C.M', () => {
     assert.equal(r.totalCostUsd, 400);
   });
 });
+
+describe('filled in from the production records', () => {
+  test('blank days in line are taken from the days sewing was recorded', () => {
+    const r = computeCosting(base({ lineMachineQty: 12, daysInLine: null, sewingDays: 6 }));
+    assert.equal(r.daysInLineUsed, 6);
+    assert.equal(r.daysInLineSource, 'production');
+    assert.equal(r.machineDaysUsed, 72, '12 machines × 6 sewing days');
+    assert.equal(r.daysInLine, null, 'the typed field itself stays blank');
+  });
+
+  test('typed days in line always win over the production records', () => {
+    const r = computeCosting(base({ lineMachineQty: 12, daysInLine: 11, sewingDays: 6 }));
+    assert.equal(r.machineDaysUsed, 132);
+    assert.equal(r.daysInLineSource, 'typed');
+  });
+
+  test('no typed days and no sewing leaves machine-days waiting, and says what to do', () => {
+    const r = computeCosting(base({ lineMachineQty: 12, daysInLine: null, sewingDays: 0 }));
+    assert.equal(r.machineDaysUsed, null);
+    assert.match(r.waiting.machineDaysUsed ?? '', /days in line/);
+  });
+
+  test('the sewing days travel in the source, so the sheet in the browser computes the same', () => {
+    const r = computeCosting(base({ sewingDays: 4, cutQtySource: 'recorded' }));
+    assert.equal(r.source.sewingDays, 4);
+    assert.equal(r.source.cutQtySource, 'recorded');
+  });
+
+  test('nothing counted at end-line leaves C.M waiting, not $0', () => {
+    const r = computeCosting(base({
+      dailyCostEgp: 100, machineCount: 10, lineMachineQty: 2, daysInLine: 5, firstDegreeQty: null,
+    }));
+    assert.equal(r.cmCostUsd, null);
+    assert.match(r.waiting.cmCostUsd ?? '', /1st degree/);
+    assert.equal(r.totalCostUsd, null, 'and no total of $0 is shown either');
+  });
+});

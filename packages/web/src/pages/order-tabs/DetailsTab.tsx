@@ -75,7 +75,10 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
     blockPattern: order.blockPattern ?? '',
     fabric: order.fabric ?? '',
     shippingMethod: order.shippingMethod ?? '',
-    pricePerPieceUsd: order.pricePerPieceUsd ?? 0,
+    // Blank stays blank. Defaulting to 0 saved a price of $0 on every order
+    // whose details were saved before the price was known, and the costing then
+    // reported the whole cost as a loss.
+    pricePerPieceUsd: order.pricePerPieceUsd == null ? '' : String(order.pricePerPieceUsd),
     samMinutes: order.samMinutes == null ? '' : String(order.samMinutes),
     cutPercentage: order.cutPercentage,
     accessoryPercentage: order.accessoryPercentage,
@@ -125,7 +128,7 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
     mutationFn: () =>
       api.orders.update(order.id, {
         ...form,
-        pricePerPieceUsd: Number(form.pricePerPieceUsd),
+        pricePerPieceUsd: form.pricePerPieceUsd === '' ? null : Number(form.pricePerPieceUsd),
         samMinutes: form.samMinutes === '' ? null : Number(form.samMinutes),
         cutPercentage: Number(form.cutPercentage),
         accessoryPercentage: Number(form.accessoryPercentage),
@@ -250,8 +253,8 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
             <Picker label="Outside work manager" editing={editing} value={form.outsideWorkManagerId}
               options={(lookups?.users ?? []).map((u) => ({ id: u.id, name: u.name }))}
               onChange={(v) => setForm({ ...form, outsideWorkManagerId: v })} display={order.outsideWorkManager?.name} />
-            <Edit label="Price in US$" editing={editing} type="number" step="0.01" value={String(form.pricePerPieceUsd)}
-              onChange={(v) => setForm({ ...form, pricePerPieceUsd: Number(v) })}
+            <Edit label="Price in US$" editing={editing} type="number" step="0.01" value={form.pricePerPieceUsd}
+              onChange={(v) => setForm({ ...form, pricePerPieceUsd: v })}
               display={order.pricePerPieceUsd != null ? `$${order.pricePerPieceUsd.toFixed(2)}` : null} />
             <Edit label="SAM (minutes per garment)" editing={editing} type="number" step="0.001" value={form.samMinutes}
               onChange={(v) => setForm({ ...form, samMinutes: v })}

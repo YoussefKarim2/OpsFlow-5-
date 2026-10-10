@@ -131,7 +131,7 @@ export function CostField({
 
 /** A figure stored in its own column rather than typed over a calculation. */
 export function StoredField({
-  label, editing, value, onChange, hint, invalid, type = 'decimal',
+  label, editing, value, onChange, hint, invalid, type = 'decimal', filledFrom,
 }: {
   label: string;
   editing: boolean;
@@ -141,6 +141,8 @@ export function StoredField({
   /** Why what was typed cannot be stored, when it cannot. Shown under the field. */
   invalid?: string;
   type?: 'decimal' | 'date';
+  /** Shown in place of the dash when the box is blank but the figure is known from elsewhere. */
+  filledFrom?: string;
 }) {
   return (
     <div>
@@ -165,7 +167,9 @@ export function StoredField({
           {hint && <p className="mt-1 text-2xs text-ink-500">{hint}</p>}
         </>
       ) : (
-        <p className="text-sm text-ink-800">{value === '' ? '—' : value}</p>
+        <p className="text-sm text-ink-800">
+          {value !== '' ? value : filledFrom ? <span className="italic text-ink-500">{filledFrom}</span> : '—'}
+        </p>
       )}
     </div>
   );

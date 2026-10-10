@@ -419,7 +419,7 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
   );
 
   /** A field backed by its own stored column. */
-  const plain = (label: string, key: keyof Stored, hint?: string) => {
+  const plain = (label: string, key: keyof Stored, hint?: string, filledFrom?: string) => {
     const whole = (WHOLE_FIELDS as readonly string[]).includes(key);
     return (
       <StoredField
@@ -427,6 +427,7 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
         editing={editing}
         value={stored[key]}
         hint={hint}
+        filledFrom={filledFrom}
         invalid={whole && asWhole(stored[key]) === undefined
           ? 'A whole number — this one is not saved until it is'
           : undefined}
@@ -593,7 +594,13 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
           {plain('Daily Cost', 'dailyCostEgp', 'EGP per day')}
           {plain('All F. Machines', 'machineCount')}
           {plain('Line Machines Qty', 'lineMachineQty')}
-          {plain('Days in line', 'daysInLine')}
+          {plain('Days in line', 'daysInLine',
+            stored.daysInLine.trim() === '' && live.daysInLineSource === 'production'
+              ? `Blank, so the ${live.daysInLineUsed} day${live.daysInLineUsed === 1 ? '' : 's'} with sewing recorded are used`
+              : undefined,
+            live.daysInLineSource === 'production'
+              ? `${live.daysInLineUsed} — days with sewing recorded`
+              : undefined)}
         </div>
       </Card>
 
@@ -619,7 +626,7 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
           {field('Productivity rate', 'productivityRate', live.productivityRate, 'number', {
             hint: 'cut qty ÷ work days',
           })}
-          {field('Cutted Qty', 'cutQty', live.source.cutQty, 'number', { from: 'cut ledger' })}
+          {field('Cutted Qty', 'cutQty', live.source.cutQty, 'number', { from: live.source.cutQtySource === 'recorded' ? 'cutting records' : 'cut order' })}
           {field('1st Degree Qty', 'firstDegreeQty', live.source.firstDegreeQty, 'number', { from: 'out-line' })}
           {field('2nd Degree Qty', 'secondDegreeQty', live.source.secondDegreeQty, 'number', { from: '2nd-degree' })}
           {field('Diff. Percentage', 'diffPct', live.diffPct, 'percent', { hint: 'shipped ÷ ordered − 100%' })}

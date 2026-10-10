@@ -79,6 +79,14 @@ export interface CostingInput {
   machineDaysUsed: number | null;
   /** Calendar days the order occupied a line. 11 in the source workbook. */
   daysInLine: number | null;
+  /**
+   * Days with sewing output recorded against the order — the production
+   * records' own answer to "how many days was it on the line". Used for the
+   * machine-days only when nobody has typed the days in line.
+   */
+  sewingDays?: number | null;
+  /** Where the cut quantity came from: what the cutting floor recorded, or the cut order. */
+  cutQtySource?: 'recorded' | 'cut order' | null;
   /** Machines on this order's line. The sheet's "Line Machines Qty". */
   lineMachineQty?: number | null;
   /** Whether a costing record has been saved for this order. */
@@ -122,6 +130,8 @@ export interface CostingInput {
 export interface CostingSource {
   orderQty: number;
   cutQty: number;
+  cutQtySource: 'recorded' | 'cut order' | null;
+  sewingDays: number | null;
   shippedQty: number | null;
   firstDegreeQty: number | null;
   secondDegreeQty: number | null;
@@ -192,6 +202,9 @@ export interface CostingResult {
   lineMachineQty: number | null;
   /** Calendar days the order occupied a line, as recorded. */
   daysInLine: number | null;
+  /** The days in line the machine-days were worked out from: typed, or the sewing days. */
+  daysInLineUsed: number | null;
+  daysInLineSource: 'typed' | 'production' | null;
 
   // Cost roll-up
   lines: CostLineResult[];
@@ -216,7 +229,10 @@ export interface CostingResult {
   profitPerUnitUsd: number | null;
   profitPct: number | null;
   totalProfitUsd: number | null;
-  /** `=IF(D26<=0, D24*1.2, "Perfect")` — the price that would restore a 20% margin. */
+  /**
+   * `=IF(D26<=0, D24*1.2, "Perfect")` — cost plus a 20% mark-up, the sheet's
+   * own rule. A 20% mark-up is a 16.7% margin on the new price, not 20%.
+   */
   targetPriceUsd: number | null;
   isProfitable: boolean | null;
 }
@@ -225,7 +241,7 @@ export function computeCosting(input: CostingInput): CostingResult {
   const {
     orderQty: orderQtyIn, cutQty: cutQtyIn, shippedQty: shippedQtyIn,
     dollarRate, dailyCostEgp, machineCount,
-    machineDaysUsed: machineDaysUsedIn, daysInLine,
+    machineDaysUsed: machineDaysUsedIn, daysInLine, sewingDays = null,
     sellPriceUsd: sellPriceIn, lines,
     lineMachineQty = null, firstDegreeQty: firstDegreeIn = null,
     secondDegreeQty: secondDegreeIn = null, overrides,
@@ -279,10 +295,16 @@ export function computeCosting(input: CostingInput): CostingResult {
    * line and days were never recorded — keeps the figure that was stored, and
    * typing over the field still wins, as it does everywhere on this sheet.
    */
+  // Days in line: what was typed, else the days the production records show
+  // sewing on this order. A typed figure always wins; the records only fill
+  // the gap, so nobody has to count days the application already counted.
+  const daysInLineUsed = daysInLine ?? (sewingDays != null && sewingDays > 0 ? sewingDays : null);
+  const daysInLineSource: CostingResult['daysInLineSource'] =
+    daysInLine != null ? 'typed' : daysInLineUsed != null ? 'production' : null;
   const machineDaysUsed = pick(
     'machineDaysUsed',
-    lineMachineQty != null && daysInLine != null
-      ? lineMachineQty * daysInLine
+    lineMachineQty != null && daysInLineUsed != null
+      ? lineMachineQty * daysInLineUsed
       : machineDaysUsedIn,
   );
 
@@ -460,7 +482,8 @@ export function computeCosting(input: CostingInput): CostingResult {
       : firstDegreeQty == null ? 'Waiting for the 1st degree quantity'
       : noRate ? `Waiting for ${noRate}` : null);
   needs('machineDaysUsed', machineDaysUsed,
-    'Waiting for the line machines and days in line');
+    lineMachineQty == null ? 'Waiting for the line machines'
+      : 'Waiting for the days in line — type them, or record sewing on the Production step');
   needs('fabricCostUsd', fabricCostUsd,
     fabricLines.length === 0 ? 'No fabric on the bill of materials yet'
       : 'Waiting for a unit price on the fabric rows');
@@ -495,6 +518,7 @@ export function computeCosting(input: CostingInput): CostingResult {
   return {
     source: {
       orderQty: orderQtyIn, cutQty: cutQtyIn, shippedQty: shippedQtyIn,
+      cutQtySource: input.cutQtySource ?? null, sewingDays,
       firstDegreeQty: firstDegreeIn, secondDegreeQty: secondDegreeIn,
       sellPriceUsd: sellPriceIn, externalOpCostUsd,
       customer: input.customer ?? null,
@@ -521,7 +545,7 @@ export function computeCosting(input: CostingInput): CostingResult {
     diffPct,
     shippedVsOrderedPct: shippedShare,
     machineCostEgpPerDay, workDays, productivityRate,
-    lineMachineQty, daysInLine,
+    lineMachineQty, daysInLine, daysInLineUsed, daysInLineSource,
     lines: linesOut, groups,
     fabricCostUsd, accessoryCostUsd, externalCostUsd,
     sublimationCostUsd: resolvedSublimation,

@@ -555,6 +555,10 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
   // "start the costing" would leave a screen of blanks in front of facts the
   // application already holds.
   const cr = order.costing;
+  const recordedCut = recordedCutQty(order.cuttingRecords);
+  const costingCut: { qty: number; source: 'recorded' | 'cut order' } = recordedCut != null && recordedCut > 0
+    ? { qty: recordedCut, source: 'recorded' }
+    : { qty: totals[QtyLedger.CUT] ?? 0, source: 'cut order' };
   const costing = computeCosting({
     hasRecord: cr != null,
     costingDate: cr?.costingDate?.toISOString() ?? null,
@@ -568,7 +572,15 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     // key that stopped being a cell cannot keep overriding one.
     overrides: sanitiseOverrides(cr?.overrides),
     orderQty: totals[QtyLedger.ORDER] ?? 0,
-    cutQty: totals[QtyLedger.CUT] ?? 0,
+    // Pieces actually cut, as the cutting floor recorded them; the cut order
+    // (the plan, with its allowance) only until a count is recorded. The
+    // productivity rate is pieces cut per work day, and an actual costing
+    // should divide by what was cut, not by what was meant to be.
+    cutQty: costingCut.qty,
+    cutQtySource: costingCut.source,
+    sewingDays: new Set(order.productionRecords
+      .filter((p) => p.operation === 'SEWING')
+      .map((p) => p.date.toISOString().slice(0, 10))).size,
     shippedQty: shippedQty > 0 ? shippedQty : null,
     dollarRate: dec(cr?.dollarRate),
     dailyCostEgp: dec(cr?.dailyCostEgp),
@@ -580,9 +592,17 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     // facts: out-line is what passed end-line inspection, and second degree is
     // what was graded B. Neither is a subtraction — they are counted on the
     // floor — so neither is invented here.
-    firstDegreeQty: totals[QtyLedger.OUT_LINE] ?? null,
-    secondDegreeQty: totals[QtyLedger.SECOND_DEGREE] ?? null,
-    sellPriceUsd: dec(order.pricePerPieceUsd),
+    //
+    // A ledger with nothing on it totals 0, which is not the same as "0 passed
+    // inspection": nobody has counted yet. Charged against 0 pieces, the
+    // cut-and-make came out as $0 and the total cost with it, on an order that
+    // had cost plenty. Nothing counted is null, and the sheet says so.
+    firstDegreeQty: (totals[QtyLedger.OUT_LINE] ?? 0) > 0 ? totals[QtyLedger.OUT_LINE] : null,
+    secondDegreeQty: (totals[QtyLedger.SECOND_DEGREE] ?? 0) > 0 ? totals[QtyLedger.SECOND_DEGREE] : null,
+    // A selling price of $0 is not a price: it is what the Details form used to
+    // save when the box was left empty. Costed as a price it made every such
+    // order a total loss; read as "not entered", the sheet asks for the price.
+    sellPriceUsd: (dec(order.pricePerPieceUsd) ?? 0) > 0 ? dec(order.pricePerPieceUsd) : null,
     externalOpCostUsd: dec(cr?.externalOpCostUsd),
     sublimationCostUsd: dec(cr?.sublimationCostUsd),
     embroideryCostUsd: dec(cr?.embroideryCostUsd),
