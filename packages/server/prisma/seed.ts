@@ -58,6 +58,8 @@ async function main(): Promise<void> {
       create: {
         email: u.email, name: u.name, passwordHash,
         roleId: role.id, department: u.department as never,
+        // The seed password is printed in the README. Nobody may keep using it.
+        mustChangePassword: true,
       },
       update: { name: u.name, roleId: role.id, department: u.department as never },
     });

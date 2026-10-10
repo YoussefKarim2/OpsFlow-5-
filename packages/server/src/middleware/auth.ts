@@ -57,7 +57,7 @@ export function verifySessionToken(token: string): string | null {
 }
 
 /** The user id and issue time (seconds) of a session token, or null. */
-function readSessionToken(token: string): { userId: string; issuedAt: number | null } | null {
+export function readSessionToken(token: string): { userId: string; issuedAt: number | null } | null {
   try {
     const payload = jwt.verify(token, config.JWT_SECRET) as Partial<JwtPayload> & { typ?: string; iat?: number };
     if (payload.typ === 'file') return null;

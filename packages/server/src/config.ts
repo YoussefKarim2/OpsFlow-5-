@@ -45,7 +45,10 @@ const schema = z.object({
    * would lock every employee out of sign-in for fifteen minutes. Set it to the
    * number of proxies between the client and this process.
    */
-  TRUST_PROXY: z.string().default('false'),
+  // Railway always puts one proxy in front of the service and sets
+  // RAILWAY_ENVIRONMENT_NAME, so an unset value there means one hop — the safe
+  // reading. Anywhere else, unset still means none. Set explicitly to override.
+  TRUST_PROXY: z.string().default(process.env.RAILWAY_ENVIRONMENT_NAME || process.env.RAILWAY_ENVIRONMENT ? '1' : 'false'),
   /** Failed sign-ins for one account before it is temporarily locked. */
   LOGIN_MAX_ATTEMPTS: z.coerce.number().int().min(3).default(8),
   LOGIN_LOCKOUT_MINUTES: z.coerce.number().int().min(1).default(15),
@@ -93,7 +96,10 @@ const schema = z.object({
   APP_BASE_URL: z.string().url().optional().or(z.literal('').transform(() => undefined)),
 
   /** How often the queue retries messages that failed or were held back. */
-  EMAIL_RETRY_INTERVAL_SECONDS: z.coerce.number().int().min(10).default(60),
+  // Every interval has a ceiling: past Node's timer limit (about 24.8 days)
+  // setInterval fires every millisecond instead, a full-book loop that takes
+  // the server down.
+  EMAIL_RETRY_INTERVAL_SECONDS: z.coerce.number().int().min(10).max(86_400).default(60),
 
   /**
    * How often the alert sweep re-checks every open order for deadlines,
@@ -111,7 +117,7 @@ const schema = z.object({
   // with no mounted volume both vanish on redeploy, and keeping them separate
   // makes it obvious which one needs a volume.
   BACKUP_ENABLED: envBool(true),
-  BACKUP_INTERVAL_HOURS: z.coerce.number().min(0.25).default(12),
+  BACKUP_INTERVAL_HOURS: z.coerce.number().min(0.25).max(24 * 7).default(12),
   BACKUP_DIR: z.string().default('./.backups'),
   /** How many backups to keep on disk. Oldest beyond this are deleted. */
   BACKUP_RETAIN: z.coerce.number().int().min(1).default(14),
@@ -134,7 +140,7 @@ const schema = z.object({
   /** Graph refuses inline attachments past roughly 4 MB; stay under it. */
   BACKUP_EMAIL_MAX_BYTES: z.coerce.number().int().min(1).default(3_500_000),
 
-  ALERT_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(60).default(3600),
+  ALERT_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(60).max(2_000_000).default(3600),
 
   /**
    * Whether the person who made a change is also emailed about it.
@@ -210,6 +216,17 @@ if (!parsed.success) {
 }
 
 export const config = parsed.data;
+
+// The example secret is long enough to pass validation, so copying .env.example
+// to production would let anyone who has read the repository sign a session as
+// any user. Not refused at boot — that would take a running site down on the
+// next deploy — but said as loudly as the log allows, every start.
+if (config.NODE_ENV === 'production' && /change-me/i.test(config.JWT_SECRET)) {
+  console.error(
+    'SECURITY: JWT_SECRET is the placeholder from .env.example. Anyone can forge a session. ' +
+    'Set a random value (openssl rand -hex 32) in the deployment variables now; everyone will be signed out once.',
+  );
+}
 export const isProd = config.NODE_ENV === 'production';
 
 /**

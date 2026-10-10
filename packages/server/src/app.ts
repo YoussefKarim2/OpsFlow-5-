@@ -122,11 +122,12 @@ export function createApp() {
   app.get('/api/health/ready', (_req, res) => {
     void prisma.$queryRaw`SELECT 1`.then(
       () => res.json({ ok: true, database: 'up' }),
-      (err: unknown) => res.status(503).json({
-        ok: false,
-        database: 'down',
-        error: err instanceof Error ? err.message : 'unreachable',
-      }),
+      (err: unknown) => {
+        // The detail goes to the log; the response is public and the message
+        // can name the database host.
+        console.error('READINESS: database unreachable:', err instanceof Error ? err.message : err);
+        res.status(503).json({ ok: false, database: 'down' });
+      },
     );
   });
 

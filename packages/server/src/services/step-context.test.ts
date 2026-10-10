@@ -309,3 +309,21 @@ describe('instruction text cannot carry script to the next person who reads it',
     assert.equal(sanitiseHtml('<p onclick="steal()" style="x">hi</p>'), '<p>hi</p>');
   });
 });
+
+describe('sanitising cannot be undone by nesting', () => {
+  test('a tag rebuilt by removing an inner one is removed too', () => {
+    for (const evil of [
+      '<<x>img src=x onerror=alert(1)>',
+      '<<x>meta http-equiv="refresh" content="0;url=https://evil.example">',
+      '<<x>a href="https://evil.example">click</a>',
+      '<scr<script>ipt>alert(1)</script>',
+    ]) {
+      const out = sanitiseHtml(evil);
+      assert.doesNotMatch(out, /<(img|meta|a|script)\b/i, `${evil} → ${out}`);
+    }
+  });
+
+  test('the allowed formatting survives', () => {
+    assert.equal(sanitiseHtml('<p>Cut <strong>on</strong> the fold</p><ul><li>one</li></ul>'), '<p>Cut <strong>on</strong> the fold</p><ul><li>one</li></ul>');
+  });
+});

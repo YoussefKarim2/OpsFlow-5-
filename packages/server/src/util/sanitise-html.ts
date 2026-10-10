@@ -17,6 +17,20 @@
 const ALLOWED_TAGS = /^(p|br|b|strong|i|em|u|ul|ol|li|h3|h4|blockquote)$/i;
 
 export function sanitiseHtml(input: string): string {
+  // Repeated until nothing changes: removing an inner tag can join the text
+  // around it into a new one — `<<x>img onerror=…>` becomes `<img onerror=…>`
+  // after a single pass. Then any `<` that is not one of the bare allowed tags
+  // this produces is escaped, so no fragment can still open a tag.
+  let out = input;
+  for (let i = 0; i < 20; i++) {
+    const next = sanitiseOnce(out);
+    if (next === out) break;
+    out = next;
+  }
+  return out.replace(/<(?!\/?(?:p|br|b|strong|i|em|u|ul|ol|li|h3|h4|blockquote)>)/gi, '&lt;');
+}
+
+function sanitiseOnce(input: string): string {
   return input
     // Elements whose *content* is code rather than text: dropping the tag alone
     // would leave the script body on the page as visible text at best.

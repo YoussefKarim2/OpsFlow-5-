@@ -76,16 +76,25 @@ authRouter.post('/login', loginLimiter, asyncHandler(async (req, res) => {
       // is what makes a distributed guessing run visible: without it an
       // attacker gets a fresh allowance every lockout window forever, and an
       // administrator looking at the account sees a count of zero.
-      const { attempts, locked, lockMinutes } = computeLockout(
-        user.failedLoginCount, config.LOGIN_MAX_ATTEMPTS, config.LOGIN_LOCKOUT_MINUTES,
-      );
-      await prisma.user.update({
+      //
+      // Incremented in the database, not read-add-write: twenty guesses sent at
+      // once all read the same count and recorded one failure between them, so
+      // a parallel guessing run never reached the lock. Each request now gets
+      // its own count back and the one that crosses the threshold locks.
+      const counted = await prisma.user.update({
         where: { id: user.id },
-        data: {
-          failedLoginCount: attempts,
-          lockedUntil: locked ? new Date(Date.now() + lockMinutes * 60_000) : null,
-        },
+        data: { failedLoginCount: { increment: 1 } },
+        select: { failedLoginCount: true },
       });
+      const { attempts, locked, lockMinutes } = computeLockout(
+        counted.failedLoginCount - 1, config.LOGIN_MAX_ATTEMPTS, config.LOGIN_LOCKOUT_MINUTES,
+      );
+      if (locked) {
+        await prisma.user.update({
+          where: { id: user.id },
+          data: { lockedUntil: new Date(Date.now() + lockMinutes * 60_000) },
+        });
+      }
       await logActivity({
         actorId: user.id, actorName: user.name,
         action: locked ? 'LOGIN_LOCKED' : 'LOGIN_FAILED',

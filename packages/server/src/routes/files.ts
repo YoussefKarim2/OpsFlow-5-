@@ -14,7 +14,7 @@ import { storage } from '../services/storage/index.js';
 import { asyncHandler } from '../util/async-handler.js';
 import { ForbiddenError, GoneError, NotFoundError, UnauthorizedError } from '../errors.js';
 import { verifyFileToken } from '../services/file-links.js';
-import { verifySessionToken } from '../middleware/auth.js';
+import { readSessionToken } from '../middleware/auth.js';
 import { contentDisposition } from '../util/upload-name.js';
 
 export const filesRouter = Router();
@@ -23,9 +23,9 @@ filesRouter.get('/:key', asyncHandler(async (req, res) => {
   const key = decodeURIComponent(req.params.key);
 
   const header = req.headers.authorization;
-  const bearer = header?.startsWith('Bearer ') ? verifySessionToken(header.slice(7)) : null;
+  const session = header?.startsWith('Bearer ') ? readSessionToken(header.slice(7)) : null;
   const signed = typeof req.query.t === 'string' ? verifyFileToken(req.query.t, key) : null;
-  const userId = bearer ?? signed;
+  const userId = session?.userId ?? signed;
   if (!userId) throw new UnauthorizedError();
 
   /**
@@ -45,9 +45,17 @@ filesRouter.get('/:key', asyncHandler(async (req, res) => {
    */
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { active: true, role: { select: { permissions: true } } },
+    select: { active: true, mustChangePassword: true, passwordChangedAt: true, role: { select: { permissions: true } } },
   });
   if (!user?.active) throw new UnauthorizedError();
+  // The checks the authenticate middleware makes on every other route: a
+  // session opened before the last password change is over, and an account
+  // that must choose a new password can do nothing else first.
+  if (session && session.issuedAt != null && user.passwordChangedAt
+    && session.issuedAt < Math.floor(user.passwordChangedAt.getTime() / 1000)) {
+    throw new UnauthorizedError('Your password was changed. Please sign in again.');
+  }
+  if (user.mustChangePassword) throw new UnauthorizedError('Choose a new password before opening documents.');
   if (!user.role?.permissions?.includes('order:read')) {
     throw new ForbiddenError('You do not have access to order documents.');
   }

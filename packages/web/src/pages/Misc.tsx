@@ -69,6 +69,10 @@ export function LoginPage() {
           </form>
         </Card>
 
+        {/* Local development only. Published on the live sign-in page, this
+            block handed anyone on the internet six real account names and the
+            password the seed gave them, a super administrator among them. */}
+        {import.meta.env.DEV && (
         <div className="mt-4 rounded-md border border-ink-200 bg-white/70 px-3 py-2.5">
           <p className="text-2xs font-semibold uppercase tracking-wider text-ink-500">Demo accounts</p>
           <ul className="mt-1.5 space-y-0.5 text-2xs text-ink-600">
@@ -84,6 +88,7 @@ export function LoginPage() {
             The super-administrator accounts must set a new password on first sign-in.
           </p>
         </div>
+        )}
       </div>
     </div>
   );
