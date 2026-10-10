@@ -223,7 +223,9 @@ export type OrderStatus = (typeof OrderStatus)[keyof typeof OrderStatus];
 
 export const ORDER_STATUS_LABEL: Record<OrderStatus, string> = {
   DRAFT: 'Draft',
-  WAITING_APPROVAL: 'Waiting for Approval',
+  // Retired: the factory has no customer approvals. An order still carrying
+  // this stored status is, in every other respect, a draft.
+  WAITING_APPROVAL: 'Draft',
   READY_FOR_PRODUCTION: 'Ready for Production',
   IN_PRODUCTION: 'In Production',
   PRODUCTION_DELAYED: 'Production Delayed',
