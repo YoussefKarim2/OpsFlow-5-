@@ -31,6 +31,7 @@ import { notificationPreferencesRouter } from './routes/notification-preferences
 import { referenceRouter } from './routes/reference.js';
 import { stepsRouter } from './routes/steps.js';
 import { changesRouter } from './routes/changes.js';
+import { assistantRouter } from './routes/assistant.js';
 import { flushChanges } from './services/change-service.js';
 
 /**
@@ -164,6 +165,8 @@ export function createApp() {
   app.use('/api/orders/:orderId/laying-import', layingImportRouter);
   app.use('/api/notification-preferences', notificationPreferencesRouter);
   app.use('/api/changes', changesRouter);
+  // Ask OpsFlow: read-only questions about orders (off until an AI key is set).
+  app.use('/api/assistant', assistantRouter);
   app.use('/api', referenceRouter);
 
   if (hasWebBuild) {

@@ -12,6 +12,7 @@ import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { Avatar, clsx, useDebounced } from './ui';
 import { NotificationBell } from './NotificationBell';
+import { AskOpsFlowButton } from './AskOpsFlow';
 
 /**
  * `requires` removes an item the account cannot use, so nobody is offered a
@@ -143,6 +144,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           <GlobalSearch />
 
           <div className="ml-auto flex items-center gap-1">
+            <AskOpsFlowButton />
             <NotificationBell />
           </div>
         </header>
