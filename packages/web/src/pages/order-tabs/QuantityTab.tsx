@@ -10,13 +10,13 @@ import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Wand2, Save } from 'lucide-react';
 import {
-  QtyLedger, LEDGER_LABEL, buildMatrix, computeVariances, fmtNumber,
+  QtyLedger, LEDGER_LABEL, buildMatrix, fmtNumber,
   ledgerTotal, computeCutOrderTotal, computeCuttableQty,
   type OrderDetailDto, type QtyCell, type AxisRef,
 } from '@opsflow/shared';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { Card, CardHeader, Num, Spinner, ErrorNote, clsx } from '../../components/ui';
+import { Card, Spinner, ErrorNote, clsx } from '../../components/ui';
 
 const EDITABLE: string[] = [
   QtyLedger.ORDER, QtyLedger.STOCK, QtyLedger.IN_LINE,
@@ -122,10 +122,6 @@ export function QuantityTab({
     );
 
   const matrix = buildMatrix(withEdits, colors, sizes, ledger as QtyLedger);
-  // The order's shipped figure, which may come from the consignments rather
-  // than this grid. Read from the funnel so both screens say the same thing.
-  const shippedQty = order.funnel.find((f) => f.ledger === QtyLedger.SHIPPED)?.qty;
-  const variances = computeVariances(withEdits, shippedQty);
   const editable = EDITABLE.includes(ledger) && can('order:edit');
   const dirty = Object.keys(edits).length > 0;
 
@@ -394,37 +390,6 @@ export function QuantityTab({
         </div>
       </Card>
 
-      {/* Stage-to-stage variance — the three shortage grids the workbook stored. */}
-      <Card>
-        <CardHeader
-          title="Stage variance"
-          subtitle="Derived from the ledgers above — the workbook stored these as three separate grids"
-        />
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="border-b border-ink-200 bg-ink-50">
-              <tr>
-                <th className="th">Transition</th>
-                <th className="th text-right">From</th>
-                <th className="th text-right">To</th>
-                <th className="th text-right">Variance</th>
-                <th className="th text-right">Yield</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-ink-100">
-              {variances.map((v) => (
-                <tr key={`${v.from}-${v.to}`}>
-                  <td className="td font-medium">{v.label}</td>
-                  <td className="td text-right"><Num value={v.fromQty} /></td>
-                  <td className="td text-right"><Num value={v.toQty} /></td>
-                  <td className="td text-right"><Num value={v.variance} kind="variance" /></td>
-                  <td className="td text-right"><Num value={v.yieldPct} kind="percent" places={1} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
     </div>
   );
 }
