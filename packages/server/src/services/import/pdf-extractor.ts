@@ -32,6 +32,7 @@ import { BadRequestError } from '../../errors.js';
 import type { ExtractionResult } from './extractor.js';
 import { toDate, buildLineItems } from './extractor.js';
 import { detectSizeColumns } from './tabular-extractor.js';
+import { readPoLines, readPoHeader, poLinesToOrder, detectDayFirst, findBoilerplate, type PoTextLine } from './po-lines.js';
 
 /** One positioned run of text, as pdf.js reports it. */
 interface TextItem {
@@ -386,12 +387,34 @@ export async function extractFromPdf(
   // Every line of every page, then one column model for the lot, so a row with
   // an extra leading cell still lines up with the header above it.
   const positioned: PositionedCell[][] = [];
+  const pageTexts: Array<Array<{ text: string; y: number }>> = [];
   for (const page of pages) {
+    const texts: Array<{ text: string; y: number }> = [];
     for (const line of groupIntoRows(page.items)) {
       const cells = rowToPositionedCells(line);
-      if (cells.length > 0) positioned.push(cells);
+      if (cells.length > 0) {
+        positioned.push(cells);
+        texts.push({ text: cells.map((c) => c.text).join(' ').trim(), y: line[0]!.y });
+      }
     }
+    pageTexts.push(texts);
   }
+
+  // ── Purchase-order lines, read by their arithmetic ─────────────────────
+  //
+  // ERP printouts set each item as a block of lines (description with prices,
+  // then item code, then colour and size), repeat their header on every page
+  // and label fields without colons. The table reader below cannot see those;
+  // `po-lines.ts` reads them by what every PO line has — quantity × price =
+  // amount — and is used whenever it finds more of the order than the table.
+  const boilerplate = findBoilerplate(pageTexts);
+  const poText: PoTextLine[] = positioned.map((l) => l.map((c) => ({ text: c.text, x: c.x, end: c.end })));
+  const allDates = positioned.flatMap((l) => l.flatMap((c) => c.text.split(/\s+/)))
+    .filter((t) => /^\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}$/.test(t));
+  const dayFirst = detectDayFirst(allDates);
+  const poLines = readPoLines(poText, boilerplate, dayFirst);
+  const poHeader = readPoHeader(poText, dayFirst);
+  const poOrder = poLines.length > 0 ? poLinesToOrder(poLines) : null;
   // Locate the table(s), then pick the one that reads best. Lines outside a
   // band are prose and are read separately for their label-and-value pairs.
   const bands = findTableBands(positioned);
@@ -721,6 +744,75 @@ export async function extractFromPdf(
     }
   }
 
+  // ── The PO-line reading, where it read more ─────────────────────────────
+  //
+  // Header facts it found by label-and-kind replace the prose guesses above,
+  // which on an ERP printout pick up whatever line sits nearest a table —
+  // a colour and size became the PO number. Its lines replace the matrix only
+  // when they hold more pieces than the table reader found.
+  let poLineItems: ExtractionResult['lineItems'] | null = null;
+  const tableQty = matrices.reduce((a, m) => a + m.computedTotal, 0);
+  if (poOrder && poOrder.totalQty > tableQty) {
+    matrices.length = 0;
+    if (poOrder.matrix) {
+      matrices.push({
+        ledger: 'ORDER', sizes: poOrder.matrix.sizes, rows: poOrder.matrix.rows,
+        sheetTotal: null, computedTotal: poOrder.totalQty,
+      });
+    }
+    poLineItems = poLines.map((l, i) => ({
+      description: [l.description, l.colour, l.size, l.itemCode ? `(${l.itemCode})` : null].filter(Boolean).join(' '),
+      quantity: l.quantity, unit: l.unit, unitPrice: l.unitPrice, rowNumber: i + 1,
+    }));
+    const poName = poOrder.orderName
+      ?? [poHeader.client?.split(/\s+/)[0], poHeader.poNumber ? `PO ${poHeader.poNumber}` : null, `(${poOrder.styles.length} styles)`]
+        .filter(Boolean).join(' ');
+    named.orderName = poName;
+    fields[ImportConcept.ORDER_NAME] = poName;
+    if (poOrder.styleNumber) { named.styleNumber = poOrder.styleNumber; fields[ImportConcept.STYLE] = poOrder.styleNumber; }
+    else { delete named.styleNumber; delete fields[ImportConcept.STYLE]; }
+    if (poOrder.pricePerPiece != null) { named.pricePerPieceUsd = poOrder.pricePerPiece; fields[ImportConcept.UNIT_PRICE] = String(poOrder.pricePerPiece); }
+
+    if (poOrder.pricesVary) {
+      const prices = poLines.map((l) => l.unitPrice);
+      issues.push({
+        level: 'WARNING', field: 'pricePerPieceUsd', sheet: null, cell: null,
+        message: `Prices differ by line, from $${Math.min(...prices).toFixed(2)} to $${Math.max(...prices).toFixed(2)}. `
+          + `The order's price per piece is the average, $${poOrder.pricePerPiece?.toFixed(4)} (total $${poOrder.totalValue.toFixed(2)} ÷ ${poOrder.totalQty} pcs), `
+          + 'so the costing totals are right; each line keeps its own price for the proforma invoice.',
+      });
+    }
+    const unsized = poLines.filter((l) => !l.size).length;
+    if (unsized > 0) {
+      issues.push({
+        level: 'WARNING', field: null, sheet: null, cell: null,
+        message: `${unsized} line${unsized === 1 ? '' : 's'} stated no size, so ${unsized === 1 ? 'it is' : 'they are'} under "One Size". Check them on the review screen.`,
+      });
+    }
+    if (poHeader.printedTotal != null && Math.abs(poHeader.printedTotal - poOrder.totalValue) > 0.01) {
+      issues.push({
+        level: 'WARNING', field: null, sheet: null, cell: null,
+        message: `The lines read add up to $${poOrder.totalValue.toFixed(2)}, but the document's total is $${poHeader.printedTotal.toFixed(2)}. `
+          + 'A line may have been missed — compare the review with the PDF before importing.',
+      });
+    }
+  }
+  if (poLineItems) {
+    // The table reader's "no table found" no longer describes this document.
+    for (let k = issues.length - 1; k >= 0; k--) {
+      if (issues[k]!.message.startsWith('No table of quantities')) issues.splice(k, 1);
+    }
+  }
+  // Header facts read by label and kind are better evidence than prose guesses,
+  // whichever reader supplied the lines.
+  if (poHeader.poNumber) { named.poNumber = poHeader.poNumber; fields[ImportConcept.PO_NUMBER] = poHeader.poNumber; }
+  if (poHeader.orderDate && !named.poDate) { named.poDate = poHeader.orderDate; fields[ImportConcept.ORDER_DATE] = poHeader.orderDate.toISOString().slice(0, 10); }
+  if (poHeader.deliveryDate && !named.requiredDeliveryDate) { named.requiredDeliveryDate = poHeader.deliveryDate; fields[ImportConcept.DELIVERY_DATE] = poHeader.deliveryDate.toISOString().slice(0, 10); }
+  if (poHeader.client && !named.clientName) { named.clientName = poHeader.client; fields[ImportConcept.CLIENT] = poHeader.client; }
+  if (poHeader.shipTo && !named.shippingAddress) { named.shippingAddress = poHeader.shipTo; fields[ImportConcept.DESTINATION] = poHeader.shipTo; }
+  if (poHeader.shippingMethod && !named.shippingMethod) named.shippingMethod = poHeader.shippingMethod;
+  if (poHeader.currency && fields[ImportConcept.CURRENCY] == null) fields[ImportConcept.CURRENCY] = poHeader.currency;
+
   // ── A PO number, always ─────────────────────────────────────────────────
   //
   // It is the order's identity and the import cannot proceed without one, but
@@ -760,7 +852,7 @@ export async function extractFromPdf(
     // the cell. Reporting them missing while the grid has already been read
     // tells the user to fix something that is not broken. The Excel reader
     // makes the same exemption for the same reason.
-    if (isWide && (concept === ImportConcept.SIZE || concept === ImportConcept.COLOR
+    if ((isWide || poLineItems) && (concept === ImportConcept.SIZE || concept === ImportConcept.COLOR
       || concept === ImportConcept.QUANTITY)) continue;
     issues.push({
       // A warning, not an error. The reader not finding a column is a fact
@@ -771,7 +863,7 @@ export async function extractFromPdf(
         + `Assign one on the review screen, or import now and fill it in on the order.`,
     });
   }
-  for (const col of readiness.unconfirmed) {
+  for (const col of poLineItems ? [] : readiness.unconfirmed) {
     // A grid heading is a size, not a mis-read concept column. "XXL" scoring as
     // a colour is the scorer doing its job on a word it was handed out of
     // context, and surfacing it would be noise.
@@ -853,11 +945,12 @@ export async function extractFromPdf(
   return {
     ...emptyResult(issues, pages),
     profileKey: 'pdf',
-    confidence: readiness.ready ? 0.7 : 0.3,
+    confidence: poLineItems ? (poHeader.printedTotal != null && poOrder && Math.abs(poHeader.printedTotal - poOrder.totalValue) <= 0.01 ? 0.85 : 0.7)
+      : readiness.ready ? 0.7 : 0.3,
     mappings,
     fields: named,
     matrices,
-    lineItems: buildLineItems(dataAfterHeader, lineIndex),
+    lineItems: poLineItems ?? buildLineItems(dataAfterHeader, lineIndex),
     issues,
   };
 }
