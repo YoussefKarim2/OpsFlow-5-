@@ -7,6 +7,7 @@ import { startBackupWorker, stopBackupWorker } from './services/backup/backup-wo
 import { installProcessGuards } from './process-guards.js';
 import { reconcileAllStockLedgers } from './services/stock-sync.js';
 import { refreshOrderCache } from './services/order-service.js';
+import { fillAllEmptyMainOrders } from './services/fill-main-order.js';
 
 async function main(): Promise<void> {
   await prisma.$connect();
@@ -32,6 +33,16 @@ async function main(): Promise<void> {
         if (corrected > 0) console.log(`  stock    → reconciled ${corrected} of ${scanned} orders with recorded stock`);
       })
       .catch((err) => console.error('[stock] reconcile failed:', err));
+
+    // Orders imported before their PO's layout could be read have an empty
+    // Main Order and Cut Order although the PO is in the system. Each is read
+    // again with the current importer and filled. Orders that already have
+    // quantities are never touched, so this is a no-op once they are filled.
+    void fillAllEmptyMainOrders()
+      .then(({ checked, filled, pieces }) => {
+        if (checked > 0) console.log(`  orders   → ${filled} of ${checked} empty Main Orders filled from their PO (${pieces} pcs)`);
+      })
+      .catch((err) => console.error('[fill] filling empty Main Orders failed:', err));
 
     // Customer approvals were removed, but an order whose cached status was
     // saved as WAITING_APPROVAL before that keeps showing it until something

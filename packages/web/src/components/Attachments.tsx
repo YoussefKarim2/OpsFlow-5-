@@ -66,7 +66,13 @@ export function AttachmentsPanel({
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: ['attachments', orderId] });
       void qc.invalidateQueries({ queryKey: ['order', orderId] });
-      toast.success(`"${r.data.fileName}" attached`);
+      if (r.filledMainOrder) {
+        void qc.invalidateQueries({ queryKey: ['matrix', orderId] });
+        void qc.invalidateQueries({ queryKey: ['order-steps', orderId] });
+      }
+      toast.success(`"${r.data.fileName}" attached` + (r.filledMainOrder
+        ? `. Main Order filled from it: ${r.filledMainOrder.pieces.toLocaleString()} pcs; Cut Order ${r.filledMainOrder.cut.toLocaleString()}.`
+        : ''));
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : 'Could not attach that file.'),
   });

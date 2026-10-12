@@ -21,6 +21,7 @@ import { Prisma } from '@prisma/client';
 import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines, sanitiseOverrides, visibleDerivedLines } from '@opsflow/shared';
 import { detectFileKind, FILE_KIND_LABEL } from '../services/import/file-kind.js';
 import { extractFromPdf } from '../services/import/pdf-extractor.js';
+import { fillMainOrderFromDocuments } from '../services/fill-main-order.js';
 import { extractTabular } from '../services/import/tabular-extractor.js';
 import { buildProformaDraft } from '../services/import/proforma-target.js';
 import { decodeUploadName } from '../util/upload-name.js';
@@ -291,7 +292,20 @@ stepsRouter.post(
       meta: { documentType: parsed.documentType, sizeBytes: file.size },
     });
 
+    // A PO attached to an order with no Main Order fills it, and the Cut
+    // Order with it. Never fails the upload: the file is attached either way.
+    let filled: { pieces: number; cut: number } | null = null;
+    if (['CUSTOMER_PO', 'CUSTOMER_REFERENCE'].includes(parsed.documentType)) {
+      try {
+        const r = await fillMainOrderFromDocuments(orderId, { id: user.id, name: user.name });
+        if (r.filled) filled = { pieces: r.pieces, cut: r.cut };
+      } catch (err) {
+        console.error('[attachments] filling the Main Order from the PO failed:', err);
+      }
+    }
+
     res.status(201).json({
+      filledMainOrder: filled,
       data: {
         id: attachment.id,
         fileName: attachment.fileName,

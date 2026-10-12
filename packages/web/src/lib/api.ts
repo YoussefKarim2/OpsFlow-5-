@@ -821,7 +821,7 @@ export const api = {
       form.append('documentType', documentType);
       if (stageKey) form.append('stageKey', stageKey);
       // No Content-Type header: the browser must set the multipart boundary.
-      return request<{ data: AttachmentDto }>(`/orders/${orderId}/attachments`, {
+      return request<{ data: AttachmentDto; filledMainOrder?: { pieces: number; cut: number } | null }>(`/orders/${orderId}/attachments`, {
         method: 'POST', body: form,
       });
     },

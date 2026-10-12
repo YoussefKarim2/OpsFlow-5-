@@ -58,10 +58,16 @@ export function CustomerReferenceTab({ orderId }: { orderId: string }) {
     onSuccess: (res) => {
       refresh();
       toast.success(
-        res.data.version > 1
+        (res.data.version > 1
           ? `"${res.data.fileName}" saved as version ${res.data.version}`
-          : `"${res.data.fileName}" attached`,
+          : `"${res.data.fileName}" attached`)
+        + (res.filledMainOrder
+          ? `. Main Order filled from it: ${res.filledMainOrder.pieces.toLocaleString()} pcs; Cut Order ${res.filledMainOrder.cut.toLocaleString()}.`
+          : ''),
       );
+      if (res.filledMainOrder) {
+        for (const k of ['matrix', 'order']) void qc.invalidateQueries({ queryKey: [k, orderId] });
+      }
     },
     onError: (e) => toast.error(e),
   });
