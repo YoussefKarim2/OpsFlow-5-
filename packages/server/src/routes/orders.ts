@@ -11,7 +11,9 @@ import {
 import { storage } from '../services/storage/index.js';
 import { authenticate, requirePermission, requireSuperAdmin, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
-import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
+import { BadRequestError, ConflictError, NotFoundError, ValidationError } from '../errors.js';
+import { runExtraction } from './import.js';
+import { writeOrderMatrix } from '../services/import/committer.js';
 import {
   getOrderDetail, listOrders, refreshOrderCache, ORDER_INCLUDE,
   buildOrderSummary, toTaskDto, deriveOrder,
@@ -488,6 +490,112 @@ ordersRouter.put('/:id/matrix', requirePermission('order:edit'), asyncHandler(as
 
   await refreshOrderCache(order.id);
   res.json(await orderDetailFor(req, order.id));
+}));
+
+/**
+ * Fill an empty Main Order from the order's own purchase order.
+ *
+ * For an order whose import read the header but not the quantities. The file
+ * it was imported from, then any PO or customer reference attached to it, is
+ * read again with the current importer; the first that yields quantities fills
+ * the grid, and the cut order is generated from it. Refused when the order
+ * already has quantities, so nothing a person entered is overwritten.
+ */
+ordersRouter.post('/:id/matrix/from-document', requirePermission('order:edit'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const order = await prisma.order.findUnique({ where: { id: req.params.id }, select: { id: true, poNumber: true } });
+  if (!order) throw new NotFoundError('Order');
+  if (await ledgerTotal(order.id, 'ORDER') > 0) {
+    throw new BadRequestError('This order already has Main Order quantities. Edit them on the grid instead.');
+  }
+
+  const sources: Array<{ storageKey: string; fileName: string }> = [];
+  const jobs = await prisma.importJob.findMany({
+    where: { createdOrderId: order.id }, orderBy: { createdAt: 'desc' }, select: { storageKey: true, fileName: true },
+  });
+  sources.push(...jobs);
+  const attachments = await prisma.attachment.findMany({
+    where: { orderId: order.id, documentType: { in: ['CUSTOMER_PO', 'CUSTOMER_REFERENCE', 'OTHER'] } },
+    orderBy: { createdAt: 'desc' }, select: { storageKey: true, fileName: true, documentType: true },
+  });
+  const rank = (t: string) => (t === 'CUSTOMER_PO' ? 0 : t === 'CUSTOMER_REFERENCE' ? 1 : 2);
+  sources.push(...attachments.sort((a, b) => rank(a.documentType) - rank(b.documentType))
+    .filter((a) => /\.(pdf|xlsx|xlsm|csv)$/i.test(a.fileName)));
+  if (sources.length === 0) {
+    throw new BadRequestError('No purchase order is attached to this order. Attach the PO under Customer Reference, or enter the quantities on the grid.');
+  }
+
+  const tried: string[] = [];
+  for (const src of sources) {
+    if (tried.includes(src.storageKey)) continue;
+    tried.push(src.storageKey);
+    let extraction: Awaited<ReturnType<typeof runExtraction>>;
+    try {
+      extraction = await runExtraction(await storage.get(src.storageKey), {});
+    } catch {
+      continue; // unreadable or missing; try the next document
+    }
+    const matrix = extraction.matrices.find((m) => m.ledger === 'ORDER');
+    const pieces = matrix ? matrix.rows.reduce((a, r) => a + Object.values(r.cells).reduce((b, q) => b + (q > 0 ? q : 0), 0), 0) : 0;
+    if (!matrix || pieces === 0) continue;
+
+    const written = await prisma.$transaction((tx) => writeOrderMatrix(tx, order.id, matrix));
+    const full = await prisma.order.findUnique({ where: { id: order.id }, include: ORDER_INCLUDE });
+    const { total: cut } = await writeCutOrder(full!);
+    await logActivity({
+      orderId: order.id, actorId: actor.id, actorName: actor.name,
+      action: 'QUANTITIES_UPDATED',
+      summary: `filled the Main Order from "${src.fileName}": ${written.toLocaleString()} pieces; cut order ${cut.toLocaleString()}`,
+      entityType: 'StageQuantity', entityId: order.id, meta: { ledger: 'ORDER', source: src.fileName, pieces: written, cut },
+    });
+    await refreshOrderCache(order.id);
+    res.json({ pieces: written, cut, fileName: src.fileName, warnings: extraction.issues.filter((i) => i.level !== 'INFO').map((i) => i.message) });
+    return;
+  }
+  throw new BadRequestError(
+    `No quantities could be read from ${tried.length === 1 ? 'the attached document' : `any of the ${tried.length} attached documents`}. Enter them on the grid.`,
+  );
+}));
+
+const enterGridSchema = z.object({
+  sizes: z.array(z.string().trim().min(1).max(40)).min(1).max(60),
+  rows: z.array(z.object({
+    color: z.string().trim().min(1).max(120),
+    cells: z.record(z.string(), z.number().int().min(0).max(10_000_000)),
+  })).min(1).max(500),
+});
+
+/**
+ * Enter the Main Order grid by hand on an order that has none: its colours,
+ * sizes and pieces in one go, then the cut order from them. An order created
+ * without a grid has no colours or sizes, so the ordinary grid has no cells to
+ * type into; this is how it gets them. Refused once the order has quantities.
+ */
+ordersRouter.post('/:id/matrix/enter', requirePermission('order:edit'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const input = enterGridSchema.parse(req.body ?? {});
+  const order = await prisma.order.findUnique({ where: { id: req.params.id }, select: { id: true } });
+  if (!order) throw new NotFoundError('Order');
+  if (await ledgerTotal(order.id, 'ORDER') > 0) {
+    throw new BadRequestError('This order already has Main Order quantities. Edit them on the grid instead.');
+  }
+  const rows = input.rows.map((r) => {
+    const cells = Object.fromEntries(Object.entries(r.cells).filter(([sz, q]) => input.sizes.includes(sz) && q > 0));
+    return { color: r.color, cells, total: Object.values(cells).reduce((a, q) => a + q, 0) };
+  });
+  if (rows.every((r) => r.total === 0)) throw new BadRequestError('Enter at least one quantity.');
+
+  const written = await prisma.$transaction((tx) => writeOrderMatrix(tx, order.id, { sizes: input.sizes, rows }));
+  const full = await prisma.order.findUnique({ where: { id: order.id }, include: ORDER_INCLUDE });
+  const { total: cut } = await writeCutOrder(full!);
+  await logActivity({
+    orderId: order.id, actorId: actor.id, actorName: actor.name,
+    action: 'QUANTITIES_UPDATED',
+    summary: `entered the Main Order: ${written.toLocaleString()} pieces; cut order ${cut.toLocaleString()}`,
+    entityType: 'StageQuantity', entityId: order.id, meta: { ledger: 'ORDER', pieces: written, cut },
+  });
+  await refreshOrderCache(order.id);
+  res.json({ pieces: written, cut });
 }));
 
 /** The order's total for one ledger, for before/after comparison. */

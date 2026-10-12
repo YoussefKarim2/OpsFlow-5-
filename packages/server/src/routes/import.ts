@@ -40,7 +40,7 @@ const GENERIC_PROFILE = 'generic-tabular';
  * Both return the same `ExtractionResult`, so everything downstream — the
  * preview, the validation, the transactional commit — is shared.
  */
-async function runExtraction(
+export async function runExtraction(
   buffer: Buffer,
   options: {
     forceTabular?: boolean;

@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Wand2, Save } from 'lucide-react';
+import { Wand2, Save, FileSearch } from 'lucide-react';
 import {
   QtyLedger, LEDGER_LABEL, buildMatrix, fmtNumber,
   ledgerTotal, computeCutOrderTotal, computeCuttableQty,
@@ -16,7 +16,82 @@ import {
 } from '@opsflow/shared';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { Card, Spinner, ErrorNote, clsx } from '../../components/ui';
+import { Card, CardHeader, Spinner, ErrorNote, clsx, useToast } from '../../components/ui';
+import { GridEditor, cleanGrid, gridTotal, type GridDraft } from '../../components/GridEditor';
+
+/**
+ * An order whose Main Order is empty — imported before its PO could be read,
+ * or created by hand. Two ways to fill it: read the quantities from the PO the
+ * order was imported from or has attached, or type the colours, sizes and
+ * pieces. Either way the Cut Order is generated from the result.
+ */
+function EmptyMainOrder({ orderId, colors, sizes }: { orderId: string; colors: string[]; sizes: string[] }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [error, setError] = useState<string | null>(null);
+  const start: GridDraft = {
+    sizes: sizes.length > 0 ? sizes : ['One Size'],
+    rows: colors.length > 0 ? colors.map((c) => ({ color: c, cells: {} })) : [{ color: '', cells: {} }],
+  };
+  const [grid, setGrid] = useState<GridDraft>(start);
+  const refresh = () => {
+    for (const k of ['matrix', 'order', 'order-steps', 'order-stock']) void qc.invalidateQueries({ queryKey: [k, orderId] });
+    void qc.invalidateQueries({ queryKey: ['orders'] });
+  };
+  const fromDocument = useMutation({
+    mutationFn: () => api.orders.fillFromDocument(orderId),
+    onSuccess: (r) => {
+      setError(null);
+      toast.success(`Read ${r.pieces.toLocaleString()} pieces from "${r.fileName}". Cut Order: ${r.cut.toLocaleString()}.`);
+      for (const w of r.warnings.slice(0, 3)) toast.error(w);
+      refresh();
+    },
+    onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not read the PO.'),
+  });
+  const enter = useMutation({
+    mutationFn: () => api.orders.enterGrid(orderId, cleanGrid(grid)),
+    onSuccess: (r) => {
+      setError(null);
+      toast.success(`Saved ${r.pieces.toLocaleString()} pieces. Cut Order: ${r.cut.toLocaleString()}.`);
+      refresh();
+    },
+    onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not save the Main Order.'),
+  });
+  const total = gridTotal(cleanGrid(grid));
+  return (
+    <div className="space-y-3">
+      <Card className="border-amber-300">
+        <CardHeader
+          title="This order has no Main Order quantities yet"
+          subtitle="Read them from the purchase order this order was imported from or has attached, or enter them below. The Cut Order is generated from them."
+          action={
+            <button className="btn-primary btn-sm" onClick={() => fromDocument.mutate()} disabled={fromDocument.isPending}>
+              <FileSearch className="h-3.5 w-3.5" />
+              {fromDocument.isPending ? 'Reading the PO…' : 'Read from the attached PO'}
+            </button>
+          }
+        />
+        {error && <p className="px-4 pb-3 text-sm text-red-700">{error}</p>}
+      </Card>
+      <GridEditor
+        title="Enter the Main Order"
+        emptyHint="Add each colour and size from the PO and type the pieces."
+        grid={grid}
+        edited={false}
+        onChange={setGrid}
+        onReset={() => setGrid(start)}
+        footer={
+          <div className="flex justify-end border-t border-ink-100 p-3">
+            <button className="btn-primary btn-sm" onClick={() => enter.mutate()} disabled={enter.isPending || total === 0}>
+              <Save className="h-3.5 w-3.5" />
+              {enter.isPending ? 'Saving…' : `Save Main Order${total > 0 ? ` (${total.toLocaleString()} pcs)` : ''}`}
+            </button>
+          </div>
+        }
+      />
+    </div>
+  );
+}
 
 const EDITABLE: string[] = [
   QtyLedger.ORDER, QtyLedger.STOCK, QtyLedger.IN_LINE,
@@ -151,6 +226,10 @@ export function QuantityTab({
   return (
     <div className="space-y-4 p-5">
       {error && <ErrorNote error={new Error(error)} />}
+
+      {(data.totals[QtyLedger.ORDER] ?? 0) === 0 && can('order:edit') && (
+        <EmptyMainOrder orderId={order.id} colors={colors.map((c) => c.name)} sizes={sizes.map((z) => z.name)} />
+      )}
 
       <Card>
         <div className="card-header flex-wrap gap-2">

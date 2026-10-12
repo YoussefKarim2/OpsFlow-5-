@@ -92,6 +92,61 @@ export function mergeMatrixAxes(matrix: Pick<ExtractedMatrix, 'sizes' | 'rows'>)
   return { sizes: [...sizeName.values()], rows: [...rows.values()] };
 }
 
+/**
+ * Write a Main Order grid onto an order that has none yet.
+ *
+ * For an order created before its document could be read (an import that left
+ * the grid empty): colours and sizes already on the order are reused by name,
+ * new ones are appended, and the ORDER quantities are created. The caller
+ * regenerates the cut order afterwards. Returns the pieces written.
+ */
+export async function writeOrderMatrix(
+  tx: Prisma.TransactionClient,
+  orderId: string,
+  matrix: Pick<ExtractedMatrix, 'sizes' | 'rows'>,
+): Promise<number> {
+  const m = mergeMatrixAxes(matrix);
+  const existingColors = await tx.orderColor.findMany({ where: { orderId }, include: { color: true } });
+  const existingSizes = await tx.orderSize.findMany({ where: { orderId }, include: { size: true } });
+  const colorIds = new Map(existingColors.map((c) => [axisKey(c.color.name), c.id]));
+  const sizeIds = new Map(existingSizes.map((s) => [axisKey(s.size.name), s.id]));
+  let colorPos = existingColors.length, sizePos = existingSizes.length;
+
+  for (const row of m.rows) {
+    if (row.total <= 0 || colorIds.has(axisKey(row.color))) continue;
+    const refId = await upsertRefColor(tx, row.color, colorPos);
+    const taken = existingColors.find((c) => c.colorId === refId);
+    const oc = taken ?? await tx.orderColor.create({ data: { orderId, colorId: refId, position: colorPos++ } });
+    colorIds.set(axisKey(row.color), oc.id);
+  }
+  const used = new Set(m.rows.flatMap((r) => Object.entries(r.cells).filter(([, q]) => q > 0).map(([s]) => axisKey(s))));
+  for (const name of m.sizes) {
+    if (!used.has(axisKey(name)) || sizeIds.has(axisKey(name))) continue;
+    const refId = await upsertRefSize(tx, name, sizePos);
+    const taken = existingSizes.find((s) => s.sizeId === refId);
+    const os = taken ?? await tx.orderSize.create({ data: { orderId, sizeId: refId, position: sizePos++ } });
+    sizeIds.set(axisKey(name), os.id);
+  }
+
+  let pieces = 0;
+  for (const row of m.rows) {
+    const orderColorId = colorIds.get(axisKey(row.color));
+    if (!orderColorId) continue;
+    for (const [size, qty] of Object.entries(row.cells)) {
+      const orderSizeId = sizeIds.get(axisKey(size));
+      const q = Math.round(qty);
+      if (!orderSizeId || q <= 0) continue;
+      await tx.stageQuantity.upsert({
+        where: { orderId_orderColorId_orderSizeId_ledger: { orderId, orderColorId, orderSizeId, ledger: 'ORDER' } },
+        create: { orderId, orderColorId, orderSizeId, ledger: 'ORDER', qty: q },
+        update: { qty: q },
+      });
+      pieces += q;
+    }
+  }
+  return pieces;
+}
+
 /** Find or create reference rows, so an import never fails on an unseen colour. */
 async function upsertRefColor(tx: Prisma.TransactionClient, name: string, position: number): Promise<string> {
   const clean = name.trim();
