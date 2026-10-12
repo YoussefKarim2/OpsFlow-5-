@@ -14,7 +14,7 @@
  * classifies, it does not restrict.
  */
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Rows3 } from 'lucide-react';
 import {
@@ -249,8 +249,8 @@ export function BomEditor({
             ) : null}
 
             {rows.map((r, i) => (
-              <>
-                <tr key={`r${i}`}>
+              <Fragment key={i}>
+                <tr>
                   <td className="p-1">
                     <select
                       aria-label="Department"
@@ -381,7 +381,7 @@ export function BomEditor({
                 </tr>
 
                 {expanded === i ? (
-                  <tr key={`s${i}`} className="bg-ink-50/60">
+                  <tr className="bg-ink-50/60">
                     <td colSpan={10} className="px-4 py-3">
                       <div className="mb-2 flex items-center justify-between">
                         <span className="text-xs font-medium text-ink-600">
@@ -430,7 +430,7 @@ export function BomEditor({
                     </td>
                   </tr>
                 ) : null}
-              </>
+              </Fragment>
             ))}
           </tbody>
           {rows.length > 0 ? (

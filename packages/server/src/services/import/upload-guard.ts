@@ -14,7 +14,8 @@ import { decodeUploadName } from '../../util/upload-name.js';
 /** MIME types a browser or Excel actually sends for a workbook. */
 const WORKBOOK_MIME_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-excel.sheet.macroEnabled.12',
+  // Compared in lower case: Chrome sends "…macroenabled.12", Excel "…macroEnabled.12".
+  'application/vnd.ms-excel.sheet.macroenabled.12',
   'application/vnd.ms-excel',
   'application/octet-stream', // some clients send nothing more specific
   'application/zip',          // xlsx *is* a zip; a few clients say so
@@ -47,7 +48,8 @@ export const workbookUpload = multer({
     }
     const isPdf = /\.pdf$/i.test(file.originalname);
     const allowed = isPdf ? PDF_MIME_TYPES : WORKBOOK_MIME_TYPES;
-    if (!allowed.has(file.mimetype) && !/^text\//.test(file.mimetype)) {
+    const mime = (file.mimetype ?? '').toLowerCase();
+    if (!allowed.has(mime) && !/^text\//.test(mime)) {
       cb(new BadRequestError(
         `"${file.mimetype}" is not a ${isPdf ? 'PDF' : 'spreadsheet'}. ` +
         'Upload an .xlsx, .xlsm or .pdf file.',

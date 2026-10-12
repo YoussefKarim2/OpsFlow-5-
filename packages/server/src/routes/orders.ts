@@ -513,7 +513,8 @@ ordersRouter.post('/:id/matrix/from-document', requirePermission('order:edit'), 
   throw new BadRequestError(
     r.reason === 'HAS_QUANTITIES' ? 'This order already has Main Order quantities. Edit them on the grid instead.'
       : r.reason === 'NO_DOCUMENT' ? 'No purchase order is attached to this order. Attach the PO under Customer Reference, or enter the quantities on the grid.'
-        : `No quantities could be read from ${r.tried === 1 ? 'the attached document' : `any of the ${r.tried} attached documents`}. Enter them on the grid.`,
+        : r.reason === 'NOT_THIS_PO' ? `The attached document reads as PO "${r.otherPo}", not this order's PO, so it was not used. Attach this order's PO as "Customer PO", or enter the quantities on the grid.`
+          : `No quantities could be read from ${r.tried === 1 ? 'the attached document' : `any of the ${r.tried} attached documents`}. Enter them on the grid.`,
   );
 }));
 

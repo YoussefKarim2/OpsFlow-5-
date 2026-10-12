@@ -21,7 +21,7 @@ import { logActivity } from './activity-service.js';
 
 export type FillResult =
   | { filled: true; pieces: number; cut: number; fileName: string; warnings: string[] }
-  | { filled: false; reason: 'HAS_QUANTITIES' | 'NO_DOCUMENT' | 'NOTHING_READ'; tried: number };
+  | { filled: false; reason: 'HAS_QUANTITIES' | 'NO_DOCUMENT' | 'NOTHING_READ' | 'NOT_THIS_PO'; tried: number; otherPo?: string };
 
 const PO_TYPES = ['CUSTOMER_PO', 'CUSTOMER_REFERENCE'] as const;
 const READABLE = /\.(pdf|xlsx|xlsm|csv)$/i;
@@ -31,8 +31,16 @@ async function orderPieces(orderId: string): Promise<number> {
   return agg._sum.qty ?? 0;
 }
 
-/** The documents an order's quantities can come from, best first. */
-async function sourcesFor(orderId: string): Promise<Array<{ storageKey: string; fileName: string }>> {
+/**
+ * The documents an order's quantities can come from, best first.
+ *
+ * `trusted` says the document is this order's PO by construction: the file
+ * the order was imported from, or one a person filed as "Customer PO". Any
+ * other reference document (a tech pack, say, whose measurement chart reads
+ * like a size grid) is used only when the PO number it carries is this
+ * order's.
+ */
+async function sourcesFor(orderId: string): Promise<Array<{ storageKey: string; fileName: string; trusted: boolean }>> {
   const jobs = await prisma.importJob.findMany({
     where: { createdOrderId: orderId }, orderBy: { createdAt: 'desc' }, select: { storageKey: true, fileName: true },
   });
@@ -41,7 +49,12 @@ async function sourcesFor(orderId: string): Promise<Array<{ storageKey: string; 
     orderBy: { createdAt: 'desc' }, select: { storageKey: true, fileName: true, documentType: true },
   });
   const rank = (t: string) => (t === 'CUSTOMER_PO' ? 0 : 1);
-  const all = [...jobs, ...attachments.filter((a) => READABLE.test(a.fileName)).sort((a, b) => rank(a.documentType) - rank(b.documentType))];
+  const all = [
+    ...jobs.map((j) => ({ ...j, trusted: true })),
+    ...attachments.filter((a) => READABLE.test(a.fileName))
+      .sort((a, b) => rank(a.documentType) - rank(b.documentType))
+      .map((a) => ({ storageKey: a.storageKey, fileName: a.fileName, trusted: a.documentType === 'CUSTOMER_PO' })),
+  ];
   const seen = new Set<string>();
   return all.filter((s) => (seen.has(s.storageKey) ? false : (seen.add(s.storageKey), true)));
 }
@@ -53,6 +66,10 @@ export async function fillMainOrderFromDocuments(
   if (await orderPieces(orderId) > 0) return { filled: false, reason: 'HAS_QUANTITIES', tried: 0 };
   const sources = await sourcesFor(orderId);
   if (sources.length === 0) return { filled: false, reason: 'NO_DOCUMENT', tried: 0 };
+  const order = await prisma.order.findUnique({ where: { id: orderId }, select: { poNumber: true } });
+  const samePo = (a: string | null | undefined, b: string | null | undefined) =>
+    !!a && !!b && a.trim().toUpperCase() === b.trim().toUpperCase();
+  let otherPo: string | undefined;
 
   // Loaded here rather than at the top: the import route imports the orders
   // route, which imports this module.
@@ -67,6 +84,11 @@ export async function fillMainOrderFromDocuments(
     const matrix = extraction.matrices.find((m) => m.ledger === 'ORDER');
     const pieces = matrix ? matrix.rows.reduce((a, r) => a + Object.values(r.cells).reduce((b, q) => b + (q > 0 ? q : 0), 0), 0) : 0;
     if (!matrix || pieces === 0) continue;
+    const docPo = extraction.fields.poNumber == null ? null : String(extraction.fields.poNumber);
+    if (!src.trusted && !samePo(docPo, order?.poNumber)) {
+      otherPo = docPo ?? otherPo;
+      continue; // not this order's PO
+    }
 
     // Checked again inside the write: someone may have typed a grid meanwhile.
     const written = await prisma.$transaction(async (tx) => {
@@ -90,6 +112,7 @@ export async function fillMainOrderFromDocuments(
       warnings: extraction.issues.filter((i) => i.level !== 'INFO').map((i) => i.message),
     };
   }
+  if (otherPo !== undefined) return { filled: false, reason: 'NOT_THIS_PO', tried: sources.length, otherPo };
   return { filled: false, reason: 'NOTHING_READ', tried: sources.length };
 }
 

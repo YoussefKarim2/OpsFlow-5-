@@ -91,7 +91,11 @@ export function StockTab({ order }: { order: OrderDetailDto }) {
       const [orderColorId, orderSizeId] = k.split(':') as [string, string];
       return { orderColorId, orderSizeId, qty: Number(v || 0) };
     })),
-    onSuccess: () => { setEdits({}); refresh(); toast.success('Finished stock saved; the Cut Order is recalculated'); },
+    onSuccess: (o) => {
+      setEdits({}); refresh();
+      const cut = o.funnel?.find((f) => f.ledger === 'CUT')?.qty ?? 0;
+      toast.success(cut > 0 ? `Finished stock saved. Cut Order recalculated to ${cut.toLocaleString()} pcs.` : 'Finished stock saved.');
+    },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : 'Could not save the finished stock.'),
   });
 

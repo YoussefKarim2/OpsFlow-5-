@@ -1018,7 +1018,10 @@ export async function extractFromPdf(
   return {
     ...emptyResult(issues, pages),
     profileKey: 'pdf',
-    confidence: poLineItems ? (poHeader.printedTotal != null && poOrder && Math.abs(poHeader.printedTotal - poOrder.totalValue) <= 0.01 ? 0.85 : 0.7)
+    // A reading the document itself confirms — its printed money total or
+    // piece count — is as sure as a PDF read gets.
+    confidence: poLineItems
+      ? (linesValueMatches || gridValueMatches || (printedPieces != null && chosenQty === printedPieces) ? 0.85 : 0.7)
       : readiness.ready ? 0.7 : 0.3,
     mappings,
     fields: named,
