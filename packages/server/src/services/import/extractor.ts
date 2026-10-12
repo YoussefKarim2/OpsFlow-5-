@@ -427,13 +427,23 @@ function extractBom(sheet: ExcelJS.Worksheet, headerAnchor: string, columns: Rec
   const header = findAnchor(sheet, headerAnchor);
   if (!header) return [];
 
-  // Map each logical field to the column holding its header text.
+  // Map each logical field to the column holding its header text. An exact
+  // heading wins over a prefix, and a column serves one field: "Item Sort /
+  // Dep." starts with "Item", and matching by prefix alone read the item
+  // from the department column.
   const colOf: Record<string, number> = {};
+  const headings: Array<[number, string]> = [];
   for (let c = header.col; c <= header.col + 25; c++) {
     const text = norm(cellValue(sheet.getRow(header.row).getCell(c)));
-    if (!text) continue;
+    if (text) headings.push([c, text]);
+  }
+  const taken = new Set<number>();
+  for (const exact of [true, false]) {
     for (const [field, label] of Object.entries(columns)) {
-      if (colOf[field] == null && text.startsWith(norm(label))) colOf[field] = c;
+      if (colOf[field] != null) continue;
+      const want = norm(label);
+      const hit = headings.find(([c, t]) => !taken.has(c) && (exact ? t === want : t.startsWith(want)));
+      if (hit) { colOf[field] = hit[0]; taken.add(hit[0]); }
     }
   }
 
@@ -448,6 +458,9 @@ function extractBom(sheet: ExcelJS.Worksheet, headerAnchor: string, columns: Rec
 
     // An entirely empty row is a spare row, not the end — the sheet has many.
     if (!item && !category && requiredQty == null) continue;
+    // The current template pre-fills the department on its spare rows (Yoko,
+    // Press, Production, Packing) with nothing else: still a spare row.
+    if (!item && requiredQty == null && category && /^(yoko|press|production|packing)$/i.test(category)) continue;
 
     lines.push({
       category,

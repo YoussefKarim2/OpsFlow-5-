@@ -8,7 +8,7 @@
  */
 
 import type { PrismaClient, Prisma } from '@prisma/client';
-import { computeCutMatrix, isValidDate, type QtyCell, type AxisRef } from '@opsflow/shared';
+import { computeCutMatrix, isValidDate, BOM_DEPARTMENTS, bomCategoryFor, type QtyCell, type AxisRef } from '@opsflow/shared';
 import type { ExtractionResult, ExtractedMatrix } from './extractor.js';
 import { materialiseWorkflow } from '../workflow-service.js';
 import { logActivity } from '../activity-service.js';
@@ -47,9 +47,27 @@ const BOM_CATEGORY_MAP: Record<string, string> = {
   'hologrram': 'ACCESSORY', 'side woven': 'ACCESSORY', 'yoko': 'ACCESSORY',
 };
 
-function mapBomCategory(raw: string | null): string {
-  if (!raw) return 'OTHER';
-  return BOM_CATEGORY_MAP[raw.trim().toLowerCase()] ?? 'OTHER';
+/**
+ * The stored category of an imported BOM line.
+ *
+ * The current factory template's "Item Sort / Dep." column holds a department
+ * (Yoko, Press, Production, Packing) and the item column the item chosen from
+ * that department's list; older workbooks put the item kind in that column.
+ * Both read the same way: a department maps through the template's lists, an
+ * item kind through the table above.
+ */
+export function mapBomCategory(raw: string | null, item: string | null = null): string {
+  const dep = BOM_DEPARTMENTS.find((d) => d.toLowerCase() === raw?.trim().toLowerCase());
+  if (dep) return bomCategoryFor(dep, item ?? '');
+  if (raw) {
+    const hit = BOM_CATEGORY_MAP[raw.trim().toLowerCase()];
+    if (hit) return hit;
+  }
+  if (item) {
+    const fromItem = BOM_CATEGORY_MAP[item.trim().toLowerCase()];
+    if (fromItem) return fromItem;
+  }
+  return 'OTHER';
 }
 
 /**
@@ -427,7 +445,7 @@ export async function commitImport(
       await tx.bomItem.create({
         data: {
           orderId: order.id,
-          category: mapBomCategory(line.category) as never,
+          category: mapBomCategory(line.category, line.item) as never,
           position: line.position,
           item: line.item ?? line.category ?? 'Unnamed item',
           description: line.description,

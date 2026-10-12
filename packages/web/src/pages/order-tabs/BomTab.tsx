@@ -14,7 +14,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PackagePlus, AlertTriangle } from 'lucide-react';
-import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
+import { fmtDate, BOM_DEPARTMENTS, bomDepartmentOf, type OrderDetailDto } from '@opsflow/shared';
 import { api, ApiError, type BomRowDto } from '../../lib/api';
 import { BomEditor } from '../../components/BomEditor';
 import { useAuth } from '../../lib/auth';
@@ -107,12 +107,17 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
 
   const rows = data.items as unknown as BomRow[];
   const s = data.summary;
-  const byCategory = new Map<string, BomRow[]>();
+  // Grouped by department in the template's order — Fabric, Yoko, Press,
+  // Production, Packing — with anything unplaced last.
+  const groups = new Map<string, BomRow[]>();
   for (const r of rows) {
-    const arr = byCategory.get(r.category) ?? [];
+    const dep = bomDepartmentOf(r.item, r.category) ?? 'Other';
+    const arr = groups.get(dep) ?? [];
     arr.push(r);
-    byCategory.set(r.category, arr);
+    groups.set(dep, arr);
   }
+  const groupOrder: string[] = [...BOM_DEPARTMENTS, 'Other'];
+  const byCategory = new Map([...groups.entries()].sort((a, b) => groupOrder.indexOf(a[0]) - groupOrder.indexOf(b[0])));
 
   return (
     <div className="space-y-4 p-5">
@@ -164,7 +169,7 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
         return (
           <Card key={category}>
             <CardHeader
-              title={category.replace(/_/g, ' ')}
+              title={category}
               subtitle={`${items.length} line${items.length === 1 ? '' : 's'}${shortInCategory > 0 ? ` · ${shortInCategory} short` : ''}`}
             />
             <div className="overflow-x-auto">

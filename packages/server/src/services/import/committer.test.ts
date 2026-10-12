@@ -204,3 +204,16 @@ describe('the costing record', () => {
     assert.equal(created.costingRecord![0]!.dollarRate, 50.25);
   });
 });
+
+describe('BOM lines from the current template', () => {
+  test('a department and its item give the item\'s category', async () => {
+    const { mapBomCategory } = await import('./committer.js');
+    assert.equal(mapBomCategory('Production', 'Washing Inst.'), 'LABEL');
+    assert.equal(mapBomCategory('Packing', 'Carton'), 'CARTON');
+    assert.equal(mapBomCategory('Press', 'Sponser'), 'SPONSOR');
+    assert.equal(mapBomCategory('Yoko', 'Yoko collar'), 'FABRIC');
+    // Older workbooks: the item kind in the department column.
+    assert.equal(mapBomCategory('Poly Bag', null), 'POLY_BAG');
+    assert.equal(mapBomCategory(null, 'Thread'), 'THREAD');
+  });
+});

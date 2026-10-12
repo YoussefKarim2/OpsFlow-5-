@@ -17,21 +17,15 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Rows3 } from 'lucide-react';
-import { isTypeableNumber } from '@opsflow/shared';
+import {
+  isTypeableNumber, BOM_DEPARTMENTS, BOM_UNITS, bomItemsFor, bomDepartmentOf, bomCategoryFor,
+  type BomDepartment,
+} from '@opsflow/shared';
 import { api, ApiError, type BomRowDto } from '../lib/api';
 import { Num, ErrorNote, clsx } from './ui';
 
-/** The BOM categories the schema stores. The dropdown labels them properly. */
-const CATEGORIES = [
-  'FABRIC', 'THREAD', 'LABEL', 'TRANSFER', 'BADGE', 'LOGO', 'SPONSOR', 'SIZE',
-  'POLY_BAG', 'BUTTER_PAPER', 'STICKY_TAPE', 'BARCODE_PAPER', 'HALF_BOX',
-  'CARTON', 'TAPE', 'ACCESSORY', 'OTHER',
-] as const;
-
-const label = (t: string) => {
-  const s = t.replace(/_/g, ' ').toLowerCase();
-  return s.charAt(0).toUpperCase() + s.slice(1);
-};
+/** The value of the item dropdown's "type it yourself" entry. */
+const OTHER_ITEM = '__other__';
 
 /**
  * A row while it is being edited.
@@ -47,6 +41,13 @@ interface RowDraft extends Omit<BomRowDto, 'requiredQty' | 'issuedQty' | 'unitPr
   sizes: Array<{ id?: string; sizeLabel: string; qty: string }>;
   /** The issued figure as the editor was opened with it. See `issuedChanged`. */
   issuedWas: string;
+  /**
+   * "Item Sort / Dep." as the template has it: Fabric, Yoko, Press, Production
+   * or Packing. Picks the item list; the stored category follows from it.
+   */
+  department: BomDepartment | null;
+  /** The item is typed rather than picked from the department's list. */
+  typed: boolean;
 }
 
 const text = (v: number | null | undefined): string => (v == null ? '' : String(v));
@@ -62,18 +63,26 @@ const parse = (t: string): number | null => {
 /** Typed, but not something a number can be read from — "." or "-" alone. */
 const unreadable = (t: string): boolean => t.trim() !== '' && parse(t) == null;
 
-const toDraft = (r: BomRowDto): RowDraft => ({
+const inList = (department: BomDepartment | null, item: string) =>
+  bomItemsFor(department).some((x) => x.toLowerCase() === item.trim().toLowerCase());
+
+const toDraft = (r: BomRowDto): RowDraft => {
+  const department = bomDepartmentOf(r.item, r.category);
+  return {
   ...r,
+  department,
+  typed: bomItemsFor(department).length === 0 || (r.item.trim() !== '' && !inList(department, r.item)),
   requiredQty: r.requiredQty ? String(r.requiredQty) : '',
   issuedQty: text(r.issuedQty),
   unitPriceUsd: text(r.unitPriceUsd),
   sizes: r.sizes.map((z) => ({ id: z.id, sizeLabel: z.sizeLabel, qty: z.qty ? String(z.qty) : '' })),
   issuedWas: text(r.issuedQty),
-});
+  };
+};
 
 const blankRow = (): RowDraft => toDraft({
-  category: 'ACCESSORY', item: '', description: null, colorText: null,
-  unit: 'PCS', requiredQty: 0, issuedQty: null, unitPriceUsd: null, supplier: null, notes: null, sizes: [],
+  category: 'OTHER', item: '', description: null, colorText: null,
+  unit: 'Pcs', requiredQty: 0, issuedQty: null, unitPriceUsd: null, supplier: null, notes: null, sizes: [],
 });
 
 /** A row's quantity is the sum of its sizes once any exist. */
@@ -97,7 +106,7 @@ const issuedChanged = (r: RowDraft): boolean => parse(r.issuedQty) !== parse(r.i
 
 /** The row as the server takes it. */
 function fromDraft(d: RowDraft): BomRowDto {
-  const { issuedWas: _was, ...r } = d;
+  const { issuedWas: _was, department: _dep, typed: _typed, ...r } = d;
   return {
     ...r,
     requiredQty: rowQty(d),
@@ -151,6 +160,23 @@ export function BomEditor({
   const setRow = (i: number, patch: Partial<RowDraft>) =>
     setRows((rs) => rs.map((r, n) => (n === i ? { ...r, ...patch } : r)));
 
+  /** Choosing a department narrows the item list, as the template's INDIRECT dropdown does. */
+  const setDepartment = (i: number, department: BomDepartment | null) => {
+    const r = rows[i]!;
+    const keep = department == null || bomItemsFor(department).length === 0 || inList(department, r.item);
+    const item = keep ? r.item : '';
+    setRow(i, {
+      department,
+      item,
+      typed: department == null || bomItemsFor(department).length === 0,
+      category: department ? bomCategoryFor(department, item) : r.category,
+    });
+  };
+  const setItem = (i: number, item: string, typed: boolean) => {
+    const r = rows[i]!;
+    setRow(i, { item, typed, category: r.department ? bomCategoryFor(r.department, item) : r.category });
+  };
+
   const setSize = (i: number, n: number, patch: Partial<RowDraft['sizes'][number]>) =>
     setRow(i, { sizes: rows[i]!.sizes.map((s, k) => (k === n ? { ...s, ...patch } : s)) });
 
@@ -201,12 +227,12 @@ export function BomEditor({
         <table className="w-full border border-ink-200">
           <thead className="border-b border-ink-200 bg-ink-50">
             <tr>
-              <th className="th w-40">Type</th>
-              <th className="th">Item</th>
-              <th className="th w-36">Colour</th>
+              <th className="th min-w-[9rem]" title="Item Sort / Dep. — picks the item list">Dep.</th>
+              <th className="th min-w-[15rem]">Item</th>
+              <th className="th min-w-[9rem]">Colour</th>
               <th className="th w-28 text-right">Quantity</th>
               <th className="th w-28 text-right">Issued</th>
-              <th className="th w-20">Unit</th>
+              <th className="th min-w-[5.5rem]">Unit</th>
               <th className="th w-28 text-right">Unit price</th>
               <th className="th w-28 text-right">Total</th>
               <th className="th w-32">Supplier</th>
@@ -227,21 +253,43 @@ export function BomEditor({
                 <tr key={`r${i}`}>
                   <td className="p-1">
                     <select
-                      className="input border-transparent bg-transparent"
-                      value={r.category}
-                      onChange={(e) => setRow(i, { category: e.target.value })}
+                      aria-label="Department"
+                      className={clsx('input border-transparent bg-transparent', !r.department && 'text-ink-400')}
+                      value={r.department ?? ''}
+                      onChange={(e) => setDepartment(i, (e.target.value || null) as BomDepartment | null)}
                     >
-                      {CATEGORIES.map((c) => <option key={c} value={c}>{label(c)}</option>)}
+                      <option value="">Choose…</option>
+                      {BOM_DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
                     </select>
                   </td>
                   <td className="p-1">
-                    <input
-                      className={clsx('input border-transparent bg-transparent', !r.item.trim() && 'ring-1 ring-red-400')}
-                      value={r.item}
-                      list="bom-item-types"
-                      placeholder="Main Fabric, Logo Badge, Zipper…"
-                      onChange={(e) => setRow(i, { item: e.target.value })}
-                    />
+                    {r.typed ? (
+                      <div className="flex items-center gap-1">
+                        <input
+                          aria-label="Item"
+                          className={clsx('input border-transparent bg-transparent', !r.item.trim() && 'ring-1 ring-red-400')}
+                          value={r.item}
+                          list={bomItemsFor(r.department).length > 0 ? `bom-items-${r.department}` : 'bom-item-types'}
+                          placeholder={r.department === 'Yoko' ? 'Yoko collar, Yoko cuffs…' : r.department === 'Fabric' ? 'Main fabric, Rib…' : 'Type the item…'}
+                          onChange={(e) => setItem(i, e.target.value, true)}
+                        />
+                        {bomItemsFor(r.department).length > 0 && (
+                          <button type="button" className="shrink-0 text-2xs text-accent-700 hover:underline" title="Pick from the list"
+                            onClick={() => setItem(i, '', false)}>List</button>
+                        )}
+                      </div>
+                    ) : (
+                      <select
+                        aria-label="Item"
+                        className={clsx('input border-transparent bg-transparent', !r.item.trim() && 'ring-1 ring-red-400')}
+                        value={r.item ? bomItemsFor(r.department).find((x) => x.toLowerCase() === r.item.trim().toLowerCase()) ?? r.item : ''}
+                        onChange={(e) => (e.target.value === OTHER_ITEM ? setItem(i, '', true) : setItem(i, e.target.value, false))}
+                      >
+                        <option value="">Choose…</option>
+                        {bomItemsFor(r.department).map((x) => <option key={x} value={x}>{x}</option>)}
+                        <option value={OTHER_ITEM}>Other (type it)…</option>
+                      </select>
+                    )}
                   </td>
                   <td className="p-1">
                     <input
@@ -414,8 +462,13 @@ export function BomEditor({
         {colors.map((c) => <option key={c} value={c} />)}
       </datalist>
       <datalist id="bom-units">
-        {units.map((v) => <option key={v} value={v} />)}
+        {[...new Set([...BOM_UNITS, ...units])].map((v) => <option key={v} value={v} />)}
       </datalist>
+      {BOM_DEPARTMENTS.map((d) => (
+        <datalist key={d} id={`bom-items-${d}`}>
+          {bomItemsFor(d).map((x) => <option key={x} value={x} />)}
+        </datalist>
+      ))}
       <datalist id="bom-size-labels">
         {sizeLabels.map((v) => <option key={v} value={v} />)}
       </datalist>
