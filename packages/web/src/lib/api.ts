@@ -1000,6 +1000,8 @@ export const api = {
       columnMapping?: Record<string, string>;
       sheetName?: string;
       reserveMaterials?: boolean;
+      /** The Main Order grid as corrected on the review screen. */
+      matrix?: { sizes: string[]; rows: Array<{ color: string; cells: Record<string, number> }> };
     }) => post<{
       orderId: string; poNumber: string; order: OrderDetailDto;
       reservation: {

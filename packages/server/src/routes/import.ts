@@ -459,7 +459,45 @@ const commitSchema = z.object({
   sheetName: z.string().optional(),
   /** Reserve stock for the new order's materials as soon as it exists. */
   reserveMaterials: z.boolean().default(false),
+  /**
+   * The Main Order grid as the coordinator corrected or entered it on the
+   * review screen. Replaces the grid read from the file.
+   */
+  matrix: z.object({
+    sizes: z.array(z.string().trim().min(1).max(40)).max(60),
+    rows: z.array(z.object({
+      color: z.string().trim().min(1).max(120),
+      cells: z.record(z.string(), z.number().int().min(0).max(10_000_000)),
+    })).max(500),
+  }).optional(),
 });
+
+/**
+ * The Main Order grid the review screen sent, in place of the one read from
+ * the file. Cells under a size that is not a column are ignored.
+ */
+export function applyReviewedMatrix(
+  extraction: ExtractionResult,
+  matrix: { sizes: string[]; rows: Array<{ color: string; cells: Record<string, number> }> } | undefined,
+): void {
+  if (!matrix) return;
+  const sizes = matrix.sizes;
+  const rows = matrix.rows.map((r) => {
+    const cells = Object.fromEntries(Object.entries(r.cells).filter(([s, q]) => sizes.includes(s) && q > 0));
+    return { color: r.color, cells, total: Object.values(cells).reduce((a, b) => a + b, 0) };
+  });
+  const others = extraction.matrices.filter((m) => m.ledger !== 'ORDER');
+  extraction.matrices = [
+    { ledger: 'ORDER', sizes, rows, sheetTotal: null, computedTotal: rows.reduce((a, r) => a + r.total, 0) },
+    ...others,
+  ];
+}
+
+/** Pieces in the Main Order grid an import is about to create. */
+export function orderPieces(extraction: ExtractionResult): number {
+  const m = extraction.matrices.find((x) => x.ledger === 'ORDER');
+  return m ? m.rows.reduce((a, r) => a + Object.values(r.cells).reduce((b, q) => b + (q > 0 ? q : 0), 0), 0) : 0;
+}
 
 /**
  * How long a commit may hold its claim on a job before another attempt may
@@ -515,6 +553,17 @@ importRouter.post('/:jobId/commit', requirePermission('import:run'), asyncHandle
     fieldOverrides: input.overrides,
     job,
   });
+  applyReviewedMatrix(extraction, input.matrix);
+
+  // An order is never created without its quantities: an empty Main Order
+  // leaves the Cut Order, production and costing with nothing to work from.
+  // The review screen shows the grid and lets it be filled, so this is where
+  // that is enforced for every file type and every client.
+  if (orderPieces(extraction) === 0) {
+    throw new BadRequestError(
+      'No quantities were read from this file. Enter the colours, sizes and pieces in the Main Order grid on the review screen, then confirm again.',
+    );
+  }
 
   // Claim the job before creating anything. The status check above is a read,
   // and two clicks — or two tabs — both pass it; each then created its own

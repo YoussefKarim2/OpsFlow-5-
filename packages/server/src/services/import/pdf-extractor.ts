@@ -33,6 +33,7 @@ import type { ExtractionResult } from './extractor.js';
 import { toDate, buildLineItems } from './extractor.js';
 import { detectSizeColumns } from './tabular-extractor.js';
 import { readPoLines, readPoHeader, poLinesToOrder, detectDayFirst, findBoilerplate, type PoTextLine } from './po-lines.js';
+import { readSizeGrids, gridsToOrder, readPrintedPieces, type GridLine } from './size-grid.js';
 
 /** One positioned run of text, as pdf.js reports it. */
 interface TextItem {
@@ -387,6 +388,7 @@ export async function extractFromPdf(
   // Every line of every page, then one column model for the lot, so a row with
   // an extra leading cell still lines up with the header above it.
   const positioned: PositionedCell[][] = [];
+  const gridLines: GridLine[] = [];
   const pageTexts: Array<Array<{ text: string; y: number }>> = [];
   for (const page of pages) {
     const texts: Array<{ text: string; y: number }> = [];
@@ -394,6 +396,7 @@ export async function extractFromPdf(
       const cells = rowToPositionedCells(line);
       if (cells.length > 0) {
         positioned.push(cells);
+        gridLines.push({ cells, y: line[0]!.y, page: page.pageNumber });
         texts.push({ text: cells.map((c) => c.text).join(' ').trim(), y: line[0]!.y });
       }
     }
@@ -752,7 +755,77 @@ export async function extractFromPdf(
   // when they hold more pieces than the table reader found.
   let poLineItems: ExtractionResult['lineItems'] | null = null;
   const tableQty = matrices.reduce((a, m) => a + m.computedTotal, 0);
-  if (poOrder && poOrder.totalQty > tableQty) {
+
+  // ── Three readings, one choice ─────────────────────────────────────────
+  //
+  // The table reader, the size-grid reader and the PO-line reader each see a
+  // different kind of document. Each is run; the reading that agrees with the
+  // document's own printed piece count wins, and without one the reading that
+  // found the most pieces. On a tie the table reader is kept (it is the one
+  // the existing review screens were built around), then the grid.
+  const gridOrder = gridsToOrder(readSizeGrids(gridLines));
+  const printedPieces = readPrintedPieces(gridLines);
+  type Reading = 'table' | 'grid' | 'lines';
+  const readings: Array<{ kind: Reading; qty: number }> = [
+    { kind: 'table' as const, qty: tableQty },
+    { kind: 'grid' as const, qty: gridOrder?.totalQty ?? 0 },
+    { kind: 'lines' as const, qty: poOrder?.totalQty ?? 0 },
+  ].filter((r) => r.qty > 0);
+  const linesValueMatches = poOrder != null && poHeader.printedTotal != null && Math.abs(poHeader.printedTotal - poOrder.totalValue) <= 0.01;
+  const gridValueMatches = gridOrder?.totalValue != null && poHeader.printedTotal != null && Math.abs(poHeader.printedTotal - gridOrder.totalValue) <= 0.01;
+  const agrees = (r: { kind: Reading; qty: number }) =>
+    (printedPieces != null && r.qty === printedPieces)
+    || (r.kind === 'lines' && linesValueMatches)
+    || (r.kind === 'grid' && gridValueMatches);
+  const rank: Record<Reading, number> = { table: 2, grid: 1, lines: 0 };
+  readings.sort((x, y) =>
+    Number(agrees(y)) - Number(agrees(x))
+    || (printedPieces != null && !agrees(x) && !agrees(y) ? Math.abs(x.qty - printedPieces) - Math.abs(y.qty - printedPieces) : 0)
+    || y.qty - x.qty
+    || rank[y.kind] - rank[x.kind]);
+  const best = readings[0]?.kind ?? null;
+  const chosenQty = readings[0]?.qty ?? 0;
+
+  if (best === 'grid' && gridOrder) {
+    matrices.length = 0;
+    matrices.push({
+      ledger: 'ORDER', sizes: gridOrder.matrix.sizes, rows: gridOrder.matrix.rows,
+      sheetTotal: printedPieces, computedTotal: gridOrder.totalQty,
+    });
+    poLineItems = gridOrder.lineItems.map((l) => ({ ...l, unitPrice: l.unitPrice ?? undefined })) as ExtractionResult['lineItems'];
+    const name = gridOrder.orderName
+      ?? [poHeader.client?.split(/\s+/)[0], poHeader.poNumber ? `PO ${poHeader.poNumber}` : null, gridOrder.styles.length > 1 ? `(${gridOrder.styles.length} styles)` : null]
+        .filter(Boolean).join(' ');
+    if (name) { named.orderName = name; fields[ImportConcept.ORDER_NAME] = name; }
+    if (gridOrder.styleNumber) { named.styleNumber = gridOrder.styleNumber; fields[ImportConcept.STYLE] = gridOrder.styleNumber; }
+    else if (gridOrder.styles.length > 1) { delete named.styleNumber; delete fields[ImportConcept.STYLE]; }
+    if (gridOrder.pricePerPiece != null) { named.pricePerPieceUsd = gridOrder.pricePerPiece; fields[ImportConcept.UNIT_PRICE] = String(gridOrder.pricePerPiece); }
+    if (gridOrder.pricesVary && gridOrder.totalValue != null) {
+      issues.push({
+        level: 'WARNING', field: 'pricePerPieceUsd', sheet: null, cell: null,
+        message: `Prices differ by style or colour. The order's price per piece is the average, $${gridOrder.pricePerPiece?.toFixed(4)} `
+          + `(total $${gridOrder.totalValue.toFixed(2)} ÷ ${gridOrder.totalQty} pcs); each line keeps its own price for the proforma invoice.`,
+      });
+    }
+    for (const problem of gridOrder.problems) {
+      issues.push({ level: 'WARNING', field: null, sheet: null, cell: null, message: problem });
+    }
+    if (poHeader.printedTotal != null && gridOrder.totalValue != null && !gridValueMatches) {
+      issues.push({
+        level: 'WARNING', field: null, sheet: null, cell: null,
+        message: `The colours read add up to ${gridOrder.totalValue.toFixed(2)}, but the document's total is ${poHeader.printedTotal.toFixed(2)}. `
+          + 'Compare the review with the PDF before importing.',
+      });
+    }
+  }
+  if (printedPieces != null && chosenQty > 0 && chosenQty !== printedPieces) {
+    issues.push({
+      level: 'WARNING', field: null, sheet: null, cell: null,
+      message: `The document says ${printedPieces} pcs in total, but ${chosenQty} pcs were read. `
+        + 'Check the Main Order grid on the review screen against the PDF before importing.',
+    });
+  }
+  if (best === 'lines' && poOrder) {
     matrices.length = 0;
     if (poOrder.matrix) {
       matrices.push({

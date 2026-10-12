@@ -25,6 +25,7 @@
  */
 
 import { parseSpreadsheetDate } from '@opsflow/shared';
+import { parseAmount } from './size-grid.js';
 
 /** One printed line, as cells with the x position each started at. */
 export interface PoCell { text: string; x: number; end?: number }
@@ -58,13 +59,9 @@ export interface PoHeader {
 // ── Numbers and dates ───────────────────────────────────────────────────────
 
 const DATE_RE = /^\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}$/;
-const NUM_RE = /^-?(\d{1,3}(,\d{3})+|\d+)?(\.\d+)?$/;
-
+/** A printed number in either decimal convention ("1,234.56", "14,00"). */
 function num(token: string): number | null {
-  const t = token.replace(/[$€£\s]/g, '');
-  if (!t || !NUM_RE.test(t) || t === '.' || t === '-') return null;
-  const n = Number(t.replace(/,/g, ''));
-  return Number.isFinite(n) ? n : null;
+  return parseAmount(token);
 }
 
 /**
@@ -309,7 +306,7 @@ const COMPANY = /\b(corporation|corp\.?|company|incorporated|inc\.?|ltd\.?|limit
 const CURRENCY_LABELS = ['currency code', 'currency'];
 const TERMS_LABELS = ['term', 'terms', 'payment terms'];
 const FREIGHT_LABELS = ['freight', 'ship via', 'shipping method', 'mode', 'shipment mode', 'transport'];
-const TOTAL_LABELS = ['total order', 'order total', 'grand total', 'total amount', 'total'];
+const TOTAL_LABELS = ['total order', 'order total', 'grand total', 'total amount', 'goods total', 'total value', 'total'];
 const ALL_LABELS = [...new Set([...PO_LABELS, ...ORDER_DATE_LABELS, ...DELIVERY_LABELS, ...SHIP_TO_LABELS,
   ...CURRENCY_LABELS, ...TERMS_LABELS, ...FREIGHT_LABELS, ...TOTAL_LABELS])]
   .map((l) => l.split(' '))
@@ -365,6 +362,7 @@ export function readPoHeader(lines: readonly PoTextLine[], dayFirst: boolean): P
     currency: null, terms: null, shippingMethod: null, printedTotal: null,
   };
 
+  let namedTotal = false;
   const split = lines.map(splitAtLabels);
   for (const [li, line] of split.entries()) {
     for (let i = 0; i < line.length; i++) {
@@ -385,9 +383,18 @@ export function readPoHeader(lines: readonly PoTextLine[], dayFirst: boolean): P
         const rest = line.slice(i + 1, i + 3).map((c) => c.text).join(' ');
         h.shippingMethod = /\b(ocean|sea|vessel)\b/i.test(rest) ? 'Sea' : /\b(air|airfreight)\b/i.test(rest) ? 'Air' : null;
       }
-      if (h.printedTotal == null && TOTAL_LABELS.includes(label)) {
-        const v = num(firstWord);
-        if (v != null && v > 0) h.printedTotal = v;
+      // The money total. A named one ("Goods total", "Order total") is taken
+      // at once. A bare "Total" also heads the check line under a size grid
+      // ("Total 3 5 5 13"), so it counts only when it carries a single number,
+      // and the last such line in the document is the one kept.
+      if (TOTAL_LABELS.includes(label)) {
+        const after = line.slice(i + 1).flatMap((c) => c.text.trim().split(/\s+/)).filter((t) => !/^[A-Z]{3}$/.test(t));
+        const values = after.map((t) => num(t)).filter((v): v is number => v != null);
+        const v = values[0];
+        if (v != null && v > 0) {
+          if (label !== 'total') { if (!namedTotal) { h.printedTotal = v; namedTotal = true; } }
+          else if (!namedTotal && values.length === 1 && after.length === 1) h.printedTotal = v;
+        }
       }
 
       // The ship-to block: the value beside the label and the lines beneath it

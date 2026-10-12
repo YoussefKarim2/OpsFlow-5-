@@ -18,7 +18,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
   Upload, FileSpreadsheet, CheckCircle2, XCircle, AlertTriangle, Info,
-  ArrowRight, ArrowLeft, Save, Loader2,
+  ArrowRight, ArrowLeft, Save, Loader2, Plus, Trash2,
 } from 'lucide-react';
 import {
   CONCEPT_META, ImportConcept, fmtNumber, fieldLabel,
@@ -50,12 +50,15 @@ export function ImportWizardPage() {
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [fieldOverrides, setFieldOverrides] = useState<Record<string, string>>({});
   const [reserveMaterials, setReserveMaterials] = useState(true);
+  // The Main Order grid as the coordinator corrected it on the review screen;
+  // null while it is exactly what was read from the file.
+  const [gridEdit, setGridEdit] = useState<GridDraft | null>(null);
 
   const { data: lookups } = useQuery({ queryKey: ['lookups'], queryFn: api.reference.lookups });
 
   const upload = useMutation({
     mutationFn: (f: File) => api.import.upload(f),
-    onSuccess: (r) => { setResult(r); setError(null); setStep('analyse'); },
+    onSuccess: (r) => { setResult(r); setError(null); setGridEdit(null); setStep('analyse'); },
     onError: (e) => { setError(e); setFile(null); },
   });
 
@@ -72,6 +75,7 @@ export function ImportWizardPage() {
       overrides: Object.keys(fieldOverrides).length > 0 ? fieldOverrides : undefined,
       sheetName: result?.analysis?.sheetName,
       reserveMaterials,
+      matrix: gridEdit ? cleanGrid(gridEdit) : undefined,
     }),
     onSuccess: (r) => {
       qc.invalidateQueries();
@@ -94,7 +98,7 @@ export function ImportWizardPage() {
 
   const reset = () => {
     setStep('upload'); setFile(null); setResult(null); setError(null);
-    setColumnMapping({}); setFieldOverrides({});
+    setColumnMapping({}); setFieldOverrides({}); setGridEdit(null);
   };
 
   const analysis = result?.analysis ?? null;
@@ -187,6 +191,10 @@ export function ImportWizardPage() {
           onBack={() => setStep(analysis ? 'map' : 'analyse')}
           onConfirm={() => commit.mutate()}
           committing={commit.isPending}
+          grid={gridEdit ?? gridFromPreview(result)}
+          gridEdited={gridEdit != null}
+          onGrid={setGridEdit}
+          onGridReset={() => setGridEdit(null)}
         />
       )}
     </div>
@@ -576,7 +584,9 @@ function DetectedPanel({
   result: ImportAnalysisDto;
   onField: (field: string, value: string) => void;
 }) {
-  const mappings = result.mappings ?? [];
+  // One row per field: a PDF can name the same field in its header and as a
+  // table column, and two rows with one key confused React's list updates.
+  const mappings = (result.mappings ?? []).filter((m, i, all) => all.findIndex((x) => x.field === m.field) === i);
   if (mappings.length === 0) return null;
 
   const uncertain = mappings.filter(
@@ -694,9 +704,144 @@ function DetectedPanel({
   );
 }
 
+/** The Main Order grid as the review screen edits it. */
+interface GridDraft { sizes: string[]; rows: Array<{ color: string; cells: Record<string, number> }> }
+
+function gridFromPreview(result: ImportAnalysisDto): GridDraft {
+  return {
+    sizes: [...result.preview.sizes],
+    rows: result.preview.matrixRows.map((r) => ({ color: r.color, cells: { ...r.cells } })),
+  };
+}
+
+/** Blank names dropped, cells kept only for sizes that still exist. */
+function cleanGrid(g: GridDraft): GridDraft {
+  const sizes = g.sizes.map((s) => s.trim()).filter(Boolean);
+  return {
+    sizes,
+    rows: g.rows
+      .filter((r) => r.color.trim())
+      .map((r) => ({
+        color: r.color.trim(),
+        cells: Object.fromEntries(sizes.map((s, i) => [s, r.cells[g.sizes.filter((x) => x.trim())[i]!] ?? 0]).filter(([, q]) => (q as number) > 0)),
+      })),
+  };
+}
+
+function gridTotal(g: GridDraft): number {
+  return g.rows.reduce((a, r) => a + g.sizes.reduce((b, s) => b + (r.cells[s] ?? 0), 0), 0);
+}
+
+/**
+ * The Main Order grid, editable. Whatever the file did or did not yield, the
+ * coordinator can add a colour, a size or a quantity here, so the order is
+ * never created with an empty Main Order and Cut Order.
+ */
+function GridEditor({ grid, edited, onChange, onReset }: {
+  grid: GridDraft; edited: boolean; onChange: (g: GridDraft) => void; onReset: () => void;
+}) {
+  const total = gridTotal(grid);
+  const setCell = (ri: number, size: string, raw: string) => {
+    const n = raw === '' ? 0 : Math.max(0, Math.floor(Number(raw)));
+    if (!Number.isFinite(n)) return;
+    onChange({ ...grid, rows: grid.rows.map((r, i) => (i === ri ? { ...r, cells: { ...r.cells, [size]: n } } : r)) });
+  };
+  const renameSize = (si: number, name: string) => {
+    const old = grid.sizes[si]!;
+    onChange({
+      sizes: grid.sizes.map((s, i) => (i === si ? name : s)),
+      rows: grid.rows.map((r) => {
+        const cells = { ...r.cells };
+        if (old in cells) { cells[name] = cells[old]!; delete cells[old]; }
+        return { ...r, cells };
+      }),
+    });
+  };
+  return (
+    <Card>
+      <CardHeader
+        title="Main Order quantities"
+        subtitle={total > 0
+          ? 'As it will be created. Correct any cell, colour or size here; the Cut Order is calculated from this grid.'
+          : 'No quantities could be read from this file. Enter the colours, sizes and pieces from the PO here; the Cut Order is calculated from them.'}
+        action={edited ? <button className="btn-secondary btn-sm" onClick={onReset}>Undo my changes</button> : undefined}
+      />
+      <div className="overflow-x-auto">
+        <table className="w-full">
+          <thead className="border-b border-ink-200 bg-ink-50">
+            <tr>
+              <th className="th">Colour</th>
+              {grid.sizes.map((s, si) => (
+                <th key={si} className="th text-right">
+                  <input aria-label="Size" className="input !w-20 !py-0.5 text-right text-xs font-semibold" value={s} placeholder="Size"
+                    onChange={(e) => renameSize(si, e.target.value)} />
+                </th>
+              ))}
+              <th className="th">
+                <button className="btn-secondary btn-sm" onClick={() => onChange({ ...grid, sizes: [...grid.sizes, grid.sizes.length === 0 ? 'One Size' : ''] })}>
+                  <Plus className="h-3.5 w-3.5" /> Size
+                </button>
+              </th>
+              <th className="th text-right">Total</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-ink-100">
+            {grid.rows.map((r, ri) => (
+              <tr key={ri}>
+                <td className="td">
+                  <div className="flex items-center gap-1.5">
+                    <button aria-label="Remove colour" className="text-ink-400 hover:text-red-600"
+                      onClick={() => onChange({ ...grid, rows: grid.rows.filter((_, i) => i !== ri) })}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                    <input aria-label="Colour" className="input !py-0.5 text-sm font-medium" value={r.color} placeholder="Colour"
+                      onChange={(e) => onChange({ ...grid, rows: grid.rows.map((x, i) => (i === ri ? { ...x, color: e.target.value } : x)) })} />
+                  </div>
+                </td>
+                {grid.sizes.map((s, si) => (
+                  <td key={si} className="td text-right">
+                    <input aria-label={`${r.color} ${s}`} inputMode="numeric" className="input !w-20 !py-0.5 text-right tnum"
+                      value={r.cells[s] ? String(r.cells[s]) : ''} placeholder="0"
+                      onChange={(e) => setCell(ri, s, e.target.value.replace(/[^\d]/g, ''))} />
+                  </td>
+                ))}
+                <td className="td" />
+                <td className="td tnum text-right font-semibold">
+                  {grid.sizes.reduce((a, s) => a + (r.cells[s] ?? 0), 0).toLocaleString()}
+                </td>
+              </tr>
+            ))}
+            <tr>
+              <td className="td" colSpan={grid.sizes.length + 3}>
+                <button className="btn-secondary btn-sm"
+                  onClick={() => onChange({ sizes: grid.sizes.length === 0 ? ['One Size'] : grid.sizes, rows: [...grid.rows, { color: '', cells: {} }] })}>
+                  <Plus className="h-3.5 w-3.5" /> Colour
+                </button>
+              </td>
+            </tr>
+          </tbody>
+          <tfoot className="border-t-2 border-ink-300 bg-ink-50">
+            <tr>
+              <td className="td font-semibold">Total</td>
+              {grid.sizes.map((s, si) => (
+                <td key={si} className="td tnum text-right font-semibold">
+                  {grid.rows.reduce((a, r) => a + (r.cells[s] ?? 0), 0).toLocaleString()}
+                </td>
+              ))}
+              <td className="td" />
+              <td className={clsx('td tnum text-right font-bold', total === 0 && 'text-red-700')}>{total.toLocaleString()}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
 function ReviewStep({
   result, fieldOverrides, onField, onApplyFields, applying,
   reserveMaterials, onReserveChange, onBack, onConfirm, committing,
+  grid, gridEdited, onGrid, onGridReset,
 }: {
   result: ImportAnalysisDto;
   fieldOverrides: Record<string, string>;
@@ -708,8 +853,13 @@ function ReviewStep({
   onBack: () => void;
   onConfirm: () => void;
   committing: boolean;
+  grid: GridDraft;
+  gridEdited: boolean;
+  onGrid: (g: GridDraft) => void;
+  onGridReset: () => void;
 }) {
   const p = result.preview;
+  const total = gridTotal(cleanGrid(grid));
   const errors = result.issues.filter((i) => i.level === 'ERROR');
   const value = (field: string) => fieldOverrides[field] ?? String(p.order[field] ?? '');
 
@@ -720,9 +870,9 @@ function ReviewStep({
         <div className="grid gap-4 p-4 sm:grid-cols-3 lg:grid-cols-6">
           <Summary label="Order" value={String(p.order.poNumber ?? '—')} mono />
           <Summary label="Customer" value={String(p.order.clientName ?? '—')} />
-          <Summary label="Colours" value={String(p.colors.length)} />
-          <Summary label="Sizes" value={String(p.sizes.length)} />
-          <Summary label="Total quantity" value={fmtNumber(p.matrixTotal, { places: 0 })} strong />
+          <Summary label="Colours" value={String(cleanGrid(grid).rows.length)} />
+          <Summary label="Sizes" value={String(cleanGrid(grid).sizes.length)} />
+          <Summary label="Total quantity" value={fmtNumber(total, { places: 0 })} strong />
           <Summary label="Rows read" value={String(result.analysis?.rowsDetected ?? p.matrixRows.length)} />
         </div>
       </Card>
@@ -752,46 +902,7 @@ function ReviewStep({
         </div>
       </Card>
 
-      {p.matrixRows.length > 0 && (
-        <Card>
-          <CardHeader title="Quantity matrix" subtitle="As it will be created" />
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="border-b border-ink-200 bg-ink-50">
-                <tr>
-                  <th className="th">Colour</th>
-                  {p.sizes.map((s) => <th key={s} className="th text-right">{s}</th>)}
-                  <th className="th text-right">Total</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-ink-100">
-                {p.matrixRows.map((r) => (
-                  <tr key={r.color}>
-                    <td className="td font-medium">{r.color}</td>
-                    {p.sizes.map((s) => (
-                      <td key={s} className="td tnum text-right text-ink-700">
-                        {r.cells[s] ? r.cells[s].toLocaleString() : <span className="text-ink-300">—</span>}
-                      </td>
-                    ))}
-                    <td className="td tnum text-right font-semibold">{r.total.toLocaleString()}</td>
-                  </tr>
-                ))}
-              </tbody>
-              <tfoot className="border-t-2 border-ink-300 bg-ink-50">
-                <tr>
-                  <td className="td font-semibold">Total</td>
-                  {p.sizes.map((s) => (
-                    <td key={s} className="td tnum text-right font-semibold">
-                      {p.matrixRows.reduce((a, r) => a + (r.cells[s] ?? 0), 0).toLocaleString()}
-                    </td>
-                  ))}
-                  <td className="td tnum text-right font-bold">{p.matrixTotal.toLocaleString()}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </Card>
-      )}
+      <GridEditor grid={grid} edited={gridEdited} onChange={onGrid} onReset={onGridReset} />
 
       {errors.length > 0 && (
         <Card>
@@ -830,15 +941,19 @@ function ReviewStep({
           <ArrowLeft className="h-4 w-4" /> Back
         </button>
         {/*
-          Enabled whenever an import is not already in flight.
-          Confirming is the user's call: the screen above shows exactly what was
-          and was not read, and anything missing is editable on the order. A
-          disabled button here meant a real purchase order could be uploaded,
-          reviewed, and then simply refused, with nothing to do about it.
+          Enabled once the Main Order grid holds pieces. Everything else
+          missing is editable on the order; an empty grid made an order with
+          empty Main Order and Cut Order screens, and the grid above is where
+          it is fixed, so the button says so instead of refusing silently.
         */}
-        <button className="btn-primary" onClick={onConfirm} disabled={committing}>
-          {committing ? 'Creating the order…' : 'Confirm import'}
-        </button>
+        <div className="flex items-center gap-3">
+          {total === 0 && (
+            <span className="text-sm text-red-700">Enter the order's quantities in the Main Order grid above first.</span>
+          )}
+          <button className="btn-primary" onClick={onConfirm} disabled={committing || total === 0}>
+            {committing ? 'Creating the order…' : 'Confirm import'}
+          </button>
+        </div>
       </div>
     </div>
   );
