@@ -231,7 +231,7 @@ export async function applyLedgerToStockRecords(orderId: string): Promise<number
         await prisma.stockRecord.create({
           data: {
             orderId, colorName: cName, sizeName: sName, availableQty: cell.qty,
-            notes: 'Entered on the Quantity tab',
+            notes: 'Entered in the stock grid',
           },
         });
         written += 1;

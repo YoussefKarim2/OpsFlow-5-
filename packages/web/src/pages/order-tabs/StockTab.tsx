@@ -13,9 +13,9 @@
 
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, Save } from 'lucide-react';
 import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
-import { api, type StockRecordDto } from '../../lib/api';
+import { api, ApiError, type StockRecordDto } from '../../lib/api';
 import { Card, Modal, Field, Spinner, EmptyState, ConfirmDialog, Num, useToast } from '../../components/ui';
 
 interface Draft {
@@ -72,6 +72,29 @@ export function StockTab({ order }: { order: OrderDetailDto }) {
     onError: (e) => toast.error(e),
   });
 
+  // ── The grid: the order's colours down, its sizes across, as Main Order.
+  // Saved into the STOCK ledger, which updates the stock records above and
+  // recalculates the cut order (see stock-sync.ts on the server).
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const savedStock = (colorId: string, sizeId: string): number =>
+    axes?.matrices?.STOCK?.cells?.[colorId]?.[sizeId] ?? 0;
+  const cellText = (colorId: string, sizeId: string): string => {
+    const k = `${colorId}:${sizeId}`;
+    if (k in edits) return edits[k]!;
+    const v = savedStock(colorId, sizeId);
+    return v ? String(v) : '';
+  };
+  const cellNum = (colorId: string, sizeId: string) => Number(cellText(colorId, sizeId) || 0);
+  const gridDirty = Object.keys(edits).length > 0;
+  const saveGrid = useMutation({
+    mutationFn: () => api.orders.setMatrix(orderId, 'STOCK', Object.entries(edits).map(([k, v]) => {
+      const [orderColorId, orderSizeId] = k.split(':') as [string, string];
+      return { orderColorId, orderSizeId, qty: Number(v || 0) };
+    })),
+    onSuccess: () => { setEdits({}); refresh(); toast.success('Finished stock saved; the Cut Order is recalculated'); },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : 'Could not save the finished stock.'),
+  });
+
   const rows = data?.data ?? [];
   const total = data?.totalAvailable ?? 0;
   // The colour and size axes come from the matrix endpoint — the same two
@@ -87,11 +110,83 @@ export function StockTab({ order }: { order: OrderDetailDto }) {
 
   if (isLoading) return <Spinner label="Loading finished stock…" />;
 
+  const gColors = axes?.colors ?? [];
+  const gSizes = axes?.sizes ?? [];
+
   return (
     <div className="space-y-4 p-5">
       <Card>
         <div className="card-header">
-          <h3 className="card-title">Finished pieces already in stock</h3>
+          <div>
+            <h3 className="card-title">Finished stock by colour and size</h3>
+            <p className="mt-0.5 text-xs text-ink-500">Type the finished pieces in stock under each size. Empty means none.</p>
+          </div>
+          {gridDirty && (
+            <div className="flex gap-2">
+              <button className="btn-ghost btn-sm" onClick={() => setEdits({})}>Discard</button>
+              <button className="btn-primary btn-sm" onClick={() => saveGrid.mutate()} disabled={saveGrid.isPending}>
+                <Save className="h-3.5 w-3.5" /> {saveGrid.isPending ? 'Saving…' : 'Save'}
+              </button>
+            </div>
+          )}
+        </div>
+        {gColors.length === 0 || gSizes.length === 0 ? (
+          <p className="px-4 py-6 text-sm text-ink-500">This order has no colours or sizes yet. Fill the Main Order first.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="border-b border-ink-200 bg-ink-50">
+                <tr>
+                  <th className="th">Colour</th>
+                  {gSizes.map((z) => <th key={z.id} className="th text-right">{z.name}</th>)}
+                  <th className="th text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-ink-100">
+                {gColors.map((c) => (
+                  <tr key={c.id}>
+                    <td className="td font-medium text-ink-800">{c.name}</td>
+                    {gSizes.map((z) => (
+                      <td key={z.id} className="p-1 text-right">
+                        <input
+                          aria-label={`${c.name} ${z.name}`}
+                          inputMode="numeric"
+                          className="input !w-20 !py-1 text-right tnum"
+                          value={cellText(c.id, z.id)}
+                          onChange={(e) => {
+                            const v = e.target.value.replace(/[^\d]/g, '');
+                            setEdits((ed) => ({ ...ed, [`${c.id}:${z.id}`]: v }));
+                          }}
+                        />
+                      </td>
+                    ))}
+                    <td className="td tnum text-right font-semibold">
+                      {gSizes.reduce((a, z) => a + cellNum(c.id, z.id), 0).toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="border-t-2 border-ink-300 bg-ink-50">
+                <tr>
+                  <td className="td font-semibold">Totals</td>
+                  {gSizes.map((z) => (
+                    <td key={z.id} className="td tnum text-right font-semibold">
+                      {gColors.reduce((a, c) => a + cellNum(c.id, z.id), 0).toLocaleString()}
+                    </td>
+                  ))}
+                  <td className="td tnum text-right font-bold">
+                    {gColors.reduce((a, c) => a + gSizes.reduce((b, z) => b + cellNum(c.id, z.id), 0), 0).toLocaleString()}
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      <Card>
+        <div className="card-header">
+          <h3 className="card-title">Stock records</h3>
           <button className="btn-primary btn-sm" onClick={() => setDraft(EMPTY)}>
             <Plus className="h-3.5 w-3.5" /> Record stock
           </button>
