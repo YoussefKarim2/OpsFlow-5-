@@ -12,10 +12,10 @@
  * either to write one or to say the order does not need any.
  */
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { InstructionLines } from '../../components/InstructionLines';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, FileSpreadsheet } from 'lucide-react';
 import { DEPARTMENT_LABEL, fmtDate, type Department } from '@opsflow/shared';
 import { api, type InstructionDto, type InstructionLineDto } from '../../lib/api';
 import { Card, Modal, Field, Spinner, EmptyState, ConfirmDialog, clsx, useToast } from '../../components/ui';
@@ -27,6 +27,8 @@ const DEPARTMENTS: Department[] = [
 
 interface Draft {
   id: string | null;
+  /** Where an imported draft was read from, shown in the editor. */
+  source?: string;
   title: string;
   body: string;
   visibleTo: string[];
@@ -40,6 +42,25 @@ export function InstructionsTab({ orderId }: { orderId: string }) {
   const toast = useToast();
   const [draft, setDraft] = useState<Draft | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<InstructionDto | null>(null);
+  // Imported drafts still to review: each opens in the editor after the last is saved or skipped.
+  const [queue, setQueue] = useState<Draft[]>([]);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const next = () => {
+    const [first, ...rest] = queue;
+    setQueue(rest);
+    setDraft(first ?? null);
+  };
+
+  const importFile = useMutation({
+    mutationFn: (file: File) => api.steps.importInstructions(orderId, file),
+    onSuccess: (r) => {
+      const drafts: Draft[] = r.drafts.map((d) => ({ id: null, title: d.title, body: d.body, visibleTo: d.visibleTo, lines: d.lines, source: d.source }));
+      toast.success(`Read ${drafts.length} instruction${drafts.length === 1 ? '' : 's'} from "${r.fileName}". Check ${drafts.length === 1 ? 'it' : 'each'} and save.`);
+      setDraft(drafts[0] ?? null);
+      setQueue(drafts.slice(1));
+    },
+    onError: (e) => toast.error(e),
+  });
 
   const { data, isLoading } = useQuery({
     queryKey: ['instructions', orderId],
@@ -56,7 +77,7 @@ export function InstructionsTab({ orderId }: { orderId: string }) {
       d.id
         ? api.steps.updateInstruction(orderId, d.id, { title: d.title, body: d.body, visibleTo: d.visibleTo, lines: d.lines })
         : api.steps.addInstruction(orderId, { title: d.title, body: d.body, visibleTo: d.visibleTo, lines: d.lines }),
-    onSuccess: () => { refresh(); setDraft(null); toast.success('Instruction saved'); },
+    onSuccess: () => { refresh(); toast.success('Instruction saved'); next(); },
     onError: (e) => toast.error(e),
   });
 
@@ -79,9 +100,18 @@ export function InstructionsTab({ orderId }: { orderId: string }) {
       <Card>
         <div className="card-header">
           <h3 className="card-title">Instructions for this order only</h3>
-          <button className="btn-primary btn-sm" onClick={() => setDraft(EMPTY)}>
-            <Plus className="h-3.5 w-3.5" /> Add an instruction
-          </button>
+          <div className="flex gap-2">
+            <input
+              ref={fileInput} type="file" accept=".xlsx,.xlsm,.csv" className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) importFile.mutate(f); e.target.value = ''; }}
+            />
+            <button className="btn-secondary btn-sm" onClick={() => fileInput.current?.click()} disabled={importFile.isPending}>
+              <FileSpreadsheet className="h-3.5 w-3.5" /> {importFile.isPending ? 'Reading…' : 'Import from Excel'}
+            </button>
+            <button className="btn-primary btn-sm" onClick={() => setDraft(EMPTY)}>
+              <Plus className="h-3.5 w-3.5" /> Add an instruction
+            </button>
+          </div>
         </div>
 
         {rows.length === 0 ? (
@@ -100,7 +130,8 @@ export function InstructionsTab({ orderId }: { orderId: string }) {
                   <div className="min-w-0 flex-1">
                     <h4 className="text-sm font-semibold text-ink-900">{r.title}</h4>
                     <div
-                      className="prose-instruction mt-1 text-sm text-ink-700"
+                      // Plain text keeps its line breaks; formatted text has its own.
+                      className={clsx('prose-instruction mt-1 text-sm text-ink-700', !/<[a-z]/i.test(r.body) && 'whitespace-pre-line')}
                       // Sanitised server-side on write: script, style, iframe and
                       // every attribute are stripped before it is ever stored.
                       dangerouslySetInnerHTML={{ __html: r.body }}
@@ -142,13 +173,16 @@ export function InstructionsTab({ orderId }: { orderId: string }) {
 
       <Modal
         open={draft !== null}
-        onClose={() => setDraft(null)}
+        onClose={() => { setDraft(null); setQueue([]); }}
         title={draft?.id ? 'Edit instruction' : 'New instruction'}
         subtitle="Whoever you tick sees this on their own screens for this order."
         wide
         footer={
           <>
-            <button className="btn-ghost btn-sm" onClick={() => setDraft(null)}>Cancel</button>
+            <button className="btn-ghost btn-sm" onClick={() => { setDraft(null); setQueue([]); }}>Cancel</button>
+            {queue.length > 0 && (
+              <button className="btn-secondary btn-sm" onClick={next}>Skip this one</button>
+            )}
             <button
               className="btn-primary btn-sm"
               disabled={!valid || save.isPending}
@@ -161,6 +195,12 @@ export function InstructionsTab({ orderId }: { orderId: string }) {
       >
         {draft && (
           <div className="space-y-3">
+            {draft.source && (
+              <p className="rounded-md bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                Filled in from {draft.source}. Check it, then save.
+                {queue.length > 0 && ` ${queue.length} more after this one.`}
+              </p>
+            )}
             <Field label="Title" hint="Short enough to scan in a list. “Neck tape runs the other way.”">
               <input
                 className="input"

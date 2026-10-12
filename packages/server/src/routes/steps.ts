@@ -22,6 +22,7 @@ import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines, sanitiseOverrides,
 import { detectFileKind, FILE_KIND_LABEL } from '../services/import/file-kind.js';
 import { extractFromPdf } from '../services/import/pdf-extractor.js';
 import { fillMainOrderFromDocuments } from '../services/fill-main-order.js';
+import { readInstructionFile } from '../services/import/instruction-reader.js';
 import { extractTabular } from '../services/import/tabular-extractor.js';
 import { buildProformaDraft } from '../services/import/proforma-target.js';
 import { decodeUploadName } from '../util/upload-name.js';
@@ -440,6 +441,26 @@ stepsRouter.post('/:id/instructions', requirePermission('order:edit'), asyncHand
 
   res.status(201).json({ data: created });
 }));
+
+/**
+ * Read a special-instructions spreadsheet into drafts for the review screen.
+ * Nothing is saved: each draft opens in the instruction editor, filled in, and
+ * is saved by a person, as a typed instruction is.
+ */
+stepsRouter.post(
+  '/:id/instructions/import',
+  requirePermission('order:edit'),
+  proformaUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    await resolveOrderId(req.params.id);
+    if (!req.file) throw new BadRequestError('No file was uploaded.');
+    const drafts = await readInstructionFile(req.file.buffer, req.file.originalname);
+    if (drafts.length === 0) {
+      throw new BadRequestError(`No instructions, names or numbers were found in "${req.file.originalname}".`);
+    }
+    res.json({ drafts, fileName: req.file.originalname });
+  }),
+);
 
 stepsRouter.patch('/:id/instructions/:instructionId', requirePermission('order:edit'), asyncHandler(async (req, res) => {
   const orderId = await resolveOrderId(req.params.id);

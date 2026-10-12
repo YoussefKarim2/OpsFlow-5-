@@ -830,6 +830,14 @@ export const api = {
 
     instructions: (orderId: string) =>
       get<{ data: InstructionDto[] }>(`/orders/${orderId}/instructions`),
+    importInstructions: (orderId: string, file: File) => {
+      const form = new FormData();
+      form.append('file', file);
+      return request<{
+        fileName: string;
+        drafts: Array<{ title: string; body: string; visibleTo: string[]; lines: InstructionLineDto[]; source: string }>;
+      }>(`/orders/${orderId}/instructions/import`, { method: 'POST', body: form });
+    },
     addInstruction: (orderId: string, body: { title: string; body: string; visibleTo: string[]; lines?: InstructionLineDto[] }) =>
       post<{ data: InstructionDto }>(`/orders/${orderId}/instructions`, body),
     updateInstruction: (orderId: string, id: string, body: Partial<{ title: string; body: string; visibleTo: string[]; lines: InstructionLineDto[] }>) =>
