@@ -10,7 +10,7 @@ import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Wand2, Save, FileSearch } from 'lucide-react';
 import {
-  QtyLedger, LEDGER_LABEL, buildMatrix, fmtNumber,
+  QtyLedger, LEDGER_LABEL, buildMatrix, fmtNumber, fmtDate,
   ledgerTotal, computeCutOrderTotal, computeCuttableQty,
   type OrderDetailDto, type QtyCell, type AxisRef,
 } from '@opsflow/shared';
@@ -160,6 +160,21 @@ export function QuantityTab({
     onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not save the cut allowance.'),
   });
 
+  /** Null until the date is touched, so the order's own value stays authoritative. */
+  const [fabricDateDraft, setFabricDateDraft] = useState<string | null>(null);
+  const fabricDateSaved = order.fabricDeliveryToSupplier?.slice(0, 10) ?? '';
+  const fabricDateText = fabricDateDraft ?? fabricDateSaved;
+  const fabricDateDirty = fabricDateDraft !== null && fabricDateDraft !== fabricDateSaved;
+  const saveFabricDate = useMutation({
+    mutationFn: (date: string) => api.orders.update(order.id, { fabricDeliveryToSupplier: date || null }),
+    onSuccess: () => {
+      setFabricDateDraft(null);
+      setError(null);
+      void qc.invalidateQueries({ queryKey: ['order', order.id] });
+    },
+    onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not save the fabric date.'),
+  });
+
   const generateCut = useMutation({
     mutationFn: () => api.orders.generateCut(order.id),
     onSuccess: () => {
@@ -291,7 +306,7 @@ export function QuantityTab({
 
         {ledger === QtyLedger.CUT && (
           <div className="border-b border-ink-200">
-            <div className="grid grid-cols-1 gap-px bg-ink-200 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-px bg-ink-200 sm:grid-cols-2 lg:grid-cols-4">
               <div className="bg-white px-4 py-3">
                 <div className="text-2xs font-semibold uppercase tracking-wider text-ink-500">
                   Main Order Quantity
@@ -355,6 +370,38 @@ export function QuantityTab({
                     : `${fmtNumber(mainOrderQty)} × `}
                   {(1 + cutPct).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}
                 </div>
+              </div>
+
+              {/* The same date as "Fabric delivery date to supplier" on the
+                  External Order step: one field, so the two never disagree. */}
+              <div className="bg-white px-4 py-3">
+                <div className="text-2xs font-semibold uppercase tracking-wider text-ink-500">
+                  Fabric Date to External
+                </div>
+                {can('order:edit') ? (
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <input
+                      type="date" value={fabricDateText}
+                      onChange={(e) => setFabricDateDraft(e.target.value)}
+                      aria-label="Fabric date to external"
+                      className="rounded-md border border-ink-300 px-2 py-1 text-sm font-semibold"
+                    />
+                    {fabricDateDirty && (
+                      <button
+                        onClick={() => saveFabricDate.mutate(fabricDateText)}
+                        disabled={saveFabricDate.isPending}
+                        className="btn-primary btn-sm"
+                      >
+                        {saveFabricDate.isPending ? 'Saving…' : 'Save'}
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-1 text-lg font-semibold text-ink-900">
+                    {order.fabricDeliveryToSupplier ? fmtDate(order.fabricDeliveryToSupplier) : '—'}
+                  </div>
+                )}
+                <div className="mt-0.5 text-2xs text-ink-400">When the fabric goes to the external factory</div>
               </div>
             </div>
 
