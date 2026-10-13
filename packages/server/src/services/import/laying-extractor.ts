@@ -25,6 +25,7 @@ import {
 import { findHeaderCandidates, readTableAt, type SheetTable } from './tabular-extractor.js';
 import { openWorkbook, readCsvWorkbook } from './open-workbook.js';
 import { detectFileKind } from './file-kind.js';
+import { readAgeLayingSheet, type AgeLayingSheet } from './age-laying-reader.js';
 
 const LAYING_CONCEPTS = new Set<ImportConcept>([
   // MATERIAL as well as FABRIC: plenty of laying sheets head that column
@@ -64,6 +65,28 @@ export interface LayingRow {
   cutDate: Date | null;
   cutByName: string | null;
   poNumber: string | null;
+  /** The sheet's MAXLAYER column, where it has one. */
+  maxLayer: number | null;
+  /**
+   * LAY: a marker spread in layers. PANEL: a row of the factory sheet's
+   * per-colour panel tables — how many of one part (front, back, sleeve,
+   * collar) are cut per size for one colour. Stored as a one-layer marker of
+   * that part so the order keeps it; never counted as garments.
+   */
+  kind: 'LAY' | 'PANEL';
+}
+
+/** What the factory's own laying sheet says beyond its lay rows. */
+export interface LayingExtras {
+  layout: 'AGE';
+  sizes: string[];
+  header: AgeLayingSheet['header'];
+  requirement: AgeLayingSheet['requirement'];
+  totals: AgeLayingSheet['totals'];
+  variance: AgeLayingSheet['variance'];
+  signatures: AgeLayingSheet['signatures'];
+  fabricSummary: AgeLayingSheet['fabricSummary'];
+  panelTables: AgeLayingSheet['panelTables'];
 }
 
 export interface LayingAnalysis {
@@ -81,6 +104,99 @@ export interface LayingExtractionResult {
   issues: ImportIssue[];
   /** Every distinct PO number found in the data, for the order-match check. */
   detectedPoNumbers: string[];
+  /** Present when the file is the factory's own laying sheet layout. */
+  extras?: LayingExtras;
+}
+
+/**
+ * The factory's own laying sheet, read by its layout rather than by scoring
+ * columns. The column scorer saw a data row as the header and recognised
+ * nothing of it; this reads the title block, the Ratio/Qty row, the lays, the
+ * TOTAL and (+/-) rows, the sign-off lines, the fabric summary and the
+ * per-colour panel tables as the sheet lays them out.
+ */
+function fromAgeSheet(age: AgeLayingSheet, candidateSheets: Array<{ name: string; rows: number }>): LayingExtractionResult {
+  const issues: ImportIssue[] = [];
+  const rows: LayingRow[] = [];
+  const blank = {
+    markerNumber: null, markerWidthM: null, wastagePct: null, fabricConsumptionM: null, cutDate: null, cutByName: null, poNumber: null,
+  };
+  for (const l of age.lays) {
+    rows.push({
+      ...blank, rowNumber: rows.length + 1, kind: 'LAY',
+      fabricName: l.fabric ?? age.header.fabrics[0] ?? null, fabricColor: l.color, panel: l.panel ?? 'ALL',
+      sizeRatio: l.sizeRatio, layers: l.layers == null ? null : Math.round(l.layers), markerLengthM: l.markerLengthM,
+      totalLengthM: l.totalLengthM, nestPcs: l.nestPcs, efficiencyPct: l.efficiencyPct,
+      maxLayer: l.maxLayer == null ? null : Math.round(l.maxLayer),
+    });
+    if (l.layers == null) {
+      issues.push({ level: 'WARNING', field: 'layers', sheet: age.sheetName, cell: `row ${l.sheetRow}`, message: `Sheet row ${l.sheetRow}: no layer count; the lay is imported with 0 layers.` });
+    }
+  }
+  const mainFabric = age.header.fabrics[0] ?? age.lays[0]?.fabric ?? null;
+  let panelRows = 0;
+  for (const t of age.panelTables) {
+    for (const c of t.colours) {
+      for (const p of c.parts) {
+        const ratio = Object.entries(p.bySize).map(([size, n]) => `(${size}${n})`).join(', ');
+        if (!ratio) continue;
+        rows.push({
+          ...blank, rowNumber: rows.length + 1, kind: 'PANEL',
+          fabricName: mainFabric, fabricColor: c.colour, panel: p.part, sizeRatio: ratio,
+          layers: 1, markerLengthM: null, totalLengthM: null, nestPcs: null, efficiencyPct: null, maxLayer: null,
+        });
+        panelRows++;
+      }
+    }
+  }
+
+  const concept = (header: string, c: ImportConcept, samples: string[]): ColumnAnalysis => ({
+    index: 0, header, samples: samples.slice(0, 5), guesses: [{ concept: c, confidence: 1, reason: 'The factory laying sheet layout' }],
+    concept: c, confidence: 1, needsConfirmation: false, source: 'AUTO',
+  });
+  const lays = age.lays;
+  const str = (v: unknown) => (v == null ? '' : String(v));
+  const columns: ColumnAnalysis[] = [
+    concept('fabric', ImportConcept.FABRIC, lays.map((l) => str(l.fabric))),
+    concept('Color', ImportConcept.COLOR, lays.map((l) => str(l.color))),
+    concept('PANAL', ImportConcept.PANEL, lays.map((l) => str(l.panel))),
+    concept('SIZE', ImportConcept.SIZE_RATIO, lays.map((l) => str(l.sizeRatio))),
+    concept('Layers', ImportConcept.LAYERS, lays.map((l) => str(l.layers))),
+    concept('Total Length', ImportConcept.TOTAL_LENGTH, lays.map((l) => str(l.totalLengthM))),
+    concept('NEST', ImportConcept.NEST_PCS, lays.map((l) => str(l.nestPcs))),
+    concept('Marker Length', ImportConcept.MARKER_LENGTH, lays.map((l) => str(l.markerLengthM))),
+    concept('EFF%', ImportConcept.EFFICIENCY, lays.map((l) => str(l.efficiencyPct))),
+  ].map((c, i) => ({ ...c, index: i }));
+
+  issues.unshift({
+    level: 'INFO', field: null, sheet: age.sheetName, cell: null,
+    message: `Recognised the factory laying sheet: ${lays.length} lay${lays.length === 1 ? '' : 's'}`
+      + (panelRows > 0 ? `, ${panelRows} panel row${panelRows === 1 ? '' : 's'} by colour` : '')
+      + (age.header.poNumber ? `, PO ${age.header.poNumber}` : '') + '.',
+  });
+  const laySum = lays.reduce((a, l) => a + (l.total ?? 0), 0);
+  if (age.totals?.total != null && laySum !== age.totals.total) {
+    issues.push({
+      level: 'WARNING', field: null, sheet: age.sheetName, cell: null,
+      message: `The sheet's TOTAL row says ${age.totals.total} pieces, but its lays add up to ${laySum}. Check the sheet before importing.`,
+    });
+  }
+  if (lays.length === 0) {
+    issues.push({ level: 'WARNING', field: null, sheet: age.sheetName, cell: null, message: 'The lay table was found but holds no lays.' });
+  }
+
+  return {
+    analysis: {
+      sheetName: age.sheetName, headerRowIndex: age.headerRow, columns,
+      readiness: assessMapping(columns, LAYING_ESSENTIALS), candidateSheets, rowsDetected: rows.length,
+    },
+    rows, issues,
+    detectedPoNumbers: age.header.poNumber ? [age.header.poNumber] : [],
+    extras: {
+      layout: 'AGE', sizes: age.sizes, header: age.header, requirement: age.requirement, totals: age.totals,
+      variance: age.variance, signatures: age.signatures, fabricSummary: age.fabricSummary, panelTables: age.panelTables,
+    },
+  };
 }
 
 function toNumber(value: unknown): number | null {
@@ -129,6 +245,18 @@ export async function extractLayingMarking(
     : await openWorkbook(buffer);
 
   const issues: ImportIssue[] = [];
+
+  // The factory's own layout first. Column overrides do not apply to it: every
+  // column is known, and the review screen shows them as recognised.
+  const ageSheets = wb.worksheets
+    .map((ws) => ({ ws, age: readAgeLayingSheet(ws) }))
+    .filter((x): x is { ws: ExcelJS.Worksheet; age: AgeLayingSheet } => x.age != null && (x.age.lays.length > 0 || x.age.panelTables.length > 0));
+  const agePick = options.sheetName
+    ? ageSheets.find((x) => x.ws.name === options.sheetName)
+    : [...ageSheets].sort((a, b) => b.age.lays.length - a.age.lays.length)[0];
+  if (agePick) {
+    return fromAgeSheet(agePick.age, ageSheets.map((x) => ({ name: x.ws.name, rows: x.age.lays.length })));
+  }
 
   // For each sheet, try every plausible header row and keep whichever
   // matches the most laying/marking concepts — not `readSheetTable`'s
@@ -236,6 +364,8 @@ export async function extractLayingMarking(
       cutDate: safeDate(cellAt(row, ImportConcept.CUT_DATE)),
       cutByName: toText(cellAt(row, ImportConcept.RESPONSIBLE_PERSON)),
       poNumber: po,
+      maxLayer: null,
+      kind: 'LAY',
     });
   }
 

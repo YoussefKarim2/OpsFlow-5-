@@ -77,9 +77,12 @@ export function LayingMarkingImportWizard({
   const commit = useMutation({
     mutationFn: () => api.layingImport.commit(orderId, analysis!.jobId, resolutions),
     onSuccess: (result) => {
+      const touched = result.markersCreated + result.markersUpdated;
+      const lays = Math.max(0, touched - (result.panelRows ?? 0));
       toast.success(
-        `Imported: ${result.markersCreated} lay${result.markersCreated === 1 ? '' : 's'} added` +
-        (result.markersUpdated > 0 ? `, ${result.markersUpdated} replaced` : ''),
+        `Imported: ${lays} lay${lays === 1 ? '' : 's'}` +
+        (result.panelRows ? ` and ${result.panelRows} panel row${result.panelRows === 1 ? '' : 's'} by colour` : '') +
+        (result.markersUpdated > 0 ? ` (${result.markersUpdated} replaced)` : '') + '.',
       );
       qc.invalidateQueries({ queryKey: ['markers', orderId] });
       qc.invalidateQueries({ queryKey: ['laying-import-history', orderId] });
@@ -212,8 +215,36 @@ function MapStep({
   onNext: () => void;
 }) {
   const unconfirmed = analysis.columns.filter((c: ColumnAnalysis) => c.needsConfirmation);
+  const x = analysis.extras;
+  const lays = analysis.rows.filter((r) => r.kind !== 'PANEL').length;
+  const panels = analysis.rows.filter((r) => r.kind === 'PANEL').length;
   return (
     <div className="space-y-4">
+      {x && (
+        <Card>
+          <CardHeader
+            title="Read from the factory laying sheet"
+            subtitle={`${lays} lay${lays === 1 ? '' : 's'}${panels > 0 ? ` and ${panels} panel row${panels === 1 ? '' : 's'} by colour` : ''}, with the sheet's own totals.`}
+          />
+          <dl className="grid gap-x-6 gap-y-1.5 p-4 text-xs sm:grid-cols-2 lg:grid-cols-3">
+            {([
+              ['PO number', x.header.poNumber], ['Order name', x.header.orderName], ['Client', x.header.client],
+              ['Season', x.header.season], ['Fabric', x.header.fabrics.join(', ') || null],
+              ['Cut percentage', x.header.cutPercentage == null ? null : `${(x.header.cutPercentage * 100).toFixed(1)}%`],
+              ['Sizes', x.sizes.join(' · ')],
+              ['Total pieces (sheet)', x.totals?.total == null ? null : x.totals.total.toLocaleString()],
+              ['Total length (sheet)', x.totals?.totalLengthM == null ? null : `${x.totals.totalLengthM.toLocaleString()} m`],
+              ['Cut by', x.signatures.cutBy], ['Numbering by', x.signatures.numberingBy], ['Inspected by', x.signatures.inspectedBy],
+              ['Bundled by', x.signatures.bundledBy], ['Approved', x.signatures.approvedBy],
+            ] as Array<[string, string | null]>).map(([k, v]) => (
+              <div key={k} className="flex gap-2"><dt className="w-36 shrink-0 text-ink-500">{k}</dt><dd className="font-medium text-ink-800">{v || '—'}</dd></div>
+            ))}
+            {x.header.spreadNotes && (
+              <div className="flex gap-2 sm:col-span-2 lg:col-span-3"><dt className="w-36 shrink-0 text-ink-500">Spread notes</dt><dd className="whitespace-pre-line text-ink-800" dir="auto">{x.header.spreadNotes}</dd></div>
+            )}
+          </dl>
+        </Card>
+      )}
       <Card>
         <CardHeader
           title={`Sheet: ${analysis.sheetName || '(none found)'}`}
@@ -311,8 +342,33 @@ function ReviewStep({
         </div>
       )}
 
+      {analysis.rows.some((r) => r.kind === 'PANEL') && (
+        <Card>
+          <CardHeader
+            title="Panels by colour"
+            subtitle="From the sheet's per-colour tables: how many of each part are cut per size. Kept on the order as panel rows, not counted as garments."
+          />
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="border-b border-ink-200 bg-ink-50">
+                <tr><th className="th">Colour</th><th className="th">Part</th><th className="th">Pieces per size</th></tr>
+              </thead>
+              <tbody className="divide-y divide-ink-100">
+                {analysis.rows.filter((r) => r.kind === 'PANEL').map((r) => (
+                  <tr key={r.rowNumber}>
+                    <td className="td text-xs font-medium">{r.fabricColor}</td>
+                    <td className="td text-xs">{r.panel}</td>
+                    <td className="td font-mono text-2xs text-ink-600">{r.sizeRatio}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+
       <Card>
-        <CardHeader title="Detected lays" subtitle={`${analysis.rows.length} row${analysis.rows.length === 1 ? '' : 's'}`} />
+        <CardHeader title="Detected lays" subtitle={`${analysis.rows.filter((r) => r.kind !== 'PANEL').length} row${analysis.rows.filter((r) => r.kind !== 'PANEL').length === 1 ? '' : 's'}`} />
         {analysis.rows.length === 0 ? (
           <EmptyState title="No lays to import" detail="Go back and check the column mapping." />
         ) : (
@@ -330,7 +386,7 @@ function ReviewStep({
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-100">
-                {analysis.rows.map((row: LayingRowDto) => {
+                {analysis.rows.filter((r) => r.kind !== 'PANEL').map((row: LayingRowDto) => {
                   const key = row.markerNumber ? `marker:${row.markerNumber}` : `row:${row.rowNumber}`;
                   const conflict = conflictByKey.get(key);
                   return (

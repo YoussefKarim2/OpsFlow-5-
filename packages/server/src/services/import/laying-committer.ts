@@ -18,7 +18,7 @@ import type { PrismaClient } from '@prisma/client';
 import { ValidationError, NotFoundError, ConflictError } from '../../errors.js';
 import { suppressChangeEvents } from '../../request-context.js';
 import { logActivity } from '../../services/activity-service.js';
-import type { LayingRow } from './laying-extractor.js';
+import type { LayingRow, LayingExtras } from './laying-extractor.js';
 
 export type RowResolution = 'KEEP' | 'REPLACE' | 'ADD_NEW';
 
@@ -30,12 +30,16 @@ export interface CommitLayingImportInput {
   resolutions: Record<string, RowResolution>;
   actorId: string;
   actorName: string;
+  /** The factory sheet's sign-off lines, spread notes and fabric summary, when it was one. */
+  extras?: LayingExtras;
 }
 
 export interface CommitLayingImportResult {
   markersCreated: number;
   markersUpdated: number;
   markersSkipped: number;
+  /** Of the markers created or replaced, how many were the factory sheet's panel rows rather than lays. */
+  panelRows: number;
   cuttingRecordsCreated: number;
   fabricRecordsCreated: number;
 }
@@ -172,7 +176,7 @@ export async function commitLayingImport(
     });
     let nextPosition = existingMarkers.length > 0 ? Math.max(...existingMarkers.map((m) => m.position)) + 1 : 0;
 
-    let markersCreated = 0, markersUpdated = 0, markersSkipped = 0;
+    let markersCreated = 0, markersUpdated = 0, markersSkipped = 0, panelRows = 0;
     let cuttingRecordsCreated = 0, fabricRecordsCreated = 0;
 
     for (const { row, key, existing } of resolveLayingRows(input.rows, existingMarkers)) {
@@ -189,6 +193,7 @@ export async function commitLayingImport(
         nestPcs: row.nestPcs,
         efficiencyPct: row.efficiencyPct,
         wastagePct: row.wastagePct,
+        maxLayer: row.maxLayer,
         importJobId: input.jobId,
       };
 
@@ -196,9 +201,11 @@ export async function commitLayingImport(
       if (plan.kind === 'CREATE') {
         await tx.marker.create({ data: { ...markerData, orderId: order.id, position: nextPosition++ } });
         markersCreated++;
+        if (row.kind === 'PANEL') panelRows++;
       } else if (plan.kind === 'UPDATE') {
         await tx.marker.update({ where: { id: plan.existingId }, data: markerData });
         markersUpdated++;
+        if (row.kind === 'PANEL') panelRows++;
       } else {
         markersSkipped++;
         // A lay the coordinator chose to keep as it was is not imported at
@@ -236,15 +243,50 @@ export async function commitLayingImport(
       }
     }
 
-    return { markersCreated, markersUpdated, markersSkipped, cuttingRecordsCreated, fabricRecordsCreated };
+    // The factory sheet's own sign-off lines and spread notes are one cutting
+    // record per sheet, and its FABRIC / COLOR / METER summary one fabric
+    // record per fabric. Re-importing the sheet updates the ones its earlier
+    // import wrote rather than adding a second set.
+    if (input.extras) {
+      const x = input.extras;
+      const s = x.signatures;
+      if (Object.values(s).some(Boolean) || x.header.spreadNotes) {
+        const data = {
+          cutByName: s.cutBy, numberingByName: s.numberingBy, inspectedByName: s.inspectedBy,
+          bundledByName: s.bundledBy, approvedByName: s.approvedBy, notes: x.header.spreadNotes, importJobId: input.jobId,
+        };
+        const prior = await tx.cuttingRecord.findFirst({
+          where: { orderId: order.id, importJobId: { not: null }, actualCutQty: null }, orderBy: { createdAt: 'desc' },
+        });
+        if (prior) await tx.cuttingRecord.update({ where: { id: prior.id }, data });
+        else { await tx.cuttingRecord.create({ data: { ...data, orderId: order.id } }); cuttingRecordsCreated++; }
+      }
+      for (const f of x.fabricSummary) {
+        if (!f.fabric) continue;
+        const prior = await tx.fabricRecord.findFirst({
+          where: {
+            orderId: order.id,
+            fabricName: { equals: f.fabric, mode: 'insensitive' },
+            ...(f.color ? { colorName: { equals: f.color, mode: 'insensitive' } } : {}),
+          },
+        });
+        const data = { fabricName: f.fabric, colorName: f.color, requiredM: f.meters, importJobId: input.jobId };
+        if (prior) await tx.fabricRecord.update({ where: { id: prior.id }, data });
+        else { await tx.fabricRecord.create({ data: { ...data, orderId: order.id } }); fabricRecordsCreated++; }
+      }
+    }
+
+    return { markersCreated, markersUpdated, markersSkipped, panelRows, cuttingRecordsCreated, fabricRecordsCreated };
   }, { timeout: 60_000 });
 
-  const { markersCreated, markersUpdated, markersSkipped } = counts;
+  const { markersCreated, markersUpdated, markersSkipped, panelRows } = counts;
+  const laysAdded = Math.max(0, markersCreated - Math.min(panelRows, markersCreated));
   await logActivity({
     orderId: order.id, actorId: input.actorId, actorName: input.actorName,
     action: 'LAYING_MARKING_IMPORTED',
     summary:
-      `imported Laying & Marking data — ${markersCreated} lay${markersCreated === 1 ? '' : 's'} added` +
+      `imported Laying & Marking data — ${laysAdded} lay${laysAdded === 1 ? '' : 's'} added` +
+      (panelRows > 0 ? `, ${panelRows} panel row${panelRows === 1 ? '' : 's'} by colour` : '') +
       (markersUpdated > 0 ? `, ${markersUpdated} replaced` : '') +
       (markersSkipped > 0 ? `, ${markersSkipped} kept as-is` : ''),
     entityType: 'ImportJob', entityId: input.jobId,

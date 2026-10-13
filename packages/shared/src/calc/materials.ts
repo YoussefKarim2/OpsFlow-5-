@@ -122,6 +122,8 @@ export interface LayInput {
   totalLengthM?: number | null;
   nestPcs?: number | null;
   efficiencyPct?: number | null;
+  /** The sheet's MAXLAYER figure, carried through for display. */
+  maxLayer?: number | null;
 }
 
 export interface LayResult extends Omit<LayInput, 'totalLengthM'> {

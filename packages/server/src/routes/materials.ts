@@ -524,6 +524,7 @@ materialsRouter.get('/:orderId/markers', requirePermission('cutting:read'), asyn
     // the allowance — about 7% on a typical lay plan.
     totalLengthM: dec(m.totalLengthM),
     nestPcs: m.nestPcs, efficiencyPct: dec(m.efficiencyPct),
+    maxLayer: m.maxLayer,
   }));
 
   // Cut requirement per size name — what the lay plan must produce.
@@ -548,6 +549,7 @@ materialsRouter.get('/:orderId/markers', requirePermission('cutting:read'), asyn
     cutting: order.cuttingRecords.map((c) => ({
       id: c.id, cutDate: c.cutDate?.toISOString() ?? null, cuttingTeam: c.cuttingTeam,
       cutByName: c.cutByName, inspectedByName: c.inspectedByName,
+      numberingByName: c.numberingByName, bundledByName: c.bundledByName, approvedByName: c.approvedByName,
       actualCutQty: c.actualCutQty, fabricUsedM: dec(c.fabricUsedM), notes: c.notes,
     })),
   });

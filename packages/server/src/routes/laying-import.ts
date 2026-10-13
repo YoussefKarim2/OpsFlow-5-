@@ -85,6 +85,7 @@ async function buildResponse(jobId: string, fileName: string, orderId: string, e
     conflicts,
     issues: extraction.issues,
     detectedPoNumbers: extraction.detectedPoNumbers,
+    extras: extraction.extras ?? null,
     priorImportExists: priorCommitted > 0,
     /**
      * Always true. No two factories draw a laying sheet the same way, so the
@@ -261,7 +262,10 @@ layingImportRouter.post('/:jobId/commit', requirePermission('import:laying'), as
       jobId: job.id, orderId: order.id, rows: extraction.rows,
       resolutions: input.resolutions as Record<string, RowResolution>,
       actorId: actor.id, actorName: actor.name,
+      extras: extraction.extras,
     });
+
+    const laysAdded = Math.max(0, result.markersCreated - Math.min(result.panelRows, result.markersCreated));
 
     // The sheet itself, filed against the order so it can be opened later.
     await attachLayingSheet(order.id, job, buffer, actor);
@@ -270,7 +274,8 @@ layingImportRouter.post('/:jobId/commit', requirePermission('import:laying'), as
 
     await announceChange({
       entityType: 'Order', entityId: order.id, action: 'UPDATE', category: ChangeCategory.PRODUCTION,
-      summary: `Laying & Marking imported for PO ${order.poNumber} — ${result.markersCreated} lay${result.markersCreated === 1 ? '' : 's'} added`,
+      summary: `Laying & Marking imported for PO ${order.poNumber} — ${laysAdded} lay${laysAdded === 1 ? '' : 's'} added`
+        + (result.panelRows > 0 ? `, ${result.panelRows} panel row${result.panelRows === 1 ? '' : 's'} by colour` : ''),
       subject: `PO ${order.poNumber}`, priority: NotificationPriority.NORMAL,
       orderId: order.id, link: `/orders/${order.id}?tab=cutting`,
       fields: [

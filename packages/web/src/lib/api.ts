@@ -482,6 +482,29 @@ export interface LayingRowDto {
   cutDate: string | null;
   cutByName: string | null;
   poNumber: string | null;
+  maxLayer: number | null;
+  /** PANEL rows come from the factory sheet's per-colour panel tables. */
+  kind: 'LAY' | 'PANEL';
+}
+
+/** What the factory's own laying sheet says beyond its lay rows. */
+export interface LayingExtrasDto {
+  layout: 'AGE';
+  sizes: string[];
+  header: {
+    poNumber: string | null; orderName: string | null; itemType: string | null; gender: string | null;
+    client: string | null; season: string | null; fabrics: string[]; fabricDescription: string | null;
+    cutPercentage: number | null; spreadNotes: string | null;
+  };
+  requirement: { bySize: Record<string, number>; total: number | null } | null;
+  totals: {
+    bySize: Record<string, number>; total: number | null; layers: number | null; totalLengthM: number | null;
+    nestPcs: number | null; markerLengthM: number | null; maxLayer: number | null;
+  } | null;
+  variance: { bySize: Record<string, number>; total: number | null } | null;
+  signatures: { cutBy: string | null; numberingBy: string | null; inspectedBy: string | null; bundledBy: string | null; approvedBy: string | null };
+  fabricSummary: Array<{ fabric: string; color: string | null; meters: number | null }>;
+  panelTables: Array<{ title: string | null; sizes: string[]; colours: Array<{ colour: string; parts: Array<{ part: string; bySize: Record<string, number>; total: number }> }> }>;
 }
 
 /** What the Laying & Marking importer worked out about a file, scoped to one order. */
@@ -501,6 +524,7 @@ export interface LayingImportAnalysisDto {
   }>;
   issues: Array<{ level: 'ERROR' | 'WARNING' | 'INFO'; field: string | null; sheet: string | null; cell: string | null; message: string }>;
   detectedPoNumbers: string[];
+  extras: LayingExtrasDto | null;
   priorImportExists: boolean;
   canCommit: boolean;
 }
@@ -1043,7 +1067,7 @@ export const api = {
       post<{ id: string }>(`/orders/${orderId}/laying-import/${jobId}/save-mapping`, { label }),
     commit: (orderId: string, jobId: string, resolutions: Record<string, 'KEEP' | 'REPLACE' | 'ADD_NEW'>) =>
       post<{
-        markersCreated: number; markersUpdated: number; markersSkipped: number;
+        markersCreated: number; markersUpdated: number; markersSkipped: number; panelRows: number;
         cuttingRecordsCreated: number; fabricRecordsCreated: number;
       }>(`/orders/${orderId}/laying-import/${jobId}/commit`, { resolutions }),
     history: (orderId: string) => get<{

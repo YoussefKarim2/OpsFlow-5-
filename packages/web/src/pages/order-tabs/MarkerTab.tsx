@@ -20,6 +20,7 @@ interface Plan {
   lays: Array<{
     id: string; fabric: string; color: string; panel: string; ratio: string;
     layers: number; markerLengthM: number; nestPcs: number | null;
+    efficiencyPct?: number | null; maxLayer?: number | null;
     output: Record<string, number>; totalPieces: number; totalLengthM: number;
     consumptionPerPieceM: number | null;
   }>;
@@ -63,8 +64,21 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
   const fabrics = data.fabrics as unknown as FabricPos[];
   const cutting = data.cutting as unknown as Array<{
     id: string; cutDate: string | null; cuttingTeam: string | null; cutByName: string | null;
-    inspectedByName: string | null; actualCutQty: number | null; fabricUsedM: number | null; notes: string | null;
+    inspectedByName: string | null; numberingByName?: string | null; bundledByName?: string | null; approvedByName?: string | null;
+    actualCutQty: number | null; fabricUsedM: number | null; notes: string | null;
   }>;
+
+  // The factory sheet's per-colour panel tables come in as one-layer markers
+  // of a part with no marker length. They are shown as the sheet shows them —
+  // a table per colour — not as lays.
+  const isPanelRow = (l: Plan['lays'][number]) => l.panel.trim().toUpperCase() !== 'ALL' && l.layers === 1 && l.markerLengthM === 0;
+  const lays = plan.lays.filter((l) => !isPanelRow(l));
+  const panelRows = plan.lays.filter(isPanelRow);
+  const panelsByColour = new Map<string, typeof panelRows>();
+  for (const p of panelRows) panelsByColour.set(p.color || '—', [...(panelsByColour.get(p.color || '—') ?? []), p]);
+  const panelSizes = [...new Set(panelRows.flatMap((p) => Object.keys(p.output)))];
+  const totalLayers = lays.reduce((a, l) => a + l.layers, 0);
+  const sum = (f: (l: Plan['lays'][number]) => number | null | undefined) => lays.reduce((a, l) => a + (f(l) ?? 0), 0);
 
   // Lays that are part of a garment rather than whole ones — trim fabric,
   // lining, a separately cut panel — are listed but not counted as pieces.
@@ -78,8 +92,8 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
   return (
     <div className="space-y-4 p-5">
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
-        <StatTile label="Lays" value={plan.lays.length} />
-        <StatTile label="Total layers" value={<Num value={plan.totalLayers} />} />
+        <StatTile label="Lays" value={lays.length} />
+        <StatTile label="Total layers" value={<Num value={totalLayers} />} />
         <StatTile label="Fabric required" value={<Num value={plan.totalFabricM} places={0} suffix=" m" />} />
         <StatTile
           label="Consumption / pc"
@@ -120,14 +134,17 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
                   <th className="th">Panel</th>
                   <th className="th">Size ratio</th>
                   {sizes.map((s) => <th key={s} className="th text-center">{s}</th>)}
-                  <th className="th text-right">Layers</th>
-                  <th className="th text-right">Marker (m)</th>
-                  <th className="th text-right">Total (m)</th>
                   <th className="th text-right">Pieces</th>
+                  <th className="th text-right">Layers</th>
+                  <th className="th text-right">Total (m)</th>
+                  <th className="th text-right">Nest</th>
+                  <th className="th text-right">Marker (m)</th>
+                  <th className="th text-right">Eff %</th>
+                  <th className="th text-right">Max layer</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-100">
-                {plan.lays.map((l, i) => (
+                {lays.map((l, i) => (
                   <tr key={l.id} className="hover:bg-accent-50/30">
                     <td className="td tnum text-ink-400">{i + 1}</td>
                     <td className="td text-xs">
@@ -152,10 +169,13 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
                         </span>
                       </td>
                     ))}
-                    <td className="td text-right"><Num value={l.layers} /></td>
-                    <td className="td text-right"><Num value={l.markerLengthM} places={2} /></td>
-                    <td className="td text-right"><Num value={l.totalLengthM} places={0} /></td>
                     <td className="td text-right font-semibold"><Num value={l.totalPieces} /></td>
+                    <td className="td text-right"><Num value={l.layers} /></td>
+                    <td className="td text-right"><Num value={l.totalLengthM} places={0} /></td>
+                    <td className="td text-right"><Num value={l.nestPcs} fallback="—" /></td>
+                    <td className="td text-right"><Num value={l.markerLengthM} places={2} /></td>
+                    <td className="td text-right"><Num value={l.efficiencyPct} places={1} fallback="—" /></td>
+                    <td className="td text-right"><Num value={l.maxLayer} fallback="—" /></td>
                   </tr>
                 ))}
               </tbody>
@@ -169,10 +189,13 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
                       {plan.plannedBySize[s] ?? 0}
                     </td>
                   ))}
-                  <td className="tnum px-3 py-2 text-right text-sm font-semibold">{plan.totalLayers}</td>
-                  <td />
-                  <td className="tnum px-3 py-2 text-right text-sm font-semibold">{Math.round(plan.totalFabricM)}</td>
                   <td className="tnum px-3 py-2 text-right text-sm font-bold">{plan.plannedTotal.toLocaleString()}</td>
+                  <td className="tnum px-3 py-2 text-right text-sm font-semibold">{totalLayers}</td>
+                  <td className="tnum px-3 py-2 text-right text-sm font-semibold">{Math.round(plan.totalFabricM)}</td>
+                  <td className="tnum px-3 py-2 text-right text-sm font-semibold">{sum((l) => l.nestPcs) || '·'}</td>
+                  <td className="tnum px-3 py-2 text-right text-sm font-semibold">{sum((l) => l.markerLengthM).toFixed(2)}</td>
+                  <td />
+                  <td className="tnum px-3 py-2 text-right text-sm font-semibold">{sum((l) => l.maxLayer) || '·'}</td>
                 </tr>
                 <tr className="bg-ink-50">
                   <td colSpan={4} className="px-3 py-2 text-2xs font-semibold uppercase tracking-wider text-ink-600">
@@ -183,8 +206,8 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
                       {plan.requiredBySize[s] ?? 0}
                     </td>
                   ))}
-                  <td colSpan={3} />
                   <td className="tnum px-3 py-2 text-right text-sm font-semibold">{plan.requiredTotal.toLocaleString()}</td>
+                  <td colSpan={6} />
                 </tr>
                 {/* The workbook's (+/-) row. */}
                 <tr className="bg-white">
@@ -204,16 +227,46 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
                       </td>
                     );
                   })}
-                  <td colSpan={3} />
                   <td className="px-3 py-2 text-right">
                     <Num value={plan.varianceTotal} kind="variance" className="text-sm font-bold" />
                   </td>
+                  <td colSpan={6} />
                 </tr>
               </tfoot>
             </table>
           </div>
         )}
       </Card>
+
+      {panelsByColour.size > 0 && (
+        <Card>
+          <CardHeader title="Panels by colour" subtitle="From the laying sheet: how many of each part are cut per size, for each colour" />
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="border-b border-ink-200 bg-ink-50">
+                <tr>
+                  <th className="th">Colour</th>
+                  <th className="th">Part</th>
+                  {panelSizes.map((s) => <th key={s} className="th text-center">{s}</th>)}
+                  <th className="th text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-ink-100">
+                {[...panelsByColour.entries()].flatMap(([colour, parts]) => parts.map((p, i) => (
+                  <tr key={p.id}>
+                    <td className="td text-xs font-medium">{i === 0 ? colour : ''}</td>
+                    <td className="td text-xs">{p.panel}</td>
+                    {panelSizes.map((s) => (
+                      <td key={s} className="td text-center"><span className={clsx('tnum text-sm', !p.output[s] && 'text-ink-300')}>{p.output[s] || '·'}</span></td>
+                    ))}
+                    <td className="td text-right font-semibold"><Num value={p.totalPieces} /></td>
+                  </tr>
+                )))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
@@ -261,6 +314,7 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
                   <th className="th">Date</th>
                   <th className="th">Team</th>
                   <th className="th">Cut by</th>
+                  <th className="th">Signed off</th>
                   <th className="th text-right">Qty</th>
                   <th className="th text-right">Fabric</th>
                 </tr>
@@ -268,10 +322,15 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
               <tbody className="divide-y divide-ink-100">
                 {cutting.map((c) => (
                   <tr key={c.id}>
-                    <td className="td">{fmtDate(c.cutDate)}</td>
+                    <td className="td">{c.cutDate ? fmtDate(c.cutDate) : '—'}</td>
                     <td className="td text-xs">{c.cuttingTeam || '—'}</td>
                     <td className="td text-xs">{c.cutByName || '—'}</td>
-                    <td className="td text-right font-semibold"><Num value={c.actualCutQty} /></td>
+                    <td className="td text-2xs text-ink-600">
+                      {[['Numbering', c.numberingByName], ['Inspected', c.inspectedByName], ['Bundled', c.bundledByName], ['Approved', c.approvedByName]]
+                        .filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(' · ') || '—'}
+                      {c.notes && <span className="mt-0.5 block whitespace-pre-line text-ink-500" dir="auto">{c.notes}</span>}
+                    </td>
+                    <td className="td text-right font-semibold"><Num value={c.actualCutQty} fallback="—" /></td>
                     <td className="td text-right"><Num value={c.fabricUsedM} places={0} suffix=" m" fallback="—" /></td>
                   </tr>
                 ))}
