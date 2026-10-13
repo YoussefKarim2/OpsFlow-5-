@@ -899,6 +899,8 @@ export const api = {
       get<{ data: CostingDto | null; derived: CostLineDto[] }>(`/orders/${orderId}/costing`),
     saveCosting: (orderId: string, body: unknown) =>
       put<{ ok: true; derived: number; manual: number }>(`/orders/${orderId}/costing`, body),
+    downloadCostingPdf: (orderId: string) =>
+      downloadFile(`/orders/${orderId}/costing/export.pdf`, 'costing.pdf', 'Could not create the costing PDF.'),
     proforma: (orderId: string) => get<{ data: ProformaDto | null }>(`/orders/${orderId}/proforma`),
     /** Read a proforma out of an uploaded workbook, CSV or PDF. Writes nothing. */
     importProforma: (orderId: string, file: File) => {

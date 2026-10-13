@@ -25,7 +25,7 @@ import { fillMainOrderFromDocuments } from '../services/fill-main-order.js';
 import { readInstructionFile } from '../services/import/instruction-reader.js';
 import { extractTabular } from '../services/import/tabular-extractor.js';
 import { buildProformaDraft } from '../services/import/proforma-target.js';
-import { decodeUploadName } from '../util/upload-name.js';
+import { contentDisposition, decodeUploadName } from '../util/upload-name.js';
 import { signedFileUrl } from '../services/file-links.js';
 
 /** Same limits as the order importer; a proforma is not a bigger document. */
@@ -46,7 +46,8 @@ import { logActivity } from '../services/activity-service.js';
 import { sanitiseHtml } from '../util/sanitise-html.js';
 import { getOrderSteps, setStepStatus, markStepStarted } from '../services/step-service.js';
 import { refreshCutOrder } from '../services/cut-order.js';
-import { refreshOrderCache } from '../services/order-service.js';
+import { getOrderDetail, refreshOrderCache } from '../services/order-service.js';
+import { renderCostingPdf } from '../services/costing-pdf.js';
 import { applyStockRecordsToLedger, findStockRecordsForCell, orderAxisNames, resolveStockCell } from '../services/stock-sync.js';
 
 export const stepsRouter = Router();
@@ -1021,6 +1022,27 @@ stepsRouter.get('/:id/costing', requirePermission('costing:read'), asyncHandler(
     // the plan beside the edited row from them.
     derived: visibleDerivedLines(await deriveFor(orderId), [], record?.hiddenCostRefs ?? []),
   });
+}));
+
+/**
+ * The costing as a PDF, from the same derivation the Costing tab shows.
+ *
+ * Read permission only: the document says nothing the screen does not, and a
+ * reader who may see the costing may file it. The name carries the PO, so a
+ * folder of these sorts itself.
+ */
+stepsRouter.get('/:id/costing/export.pdf', requirePermission('costing:read'), asyncHandler(async (req, res) => {
+  const orderId = await resolveOrderId(req.params.id);
+  const detail = await getOrderDetail(orderId);
+  // Always computed by the detail; typed nullable for the roles it is withheld from.
+  const { costing } = detail;
+  if (!costing) throw new NotFoundError('Costing');
+  const pdf = await renderCostingPdf({ ...detail, costing }, { generatedBy: currentUser(req).name });
+
+  const safe = detail.poNumber.replace(/[^A-Za-z0-9._-]+/g, '-');
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', contentDisposition('attachment', `Costing-PO-${safe}.pdf`));
+  res.end(pdf);
 }));
 
 const costLineSchema = z.object({

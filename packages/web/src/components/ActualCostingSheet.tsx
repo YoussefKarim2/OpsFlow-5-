@@ -27,7 +27,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Cloud, CloudOff, Lock, Pencil, Plus, Printer, Trash2 } from 'lucide-react';
+import { Check, Cloud, CloudOff, Download, Lock, Pencil, Plus, Printer, Trash2 } from 'lucide-react';
 import {
   computeCosting, rowCost, applyRowEdit, sanitiseOverrides, visibleDerivedLines, outsideWorkKind,
   fmtMoney, fmtNumber, fmtPct, NOT_CALCULATED,
@@ -391,6 +391,15 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
     })),
   }), [c.source, c.hasRecord, stored, over, rows]);
 
+  /**
+   * The costing as a PDF, from what the server holds. Held back while a save
+   * is outstanding, so the document can never be a keystroke behind the
+   * screen; the autosave lands a moment after typing stops, and the button
+   * comes back with it.
+   */
+  const pdf = useMutation({ mutationFn: () => api.steps.downloadCostingPdf(order.id) });
+  const pdfReady = !dirty && saveState !== 'saving' && saveState !== 'pending';
+
   const setField = (key: keyof Stored) => (v: string) => setStored((s) => ({ ...s, [key]: v }));
   const setOverride = (key: OverrideKey) => (v: string) =>
     setOver((o) => (v.trim() === '' ? drop(o, key) : { ...o, [key]: v }));
@@ -527,6 +536,15 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
           written a moment after the typing stops, and the indicator says so. */}
       <div className="no-print flex items-center justify-end gap-3">
         <SaveState state={saveState} dirty={dirty} onRetry={() => saveNow()} />
+        <button
+          type="button"
+          className="btn-secondary btn-sm"
+          disabled={!pdfReady || pdf.isPending}
+          title={pdfReady ? 'Download this costing as a PDF' : 'Waiting for the last change to save'}
+          onClick={() => pdf.mutate()}
+        >
+          <Download className="h-3.5 w-3.5" /> {pdf.isPending ? 'Creating PDF…' : 'Costing PDF'}
+        </button>
         <button className="btn-secondary btn-sm" onClick={() => window.print()}>
           <Printer className="h-3.5 w-3.5" /> Print
         </button>
@@ -543,6 +561,12 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
           </button>
         )}
       </div>
+
+      {pdf.isError && (
+        <div className="no-print">
+          <ErrorNote error={pdf.error} onRetry={() => pdf.mutate()} />
+        </div>
+      )}
 
       {saveState === 'error' && (
         <div className="no-print">
@@ -711,14 +735,14 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
                 </tr>
               )}
 
-              {/* C.M — (machine cost × machine-days) ÷ productivity, charged
-                  against the pieces that passed end-line inspection. The
-                  consumption and unit price columns show that quantity and the
-                  cost per piece, so the row multiplies out to its own total the
-                  way every other row in this table does. */}
+              {/* C.M — daily cost ÷ productivity rate, charged against the
+                  pieces that passed end-line inspection. The consumption and
+                  unit price columns show that quantity and the cost per piece,
+                  so the row multiplies out to its own total the way every
+                  other row in this table does. */}
               <tr className="bg-ink-50">
                 <td className="td font-semibold text-ink-900">C.M</td>
-                <td className="td text-ink-600">Production — machine run cost per piece</td>
+                <td className="td text-ink-600">Production — daily cost ÷ productivity rate, per piece passed</td>
                 <td className="td" />
                 <td className="td tnum text-right">
                   {live.firstDegreeQty == null ? '—' : fmtNumber(live.firstDegreeQty)}
@@ -800,7 +824,7 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
             tone: 'result',
             hint: live.isProfitable === true && over.targetPriceUsd == null
               ? 'nothing to fix at this price'
-              : 'the price that would restore a 20% margin',
+              : 'cost per unit plus a 20% mark-up',
           })}
         </div>
       </Card>
