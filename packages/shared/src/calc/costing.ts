@@ -2,8 +2,9 @@
  * Actual costing — the brief's section 25.
  *
  * Ports `Actual Costing_Coordinator` including its EGP→USD conversion pattern
- * (`=0.4/$D$12` at a 48.5 dollar rate) and its CM formula
- * (`=D17*D13` — work days × daily cost).
+ * (`=0.4/$D$12` at a 48.5 dollar rate). Its CM formula (`=D17*D13` — work
+ * days × daily cost) is charged against the pieces that passed inspection
+ * here; see the C.M block below.
  *
  * The live sheet shows `#DIV/0!` in five cells today because shipped qty is
  * still blank. Every one of those divisions goes through `safeDiv` here, so the
@@ -217,7 +218,7 @@ export interface CostingResult {
   sublimationCostUsd: number | null;
   /** Outside work billed as embroidery. */
   embroideryCostUsd: number | null;
-  /** Cut-and-make. `=D17*D13` in EGP, converted here. */
+  /** Cut-and-make: daily cost ÷ productivity rate × 1st degree qty, in EGP, converted here. */
   cmCostUsd: number | null;
   otherCostUsd: number | null;
   totalCostUsd: number | null;
@@ -353,7 +354,10 @@ export function computeCosting(input: CostingInput): CostingResult {
   const byGroup = (g: CostGroup) => priced.filter((l) => l.group === g);
   const fabricLines = byGroup('FABRIC');
   const accessoryLines = byGroup('ACCESSORY');
-  const otherLines = byGroup('OTHER');
+  // Labour lines have no section of their own on the sheet, so they are
+  // listed — and totalled — with the other costs. Listed without being
+  // totalled, a row showed a share of a figure it was not part of.
+  const otherLines = [...byGroup('LABOUR'), ...byGroup('OTHER')];
 
   const fabricCostUsd = pick('fabricCostUsd', totalOf(fabricLines));
   const accessoryCostUsd = pick('accessoryCostUsd', totalOf(accessoryLines));
@@ -369,11 +373,24 @@ export function computeCosting(input: CostingInput): CostingResult {
   /**
    * Cut-and-make.
    *
-   *   (machine cost × machine-days used) ÷ productivity rate × 1st degree qty
+   *   daily cost ÷ productivity rate × 1st degree qty
    *
-   * The first half is what the machines cost to run for this order; dividing
-   * by the rate they produced at turns that into a cost per piece, and the
-   * pieces that passed end-line inspection are the ones it is charged against.
+   * The factory costs its daily figure for every day it runs, and the
+   * productivity rate is how many pieces this order got out of one such day
+   * (cut ÷ work days, where work days = machine-days ÷ all machines). One over
+   * the other is what a piece cost to make, and the pieces that passed
+   * end-line inspection are the ones it is charged against.
+   *
+   * Written out, that is the machine run cost — machine cost × machine-days —
+   * spread over the pieces cut and charged for the pieces that passed:
+   *
+   *   machine cost × machine-days ÷ cut qty × 1st degree qty
+   *
+   * so when every cut piece passes it is exactly the workbook's `=D17*D13`,
+   * work days × daily cost. An earlier version divided the whole run cost by
+   * the productivity rate instead of the daily cost; the units of that are
+   * EGP × days, not EGP, and it charged an order work-days times what its
+   * machines had cost to run (3.3× on an 11-day order).
    *
    * Nothing is rounded on the way through — only the figure that reaches the
    * screen is formatted — and every division goes through `safeDiv`, so a
@@ -383,10 +400,7 @@ export function computeCosting(input: CostingInput): CostingResult {
    * In EGP, like the daily cost it descends from, and converted at the rate
    * stored with the costing so the Total column is one currency.
    */
-  const machineRunCostEgp = machineCostEgpPerDay != null && machineDaysUsed != null
-    ? machineCostEgpPerDay * machineDaysUsed
-    : null;
-  const costPerPieceEgp = safeDiv(machineRunCostEgp, productivityRate);
+  const costPerPieceEgp = safeDiv(dailyCostEgp, productivityRate);
   const cmCostEgp = costPerPieceEgp != null && firstDegreeQty != null
     ? costPerPieceEgp * firstDegreeQty
     : null;
@@ -476,7 +490,7 @@ export function computeCosting(input: CostingInput): CostingResult {
       : workDays === 0 ? 'Waiting for work days above zero — the machine-days used is 0'
       : 'Waiting for a cut quantity');
   needs('cmCostUsd', cmCostUsd,
-    machineCostEgpPerDay == null ? 'Waiting for the machine cost'
+    noDaily ? `Waiting for ${noDaily}`
       : machineDaysUsed == null ? 'Waiting for the line machines and days in line'
       : productivityRate == null || productivityRate === 0 ? 'Waiting for the productivity rate'
       : firstDegreeQty == null ? 'Waiting for the 1st degree quantity'

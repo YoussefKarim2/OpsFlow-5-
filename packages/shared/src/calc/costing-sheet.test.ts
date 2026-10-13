@@ -221,15 +221,14 @@ describe('actual costing — the money', () => {
     lines: [line('FABRIC', 'Rosetta', 1000, 'Met.', 2, 'bom:FABRIC')],
   };
 
-  test('C.M is the machine run cost per piece, over the pieces that passed', () => {
-    // (machine cost × machine-days) ÷ productivity × 1st degree qty, in EGP,
-    // converted once. The formula itself is covered in `cm-cost.test.ts`;
-    // this holds that the sheet as a whole still produces it.
+  test('C.M is the daily cost per piece produced, over the pieces that passed', () => {
+    // daily cost ÷ productivity × 1st degree qty, in EGP, converted once. The
+    // formula itself is covered in `cm-cost.test.ts`; this holds that the
+    // sheet as a whole still produces it.
     const r = computeCosting(shipped);
-    const machineCost = 1867 / 38;
     const used = 12 * 11;
     const productivity = 2084 / (used / 38);
-    const expected = ((machineCost * used) / productivity) * 1950 / 48.5;
+    const expected = (1867 / productivity) * 1950 / 48.5;
     assert.ok(Math.abs((r.cmCostUsd ?? 0) - expected) < 1e-9,
       `got ${r.cmCostUsd}, expected ${expected}`);
   });
@@ -453,5 +452,25 @@ describe('actual costing — the dollar rate', () => {
 
   test('a recorded rate asks for nothing', () => {
     assert.equal(computeCosting(BASE).waiting.dollarRate, undefined);
+  });
+});
+
+describe('every row listed with a share of the total is in the total', () => {
+  test('a labour line is totalled with the other costs', () => {
+    // Listed under the outside-work rows and given a share, it was never
+    // added to the total it claimed a share of.
+    const r = computeCosting({
+      ...BASE,
+      lines: [
+        line('FABRIC', 'Rosetta', 100, 'Met.', 2, 'bom:FABRIC'),
+        { group: 'LABOUR', label: 'Overtime', quantity: 1, unit: 'LOT', unitPriceUsd: 50 },
+        { group: 'OTHER', label: 'Freight', quantity: 1, unit: 'LOT', unitPriceUsd: 30 },
+      ],
+    });
+    assert.equal(r.groups.other.total, 80);
+    assert.ok(Math.abs(r.totalCostUsd! - (200 + 80 + (r.cmCostUsd ?? 0))) < 1e-9);
+    const shares = [...r.groups.fabric.lines, ...r.groups.other.lines].map((l) => l.pctOfTotal!);
+    assert.ok(Math.abs(shares.reduce((a, b) => a + b, 0) + (r.cmCostUsd ?? 0) / r.totalCostUsd! * 100 - 100) < 1e-9,
+      'the shares add up to 100%');
   });
 });

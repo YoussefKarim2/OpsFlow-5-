@@ -488,16 +488,18 @@ describe('costing — the #DIV/0! cells become "Not calculated"', () => {
   });
 
   test('CM cost charges the machine run against the pieces that passed', () => {
-    // Superseded formula: the workbook's `work days × daily cost` gave 131.69
-    // here. The factory's is (machine cost × machine-days) ÷ productivity ×
-    // 1st degree qty, which is held cell by cell in `cm-cost.test.ts`.
+    // The workbook's `work days × daily cost` gives 131.69 here — the cost of
+    // running the machines for 130 machine-days. The factory's C.M is daily
+    // cost ÷ productivity × 1st degree qty: that same run cost over the 2,084
+    // pieces cut, charged for the 1,950 that passed, so 123.22. Held cell by
+    // cell in `cm-cost.test.ts`.
     const r = computeCosting({ ...base, shippedQty: 1972, firstDegreeQty: 1950 });
-    const machineCost = 1867 / 38;
     const workDays = 130 / 38;
     const productivity = 2084 / workDays;
-    const expected = ((machineCost * 130) / productivity) * 1950 / 48.5;
+    const expected = (1867 / productivity) * 1950 / 48.5;
     assert.ok(Math.abs((r.cmCostUsd ?? 0) - expected) < 0.01,
       `got ${r.cmCostUsd}, expected ${expected}`);
+    assert.ok(Math.abs(expected - (workDays * 1867 / 48.5) * 1950 / 2084) < 1e-9);
   });
 
   test('a shipped order produces a real unit cost and profit', () => {

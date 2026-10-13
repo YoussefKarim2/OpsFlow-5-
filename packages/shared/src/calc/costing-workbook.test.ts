@@ -89,19 +89,19 @@ describe('the workbook formulas, cell by cell', () => {
     assert.ok(Math.abs(r.groups.accessory.total! - 100 / 48.5) < 1e-12);
   });
 
-  test('N36 — the workbook says work days × daily cost, and is superseded', () => {
-    // The workbook's own formula, for the record: `=D17*D13`.
+  test('N36 — work days × daily cost, charged for the pieces that passed', () => {
+    // The workbook's own formula: `=D17*D13`, the machine run cost in EGP.
     const workbookEgp = (130 / 38) * 1867;
-    assert.ok(workbookEgp > 0);
 
-    // OpsFlow no longer computes this. The factory's C.M is
-    //   (machine cost × machine-days) ÷ productivity × 1st degree qty,
-    // which charges the machine time against the pieces that passed
-    // inspection rather than against the calendar. Held in `cm-cost.test.ts`.
-    // Recorded here so the divergence stays a decision rather than becoming a
-    // rediscovered bug.
-    const r = computeCosting({ ...BASE, firstDegreeQty: 1950 });
-    assert.notEqual(r.cmCostUsd, workbookEgp / 48.5);
+    // The factory's C.M is daily cost ÷ productivity × 1st degree qty, which
+    // is that same run cost spread over the pieces cut and charged for the
+    // ones that passed inspection. So it is the workbook's figure exactly
+    // when every cut piece passed, and that share of it otherwise. Held in
+    // `cm-cost.test.ts`; recorded here against the source cell.
+    const all = computeCosting({ ...BASE, firstDegreeQty: 2084 });
+    assert.ok(Math.abs(all.cmCostUsd! - workbookEgp / 48.5) < 1e-9);
+    const some = computeCosting({ ...BASE, firstDegreeQty: 1950 });
+    assert.ok(Math.abs(some.cmCostUsd! - (workbookEgp * 1950 / 2084) / 48.5) < 1e-9);
   });
 
   test('N37 — the Total is the sections plus C.M', () => {
@@ -165,9 +165,9 @@ describe('the workbook formulas, cell by cell', () => {
  */
 describe('deliberate departures from the workbook', () => {
   test('C.M is converted to dollars; the workbook leaves it in pounds', () => {
-    const r = computeCosting(BASE);
+    const r = computeCosting({ ...BASE, firstDegreeQty: 2084 });
     const egp = (130 / 38) * 1867;
-    assert.ok(r.cmCostUsd! < egp, 'converted, not added raw to a dollar total');
+    assert.ok(Math.abs(r.cmCostUsd! - egp / 48.5) < 1e-9, 'converted, not added raw to a dollar total');
   });
 
   test('2nd Degree is the recorded count, not cut minus first degree', () => {
