@@ -34,10 +34,12 @@ const LAYING_CONCEPT_KEYS: ImportConcept[] = [
 const CONCEPT_OPTIONS = LAYING_CONCEPT_KEYS.map((k) => ({ value: k, label: CONCEPT_META[k].label }));
 
 export function LayingMarkingImportWizard({
-  orderId, orderPoNumber, onClose,
+  orderId, orderPoNumber, existingLays = 0, onClose,
 }: {
   orderId: string;
   orderPoNumber: string;
+  /** Lays already on the order, so the review can offer to replace the whole plan. */
+  existingLays?: number;
   onClose: () => void;
 }) {
   const qc = useQueryClient();
@@ -48,6 +50,10 @@ export function LayingMarkingImportWizard({
   const [analysis, setAnalysis] = useState<LayingImportAnalysisDto | null>(null);
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [resolutions, setResolutions] = useState<Record<string, Resolution>>({});
+  // Start again from this file: the existing plan is removed first. Offered
+  // whenever the order already has lays; off by default so nothing is lost
+  // by a coordinator who only meant to add a sheet.
+  const [replaceAll, setReplaceAll] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const upload = useMutation({
@@ -75,11 +81,12 @@ export function LayingMarkingImportWizard({
   });
 
   const commit = useMutation({
-    mutationFn: () => api.layingImport.commit(orderId, analysis!.jobId, resolutions),
+    mutationFn: () => api.layingImport.commit(orderId, analysis!.jobId, resolutions, replaceAll),
     onSuccess: (result) => {
       const touched = result.markersCreated + result.markersUpdated;
       const lays = Math.max(0, touched - (result.panelRows ?? 0));
       toast.success(
+        (result.cleared > 0 ? 'Previous lay plan removed. ' : '') +
         `Imported: ${lays} lay${lays === 1 ? '' : 's'}` +
         (result.panelRows ? ` and ${result.panelRows} panel row${result.panelRows === 1 ? '' : 's'} by colour` : '') +
         (result.markersUpdated > 0 ? ` (${result.markersUpdated} replaced)` : '') + '.',
@@ -170,6 +177,9 @@ export function LayingMarkingImportWizard({
         {step === 'review' && analysis && (
           <ReviewStep
             analysis={analysis}
+            existingLays={existingLays}
+            replaceAll={replaceAll}
+            onReplaceAllChange={setReplaceAll}
             resolutions={resolutions}
             onResolutionChange={(key, r) => setResolutions((prev) => ({ ...prev, [key]: r }))}
             onBack={() => setStep('map')}
@@ -305,9 +315,12 @@ function MapStep({
 }
 
 function ReviewStep({
-  analysis, resolutions, onResolutionChange, onBack, onConfirm, committing,
+  analysis, existingLays, replaceAll, onReplaceAllChange, resolutions, onResolutionChange, onBack, onConfirm, committing,
 }: {
   analysis: LayingImportAnalysisDto;
+  existingLays: number;
+  replaceAll: boolean;
+  onReplaceAllChange: (v: boolean) => void;
   resolutions: Record<string, Resolution>;
   onResolutionChange: (key: string, r: Resolution) => void;
   onBack: () => void;
@@ -317,16 +330,35 @@ function ReviewStep({
   const conflictByKey = new Map(analysis.conflicts.map((c) => [c.key, c]));
   const conflictKeys = analysis.conflicts.map((c) => c.key);
 
+  const hasExisting = existingLays > 0 || conflictKeys.length > 0 || analysis.priorImportExists;
   return (
     <div className="space-y-4">
-      {analysis.priorImportExists && (
-        <div className="flex items-start gap-2 rounded-md bg-amber-50 px-3 py-2.5 text-xs text-amber-800">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          <span>A Laying & Marking file has already been imported for this order. Check this isn't a duplicate upload before confirming.</span>
-        </div>
+      {hasExisting && (
+        <Card>
+          <CardHeader
+            title="This order already has a lay plan"
+            subtitle={existingLays > 0 ? `${existingLays} row${existingLays === 1 ? '' : 's'} are on the order now. What should happen to them?` : 'A Laying & Marking file was imported before.'}
+          />
+          <div className="grid gap-2 p-4 sm:grid-cols-2">
+            <label className={clsx('flex cursor-pointer items-start gap-2.5 rounded-md border p-3 text-sm', replaceAll ? 'border-accent-500 bg-accent-50' : 'border-ink-200')}>
+              <input type="radio" name="lay-plan-mode" className="mt-0.5" checked={replaceAll} onChange={() => onReplaceAllChange(true)} />
+              <span>
+                <span className="font-medium text-ink-900">Replace the whole lay plan with this file</span>
+                <span className="mt-0.5 block text-xs text-ink-500">The existing lays, and the cutting and fabric records an import wrote, are removed first. Records entered by hand stay.</span>
+              </span>
+            </label>
+            <label className={clsx('flex cursor-pointer items-start gap-2.5 rounded-md border p-3 text-sm', !replaceAll ? 'border-accent-500 bg-accent-50' : 'border-ink-200')}>
+              <input type="radio" name="lay-plan-mode" className="mt-0.5" checked={!replaceAll} onChange={() => onReplaceAllChange(false)} />
+              <span>
+                <span className="font-medium text-ink-900">Add to the existing plan</span>
+                <span className="mt-0.5 block text-xs text-ink-500">New lays are added; a row that matches an existing lay is kept, replaced or added as you choose below.</span>
+              </span>
+            </label>
+          </div>
+        </Card>
       )}
 
-      {conflictKeys.length > 0 && (
+      {!replaceAll && conflictKeys.length > 0 && (
         <div className="flex items-center justify-between rounded-md bg-ink-50 px-3 py-2 text-xs text-ink-600">
           <span>{conflictKeys.length} row{conflictKeys.length === 1 ? '' : 's'} match an existing lay — choose what to do with each.</span>
           <div className="flex gap-1.5">
@@ -388,7 +420,7 @@ function ReviewStep({
               <tbody className="divide-y divide-ink-100">
                 {analysis.rows.filter((r) => r.kind !== 'PANEL').map((row: LayingRowDto) => {
                   const key = row.markerNumber ? `marker:${row.markerNumber}` : `row:${row.rowNumber}`;
-                  const conflict = conflictByKey.get(key);
+                  const conflict = replaceAll ? undefined : conflictByKey.get(key);
                   return (
                     <RowLine
                       key={row.rowNumber} row={row} conflict={conflict}
@@ -405,8 +437,8 @@ function ReviewStep({
 
       <div className="flex justify-between">
         <button className="btn-secondary" onClick={onBack}><ArrowLeft className="h-4 w-4" /> Back</button>
-        <button className="btn-primary" onClick={onConfirm} disabled={committing || !analysis.canCommit || analysis.rows.length === 0}>
-          {committing ? 'Importing…' : 'Confirm import'}
+        <button className={clsx(replaceAll ? 'btn-danger' : 'btn-primary')} onClick={onConfirm} disabled={committing || !analysis.canCommit || analysis.rows.length === 0}>
+          {committing ? 'Importing…' : replaceAll ? `Remove ${existingLays > 0 ? `${existingLays} row${existingLays === 1 ? '' : 's'} and ` : 'the old plan and '}import` : 'Confirm import'}
         </button>
       </div>
     </div>

@@ -7,12 +7,12 @@
  */
 
 import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { FileUp } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { FileUp, Trash2 } from 'lucide-react';
 import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
 import { useAuth } from '../../lib/auth';
 import { api } from '../../lib/api';
-import { Card, CardHeader, StatTile, Num, Spinner, EmptyState, clsx } from '../../components/ui';
+import { Card, CardHeader, StatTile, Num, Spinner, EmptyState, ConfirmDialog, clsx, useToast } from '../../components/ui';
 import { LayingMarkingImportWizard } from './LayingMarkingImportWizard';
 import { AttachmentsPanel } from '../../components/Attachments';
 
@@ -46,7 +46,20 @@ interface FabricPos {
 
 export function MarkerTab({ order }: { order: OrderDetailDto }) {
   const { can } = useAuth();
+  const qc = useQueryClient();
+  const toast = useToast();
   const [importing, setImporting] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  const clearPlan = useMutation({
+    mutationFn: () => api.materials.clearMarkers(order.id),
+    onSuccess: (r) => {
+      setConfirmClear(false);
+      toast.success(`Lay plan removed: ${r.markers} row${r.markers === 1 ? '' : 's'}.`);
+      for (const k of ['markers', 'order', 'order-steps', 'attachments']) void qc.invalidateQueries({ queryKey: [k, order.id] });
+    },
+    onError: (e) => toast.error(e),
+  });
 
   const { data, isLoading } = useQuery({
     queryKey: ['markers', order.id],
@@ -115,11 +128,18 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
           title="Lay plan"
           subtitle="Each row is one marker: a size ratio, a layer count and a marker length"
           action={
-            can('import:laying') && (
-              <button className="btn-secondary btn-sm" onClick={() => setImporting(true)}>
-                <FileUp className="h-3.5 w-3.5" /> Import Laying & Marking Excel
-              </button>
-            )
+            <div className="flex items-center gap-2">
+              {plan.lays.length > 0 && can('cutting:write') && (
+                <button className="btn-ghost btn-sm text-red-600 hover:bg-red-50" onClick={() => setConfirmClear(true)}>
+                  <Trash2 className="h-3.5 w-3.5" /> Clear lay plan
+                </button>
+              )}
+              {can('import:laying') && (
+                <button className="btn-secondary btn-sm" onClick={() => setImporting(true)}>
+                  <FileUp className="h-3.5 w-3.5" /> Import Laying & Marking Excel
+                </button>
+              )}
+            </div>
           }
         />
         {plan.lays.length === 0 ? (
@@ -382,9 +402,25 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
         <LayingMarkingImportWizard
           orderId={order.id}
           orderPoNumber={order.poNumber}
+          existingLays={plan.lays.length}
           onClose={() => setImporting(false)}
         />
       )}
+
+      <ConfirmDialog
+        open={confirmClear}
+        onCancel={() => setConfirmClear(false)}
+        onConfirm={() => clearPlan.mutate()}
+        busy={clearPlan.isPending}
+        title="Remove the whole lay plan?"
+        confirmLabel="Remove lay plan"
+        body={
+          <>
+            All {plan.lays.length} row{plan.lays.length === 1 ? '' : 's'} of the lay plan, with the cutting and fabric records an import wrote, will be removed from this order.
+            Cutting records entered by hand stay. You can then import a new file or add lays by hand.
+          </>
+        }
+      />
       <AttachmentsPanel
         orderId={order.id}
         documentType="MARKER_FILE"

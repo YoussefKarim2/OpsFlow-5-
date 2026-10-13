@@ -949,6 +949,9 @@ export const api = {
     markers: (orderId: string) => get<{ plan: unknown; fabrics: unknown[]; cutting: unknown[] }>(`/materials/${orderId}/markers`),
     addMarker: (orderId: string, body: unknown) => post<{ id: string }>(`/materials/${orderId}/markers`, body),
     removeMarker: (id: string) => del(`/materials/markers/${id}`),
+    /** Remove the whole lay plan (and the cutting/fabric records an import wrote). */
+    clearMarkers: (orderId: string) =>
+      request<{ markers: number; cuttingRecords: number; fabricRecords: number }>(`/materials/${orderId}/markers`, { method: 'DELETE' }),
     recordCutting: (orderId: string, body: unknown) => post<{ id: string }>(`/materials/${orderId}/cutting`, body),
   },
 
@@ -1065,11 +1068,11 @@ export const api = {
       post<LayingImportAnalysisDto>(`/orders/${orderId}/laying-import/${jobId}/remap`, body),
     saveMapping: (orderId: string, jobId: string, label?: string) =>
       post<{ id: string }>(`/orders/${orderId}/laying-import/${jobId}/save-mapping`, { label }),
-    commit: (orderId: string, jobId: string, resolutions: Record<string, 'KEEP' | 'REPLACE' | 'ADD_NEW'>) =>
+    commit: (orderId: string, jobId: string, resolutions: Record<string, 'KEEP' | 'REPLACE' | 'ADD_NEW'>, replaceAll = false) =>
       post<{
-        markersCreated: number; markersUpdated: number; markersSkipped: number; panelRows: number;
+        markersCreated: number; markersUpdated: number; markersSkipped: number; panelRows: number; cleared: number;
         cuttingRecordsCreated: number; fabricRecordsCreated: number;
-      }>(`/orders/${orderId}/laying-import/${jobId}/commit`, { resolutions }),
+      }>(`/orders/${orderId}/laying-import/${jobId}/commit`, { resolutions, replaceAll }),
     history: (orderId: string) => get<{
       data: Array<{
         id: string; fileName: string; status: string; createdAt: string; committedAt: string | null;

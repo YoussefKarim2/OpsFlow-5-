@@ -239,6 +239,8 @@ layingImportRouter.post('/:jobId/save-mapping', requirePermission('import:laying
 
 const commitSchema = z.object({
   resolutions: z.record(z.enum(['KEEP', 'REPLACE', 'ADD_NEW'])).default({}),
+  /** Remove the existing lay plan first and import this file as the whole plan. */
+  replaceAll: z.boolean().default(false),
 });
 
 layingImportRouter.post('/:jobId/commit', requirePermission('import:laying'), asyncHandler(async (req, res) => {
@@ -263,6 +265,7 @@ layingImportRouter.post('/:jobId/commit', requirePermission('import:laying'), as
       resolutions: input.resolutions as Record<string, RowResolution>,
       actorId: actor.id, actorName: actor.name,
       extras: extraction.extras,
+      replaceAll: input.replaceAll,
     });
 
     const laysAdded = Math.max(0, result.markersCreated - Math.min(result.panelRows, result.markersCreated));
@@ -274,7 +277,7 @@ layingImportRouter.post('/:jobId/commit', requirePermission('import:laying'), as
 
     await announceChange({
       entityType: 'Order', entityId: order.id, action: 'UPDATE', category: ChangeCategory.PRODUCTION,
-      summary: `Laying & Marking imported for PO ${order.poNumber} — ${laysAdded} lay${laysAdded === 1 ? '' : 's'} added`
+      summary: `Laying & Marking imported for PO ${order.poNumber} — ${result.cleared > 0 ? 'previous plan replaced, ' : ''}${laysAdded} lay${laysAdded === 1 ? '' : 's'} added`
         + (result.panelRows > 0 ? `, ${result.panelRows} panel row${result.panelRows === 1 ? '' : 's'} by colour` : ''),
       subject: `PO ${order.poNumber}`, priority: NotificationPriority.NORMAL,
       orderId: order.id, link: `/orders/${order.id}?tab=cutting`,

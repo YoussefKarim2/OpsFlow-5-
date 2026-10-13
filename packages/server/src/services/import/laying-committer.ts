@@ -14,7 +14,7 @@
  * file is one piece of news, not one per row.
  */
 
-import type { PrismaClient } from '@prisma/client';
+import type { PrismaClient, Prisma } from '@prisma/client';
 import { ValidationError, NotFoundError, ConflictError } from '../../errors.js';
 import { suppressChangeEvents } from '../../request-context.js';
 import { logActivity } from '../../services/activity-service.js';
@@ -32,6 +32,26 @@ export interface CommitLayingImportInput {
   actorName: string;
   /** The factory sheet's sign-off lines, spread notes and fabric summary, when it was one. */
   extras?: LayingExtras;
+  /**
+   * Remove the order's existing lay plan first, then import every row as new.
+   * The coordinator's way of starting again from a fresh sheet, instead of
+   * deciding Keep / Replace lay by lay.
+   */
+  replaceAll?: boolean;
+}
+
+export interface ClearedLayPlan { markers: number; cuttingRecords: number; fabricRecords: number }
+
+/**
+ * Remove an order's lay plan: every marker, and the cutting and fabric
+ * records an import wrote. Records entered by hand (no import job behind
+ * them) are kept — a cut quantity somebody typed is a fact, not a plan.
+ */
+export async function clearLayPlan(tx: Prisma.TransactionClient, orderId: string): Promise<ClearedLayPlan> {
+  const markers = await tx.marker.deleteMany({ where: { orderId } });
+  const cuttingRecords = await tx.cuttingRecord.deleteMany({ where: { orderId, importJobId: { not: null } } });
+  const fabricRecords = await tx.fabricRecord.deleteMany({ where: { orderId, importJobId: { not: null } } });
+  return { markers: markers.count, cuttingRecords: cuttingRecords.count, fabricRecords: fabricRecords.count };
 }
 
 export interface CommitLayingImportResult {
@@ -40,6 +60,8 @@ export interface CommitLayingImportResult {
   markersSkipped: number;
   /** Of the markers created or replaced, how many were the factory sheet's panel rows rather than lays. */
   panelRows: number;
+  /** Lays removed first, when the import replaced the whole plan. */
+  cleared: number;
   cuttingRecordsCreated: number;
   fabricRecordsCreated: number;
 }
@@ -170,7 +192,11 @@ export async function commitLayingImport(
     });
     if (claimed.count === 0) throw new ConflictError('This file has already been imported.');
 
-    const existingMarkers = await tx.marker.findMany({
+    // Starting again: the old plan goes before the new one is written, in the
+    // same transaction, so a failure part-way leaves the old plan in place.
+    const cleared = input.replaceAll ? (await clearLayPlan(tx, order.id)).markers : 0;
+
+    const existingMarkers = input.replaceAll ? [] : await tx.marker.findMany({
       where: { orderId: order.id },
       select: { id: true, markerNumber: true, position: true },
     });
@@ -276,16 +302,16 @@ export async function commitLayingImport(
       }
     }
 
-    return { markersCreated, markersUpdated, markersSkipped, panelRows, cuttingRecordsCreated, fabricRecordsCreated };
+    return { markersCreated, markersUpdated, markersSkipped, panelRows, cleared, cuttingRecordsCreated, fabricRecordsCreated };
   }, { timeout: 60_000 });
 
-  const { markersCreated, markersUpdated, markersSkipped, panelRows } = counts;
+  const { markersCreated, markersUpdated, markersSkipped, panelRows, cleared } = counts;
   const laysAdded = Math.max(0, markersCreated - Math.min(panelRows, markersCreated));
   await logActivity({
     orderId: order.id, actorId: input.actorId, actorName: input.actorName,
     action: 'LAYING_MARKING_IMPORTED',
     summary:
-      `imported Laying & Marking data — ${laysAdded} lay${laysAdded === 1 ? '' : 's'} added` +
+      `imported Laying & Marking data — ${cleared > 0 ? `removed the previous plan (${cleared} rows), ` : ''}${laysAdded} lay${laysAdded === 1 ? '' : 's'} added` +
       (panelRows > 0 ? `, ${panelRows} panel row${panelRows === 1 ? '' : 's'} by colour` : '') +
       (markersUpdated > 0 ? `, ${markersUpdated} replaced` : '') +
       (markersSkipped > 0 ? `, ${markersSkipped} kept as-is` : ''),

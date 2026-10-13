@@ -9,6 +9,7 @@ import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 import { refreshOrderCache, ORDER_INCLUDE, deriveOrder } from '../services/order-service.js';
 import { logActivity, logAndNotify } from '../services/activity-service.js';
 import { issueToProduction, returnFromProduction } from '../services/inventory-service.js';
+import { clearLayPlan } from '../services/import/laying-committer.js';
 import type { AuthUser } from '../middleware/auth.js';
 
 export const materialsRouter = Router();
@@ -587,6 +588,29 @@ materialsRouter.post('/:orderId/markers', requirePermission('cutting:write'), as
 
   await refreshOrderCache(order.id);
   res.status(201).json({ id: marker.id });
+}));
+
+/**
+ * Remove the whole lay plan, to import or enter a new one from nothing.
+ * Markers go, and the cutting and fabric records an import wrote; anything
+ * entered by hand stays.
+ */
+materialsRouter.delete('/:orderId/markers', requirePermission('cutting:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const order = await prisma.order.findFirst({
+    where: { OR: [{ id: req.params.orderId }, { poNumber: req.params.orderId }] }, select: { id: true, poNumber: true },
+  });
+  if (!order) throw new NotFoundError('Order');
+  const cleared = await prisma.$transaction((tx) => clearLayPlan(tx, order.id));
+  await logActivity({
+    orderId: order.id, actorId: actor.id, actorName: actor.name,
+    action: 'LAY_PLAN_CLEARED',
+    summary: `removed the lay plan: ${cleared.markers} row${cleared.markers === 1 ? '' : 's'}`
+      + (cleared.cuttingRecords + cleared.fabricRecords > 0 ? ` and ${cleared.cuttingRecords + cleared.fabricRecords} imported cutting/fabric record${cleared.cuttingRecords + cleared.fabricRecords === 1 ? '' : 's'}` : ''),
+    entityType: 'Order', entityId: order.id, meta: { ...cleared },
+  });
+  await refreshOrderCache(order.id);
+  res.json(cleared);
 }));
 
 materialsRouter.delete('/markers/:id', requirePermission('cutting:write'), asyncHandler(async (req, res) => {
