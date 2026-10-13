@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { isChunkLoadError, isReloadPending, reloadForNewBuild } from '../lib/deploy-guard';
 
 /**
  * Catches a render error so one broken screen doesn't blank the whole app.
@@ -29,10 +30,15 @@ export class ErrorBoundary extends Component<Props, State> {
   state: State = { error: null };
 
   static getDerivedStateFromError(error: Error): State {
+    // A screen's code chunk that no longer exists on the server is a stale
+    // build, not a broken screen: reload once into the current build, and
+    // draw nothing rather than an error box for the moment before it lands.
+    if (isReloadPending() || (isChunkLoadError(error) && reloadForNewBuild())) return { error: null };
     return { error };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
+    if (isReloadPending()) return;
     // The stack that matters for a React error is the component stack, not the
     // JS one — it names the screen. Kept in the console so a support call can
     // start with "open the console and read me the last red line".
@@ -52,8 +58,9 @@ export class ErrorBoundary extends Component<Props, State> {
             {this.props.label ?? 'This screen'} ran into a problem
           </h2>
           <p className="mt-2 text-sm text-slate-600">
-            Nothing has been lost — your saved work is in the database. This is a
-            display problem on this screen only.
+            {isChunkLoadError(error)
+              ? 'OpsFlow was updated while this tab was open, and this screen\'s code is from the old version. Reload the page to pick up the current one; nothing has been lost.'
+              : 'Nothing has been lost — your saved work is in the database. This is a display problem on this screen only.'}
           </p>
           <p className="mt-3 rounded bg-slate-50 p-3 font-mono text-xs text-slate-700">
             {error.message || 'Unknown error'}

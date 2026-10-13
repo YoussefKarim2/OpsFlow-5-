@@ -49,6 +49,17 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const webDist = path.resolve(__dirname, '../../web/dist');
 const hasWebBuild = fs.existsSync(path.join(webDist, 'index.html'));
 
+/** The web build's id (dist/build.json), so an open tab can tell a newer build is live. */
+function readWebBuildId(): string | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(webDist, 'build.json'), 'utf8')) as { id?: unknown };
+    return typeof raw.id === 'string' ? raw.id : null;
+  } catch {
+    return null;
+  }
+}
+const webBuildId = hasWebBuild ? readWebBuildId() : null;
+
 export function createApp() {
   const app = express();
 
@@ -109,6 +120,7 @@ export function createApp() {
     res.json({
       ok: true, service: 'opsflow-api', version: '0.1.0', env: config.NODE_ENV,
       uptimeSeconds: Math.round(process.uptime()),
+      build: webBuildId,
     });
   });
 
@@ -167,11 +179,27 @@ export function createApp() {
   app.use('/api', referenceRouter);
 
   if (hasWebBuild) {
-    app.use(express.static(webDist));
+    // Hashed assets never change under their name, so a browser may keep them
+    // for a year; index.html names the current ones and must be fetched fresh.
+    app.use(express.static(webDist, {
+      index: false,
+      setHeaders: (res, filePath) => {
+        if (filePath.includes(`${path.sep}assets${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        else res.setHeader('Cache-Control', 'no-cache');
+      },
+    }));
     // SPA fallback: any non-API GET that didn't match a static asset gets
     // index.html, so client-side routes (e.g. /orders/123) survive a refresh.
     app.get('*', (req, res, next) => {
       if (req.path.startsWith('/api')) return next();
+      // A code chunk that no longer exists must fail as a 404, not come back
+      // as the HTML page: the app recognises the failure and reloads itself
+      // into the current build (see web/src/lib/deploy-guard.ts).
+      if (req.path.startsWith('/assets/')) {
+        res.status(404).type('text/plain').set('Cache-Control', 'no-store').send('Not found');
+        return;
+      }
+      res.set('Cache-Control', 'no-cache');
       res.sendFile(path.join(webDist, 'index.html'));
     });
   }

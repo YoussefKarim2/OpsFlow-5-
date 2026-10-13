@@ -6,6 +6,7 @@ import { AuthProvider, useAuth } from './lib/auth';
 import { AppShell } from './components/AppShell';
 import { Spinner, ToastProvider, EmptyState } from './components/ui';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { reloadForNewBuild, isReloadPending, useNewBuildAvailable, useReloadOnNavigateWhenStale } from './lib/deploy-guard';
 
 import { OrdersPage } from './pages/Orders';
 import { ForcedPasswordChangePage } from './pages/ChangePassword';
@@ -14,7 +15,29 @@ import { ForcedPasswordChangePage } from './pages/ChangePassword';
 // of JavaScript before the sign-in page could draw, most of it charts and
 // order tabs that a given visit may never reach.
 const named = <K extends string>(load: () => Promise<Record<K, ComponentType>>, name: K) =>
-  lazy(() => load().then((m) => ({ default: m[name] })));
+  lazy(() => load().then((m) => ({ default: m[name] })).catch((err: unknown) => {
+    // The chunk is gone because a newer build is live: reload into it, and
+    // never resolve, so nothing draws in the meantime. If a reload was just
+    // tried, let the error through so the screen explains.
+    if (isReloadPending() || reloadForNewBuild()) return new Promise<never>(() => undefined);
+    throw err;
+  }));
+
+/**
+ * Keeps an open tab on the current build: once a newer one is live, the next
+ * screen change reloads into it, and a bar offers a reload meanwhile.
+ */
+function NewBuildGuard() {
+  const stale = useNewBuildAvailable();
+  useReloadOnNavigateWhenStale(stale);
+  if (!stale) return null;
+  return (
+    <div className="flex items-center justify-center gap-3 bg-accent-600 px-4 py-1.5 text-xs text-white">
+      <span>OpsFlow has been updated. Reload to get the latest version.</span>
+      <button type="button" className="rounded bg-white/15 px-2 py-0.5 font-medium hover:bg-white/25" onClick={() => window.location.reload()}>Reload</button>
+    </div>
+  );
+}
 const DashboardPage = named(() => import('./pages/Dashboard'), 'DashboardPage');
 const ProductivityPage = named(() => import('./pages/Productivity'), 'ProductivityPage');
 const CostingOverviewPage = named(() => import('./pages/CostingOverview'), 'CostingOverviewPage');
@@ -107,6 +130,7 @@ export default function App() {
       <ToastProvider>
       <BrowserRouter>
         <AuthProvider>
+          <NewBuildGuard />
           <Routes>
             <Route path="/login" element={<LoginPage />} />
 
