@@ -121,9 +121,12 @@ function fromAgeSheet(age: AgeLayingSheet, candidateSheets: Array<{ name: string
   const blank = {
     markerNumber: null, markerWidthM: null, wastagePct: null, fabricConsumptionM: null, cutDate: null, cutByName: null, poNumber: null,
   };
+  // The sheet's PO number is in its title block, not a column. Carried on
+  // every row so the commit's wrong-file check sees it, as it would a column.
+  const poNumber = age.header.poNumber;
   for (const l of age.lays) {
     rows.push({
-      ...blank, rowNumber: rows.length + 1, kind: 'LAY',
+      ...blank, poNumber, rowNumber: rows.length + 1, kind: 'LAY',
       fabricName: l.fabric ?? age.header.fabrics[0] ?? null, fabricColor: l.color, panel: l.panel ?? 'ALL',
       sizeRatio: l.sizeRatio, layers: l.layers == null ? null : Math.round(l.layers), markerLengthM: l.markerLengthM,
       totalLengthM: l.totalLengthM, nestPcs: l.nestPcs, efficiencyPct: l.efficiencyPct,
@@ -141,7 +144,7 @@ function fromAgeSheet(age: AgeLayingSheet, candidateSheets: Array<{ name: string
         const ratio = Object.entries(p.bySize).map(([size, n]) => `(${size}${n})`).join(', ');
         if (!ratio) continue;
         rows.push({
-          ...blank, rowNumber: rows.length + 1, kind: 'PANEL',
+          ...blank, poNumber, rowNumber: rows.length + 1, kind: 'PANEL',
           fabricName: mainFabric, fabricColor: c.colour, panel: p.part, sizeRatio: ratio,
           layers: 1, markerLengthM: null, totalLengthM: null, nestPcs: null, efficiencyPct: null, maxLayer: null,
         });

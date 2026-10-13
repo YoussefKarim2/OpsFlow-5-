@@ -163,6 +163,7 @@ export function LayingMarkingImportWizard({
         {step === 'map' && analysis && (
           <MapStep
             analysis={analysis}
+            orderPoNumber={orderPoNumber}
             columnMapping={columnMapping}
             busy={remap.isPending}
             onChange={onChangeColumn}
@@ -177,6 +178,7 @@ export function LayingMarkingImportWizard({
         {step === 'review' && analysis && (
           <ReviewStep
             analysis={analysis}
+            orderPoNumber={orderPoNumber}
             existingLays={existingLays}
             replaceAll={replaceAll}
             onReplaceAllChange={setReplaceAll}
@@ -214,10 +216,30 @@ function IssueList({ issues }: { issues: LayingImportAnalysisDto['issues'] }) {
   );
 }
 
+/** The PO numbers a file states that are not this order's. The commit refuses such a file; the screen says so first. */
+function wrongPoNumbers(analysis: LayingImportAnalysisDto, orderPoNumber: string): string[] {
+  const norm = (s: string) => s.replace(/\s+/g, '').toUpperCase();
+  return analysis.detectedPoNumbers.filter((p) => norm(p) !== norm(orderPoNumber));
+}
+
+function WrongFile({ wrong, orderPoNumber }: { wrong: string[]; orderPoNumber: string }) {
+  if (wrong.length === 0) return null;
+  return (
+    <div className="flex items-start gap-2 rounded-md border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-800">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+      <span>
+        This file says PO <strong>{wrong.join(', ')}</strong>, but the order open here is PO <strong>{orderPoNumber}</strong>.
+        It cannot be imported onto this order. Open the order it belongs to, or check you have the right file.
+      </span>
+    </div>
+  );
+}
+
 function MapStep({
-  analysis, columnMapping, busy, onChange, onBack, onNext,
+  analysis, orderPoNumber, columnMapping, busy, onChange, onBack, onNext,
 }: {
   analysis: LayingImportAnalysisDto;
+  orderPoNumber: string;
   columnMapping: Record<string, string>;
   busy: boolean;
   onChange: (index: number, concept: string) => void;
@@ -228,8 +250,10 @@ function MapStep({
   const x = analysis.extras;
   const lays = analysis.rows.filter((r) => r.kind !== 'PANEL').length;
   const panels = analysis.rows.filter((r) => r.kind === 'PANEL').length;
+  const wrong = wrongPoNumbers(analysis, orderPoNumber);
   return (
     <div className="space-y-4">
+      <WrongFile wrong={wrong} orderPoNumber={orderPoNumber} />
       {x && (
         <Card>
           <CardHeader
@@ -266,6 +290,14 @@ function MapStep({
         />
         {analysis.columns.length === 0 ? (
           <EmptyState title="No table detected" detail="Try a different sheet, or check the file has a header row." />
+        ) : x ? (
+          // The factory sheet's columns are fixed by its layout; there is
+          // nothing to reassign, so they are listed rather than offered.
+          <ul className="flex flex-wrap gap-1.5 p-4">
+            {analysis.columns.map((c) => (
+              <li key={c.index} className="chip bg-emerald-50 text-emerald-700 ring-emerald-600/20">{c.header} → {CONCEPT_META[c.concept].label}</li>
+            ))}
+          </ul>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
@@ -306,7 +338,7 @@ function MapStep({
 
       <div className="flex justify-between">
         <button className="btn-secondary" onClick={onBack}><ArrowLeft className="h-4 w-4" /> Back</button>
-        <button className="btn-primary" onClick={onNext} disabled={busy || !analysis.canCommit}>
+        <button className="btn-primary" onClick={onNext} disabled={busy || !analysis.canCommit || wrong.length > 0}>
           {busy ? 'Re-reading…' : 'Review'} <ArrowRight className="h-4 w-4" />
         </button>
       </div>
@@ -315,9 +347,10 @@ function MapStep({
 }
 
 function ReviewStep({
-  analysis, existingLays, replaceAll, onReplaceAllChange, resolutions, onResolutionChange, onBack, onConfirm, committing,
+  analysis, orderPoNumber, existingLays, replaceAll, onReplaceAllChange, resolutions, onResolutionChange, onBack, onConfirm, committing,
 }: {
   analysis: LayingImportAnalysisDto;
+  orderPoNumber: string;
   existingLays: number;
   replaceAll: boolean;
   onReplaceAllChange: (v: boolean) => void;
@@ -331,8 +364,10 @@ function ReviewStep({
   const conflictKeys = analysis.conflicts.map((c) => c.key);
 
   const hasExisting = existingLays > 0 || conflictKeys.length > 0 || analysis.priorImportExists;
+  const wrong = wrongPoNumbers(analysis, orderPoNumber);
   return (
     <div className="space-y-4">
+      <WrongFile wrong={wrong} orderPoNumber={orderPoNumber} />
       {hasExisting && (
         <Card>
           <CardHeader
@@ -437,7 +472,7 @@ function ReviewStep({
 
       <div className="flex justify-between">
         <button className="btn-secondary" onClick={onBack}><ArrowLeft className="h-4 w-4" /> Back</button>
-        <button className={clsx(replaceAll ? 'btn-danger' : 'btn-primary')} onClick={onConfirm} disabled={committing || !analysis.canCommit || analysis.rows.length === 0}>
+        <button className={clsx(replaceAll ? 'btn-danger' : 'btn-primary')} onClick={onConfirm} disabled={committing || !analysis.canCommit || analysis.rows.length === 0 || wrong.length > 0}>
           {committing ? 'Importing…' : replaceAll ? `Remove ${existingLays > 0 ? `${existingLays} row${existingLays === 1 ? '' : 's'} and ` : 'the old plan and '}import` : 'Confirm import'}
         </button>
       </div>
