@@ -632,6 +632,7 @@ ordersRouter.get('/:id/tasks', requirePermission('task:read'), asyncHandler(asyn
 }));
 
 ordersRouter.get('/:id/activity', requirePermission('order:read'), asyncHandler(async (req, res) => {
+  if (!(await prisma.order.findUnique({ where: { id: req.params.id }, select: { id: true } }))) throw new NotFoundError('Order');
   const limit = Math.min(200, Number(req.query.limit) || 50);
   const logs = await prisma.activityLog.findMany({
     where: { orderId: req.params.id },
@@ -649,6 +650,7 @@ ordersRouter.get('/:id/activity', requirePermission('order:read'), asyncHandler(
 }));
 
 ordersRouter.get('/:id/audit-trail', requirePermission('order:read'), asyncHandler(async (req, res) => {
+  if (!(await prisma.order.findUnique({ where: { id: req.params.id }, select: { id: true } }))) throw new NotFoundError('Order');
   const rows = await prisma.auditTrail.findMany({
     where: { orderId: req.params.id },
     orderBy: { createdAt: 'desc' },

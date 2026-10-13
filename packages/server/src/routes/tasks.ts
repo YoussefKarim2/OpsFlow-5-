@@ -244,6 +244,7 @@ tasksRouter.patch('/:id', requirePermission('task:assign'), asyncHandler(async (
 // ── Comments ────────────────────────────────────────────────────────────────
 
 tasksRouter.get('/:id/comments', requirePermission('task:read'), asyncHandler(async (req, res) => {
+  if (!(await prisma.task.findUnique({ where: { id: req.params.id }, select: { id: true } }))) throw new NotFoundError('Task');
   const comments = await prisma.taskComment.findMany({
     where: { taskId: req.params.id },
     include: { author: { select: { id: true, name: true } } },

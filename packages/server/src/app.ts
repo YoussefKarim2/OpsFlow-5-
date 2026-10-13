@@ -245,6 +245,26 @@ function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFun
   }
 
   /**
+   * A body over the JSON limit, or one the parser refused for another reason.
+   *
+   * body-parser throws errors that carry their own HTTP status ("entity.too.
+   * large" is a 413) and none of the shapes above, so a 3 MB request came
+   * back as a 500 and was logged as ours. The status it carries is the right
+   * answer; the message says what the limit is.
+   */
+  const parserType = (err as { type?: unknown }).type;
+  const parserStatus = (err as { status?: unknown }).status;
+  if (typeof parserType === 'string' && typeof parserStatus === 'number' && parserStatus >= 400 && parserStatus < 500) {
+    res.status(parserStatus).json({
+      error: parserType === 'entity.too.large'
+        ? 'The request is too large. The limit is 2 MB of JSON; send less at a time.'
+        : 'The request body could not be read.',
+      code: parserType === 'entity.too.large' ? 'PAYLOAD_TOO_LARGE' : 'BAD_REQUEST_BODY',
+    });
+    return;
+  }
+
+  /**
    * An upload that broke a multer limit.
    *
    * Multer throws its own `MulterError`, which was none of the shapes below, so

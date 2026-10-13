@@ -174,6 +174,7 @@ referenceRouter.get('/users', requirePermission('user:manage'), asyncHandler(asy
 
 referenceRouter.get('/orders/:orderId/attachments', requirePermission('order:read'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
+  if (!(await prisma.order.findUnique({ where: { id: req.params.orderId }, select: { id: true } }))) throw new NotFoundError('Order');
   const attachments = await prisma.attachment.findMany({
     where: { orderId: req.params.orderId },
     include: { uploadedBy: { select: { name: true } } },
