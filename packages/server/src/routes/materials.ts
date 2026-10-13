@@ -525,7 +525,7 @@ materialsRouter.get('/:orderId/markers', requirePermission('cutting:read'), asyn
     // the allowance — about 7% on a typical lay plan.
     totalLengthM: dec(m.totalLengthM),
     nestPcs: m.nestPcs, efficiencyPct: dec(m.efficiencyPct),
-    maxLayer: m.maxLayer,
+    maxLayer: m.maxLayer, markerNumber: m.markerNumber, notes: m.notes,
   }));
 
   // Cut requirement per size name — what the lay plan must produce.
@@ -568,6 +568,72 @@ const markerSchema = z.object({
   efficiencyPct: z.number().optional(),
   notes: z.string().optional(),
 });
+
+const layRowSchema = z.object({
+  id: z.string().optional(),
+  markerNumber: z.string().trim().max(50).optional().nullable(),
+  fabricName: z.string().trim().min(1, 'Every lay needs a fabric').max(120),
+  fabricColor: z.string().trim().max(120).optional().nullable(),
+  panel: z.string().trim().max(60).default('ALL'),
+  sizeRatio: z.string().trim().min(1, 'Every lay needs a size ratio').max(500),
+  layers: z.number().int().min(0).max(100_000),
+  markerLengthM: z.number().min(0).max(100_000),
+  totalLengthM: z.number().min(0).max(10_000_000).optional().nullable(),
+  nestPcs: z.number().int().min(0).max(100_000).optional().nullable(),
+  efficiencyPct: z.number().min(0).max(100).optional().nullable(),
+  maxLayer: z.number().int().min(0).max(100_000).optional().nullable(),
+  notes: z.string().trim().max(2000).optional().nullable(),
+});
+const saveLaysSchema = z.object({
+  items: z.array(layRowSchema).max(500),
+  /** Lays removed in the editor. Only these are deleted: rows the editor did not send are left alone. */
+  removeIds: z.array(z.string()).max(500).default([]),
+});
+
+/**
+ * The lay plan as edited on screen, saved in one go — the Bill of Materials
+ * pattern. A row with an id is updated, one without is added at the end, and
+ * only the rows the editor removed are deleted, so the panel rows the factory
+ * sheet import keeps beside the lays are untouched.
+ */
+materialsRouter.put('/:orderId/markers', requirePermission('cutting:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const input = saveLaysSchema.parse(req.body ?? {});
+  const order = await prisma.order.findFirst({
+    where: { OR: [{ id: req.params.orderId }, { poNumber: req.params.orderId }] }, select: { id: true },
+  });
+  if (!order) throw new NotFoundError('Order');
+
+  const counts = await prisma.$transaction(async (tx) => {
+    const existing = await tx.marker.findMany({ where: { orderId: order.id }, select: { id: true, position: true } });
+    const known = new Set(existing.map((m) => m.id));
+    let position = existing.length > 0 ? Math.max(...existing.map((m) => m.position)) + 1 : 0;
+    let updated = 0, added = 0;
+    for (const row of input.items) {
+      const { id, ...data } = row;
+      if (id) {
+        if (!known.has(id)) throw new ValidationError('One of the lays no longer exists on this order. Reload and try again.');
+        await tx.marker.update({ where: { id }, data });
+        updated++;
+      } else {
+        await tx.marker.create({ data: { ...data, orderId: order.id, position: position++ } });
+        added++;
+      }
+    }
+    const removeIds = input.removeIds.filter((id) => known.has(id));
+    const removed = removeIds.length > 0 ? (await tx.marker.deleteMany({ where: { orderId: order.id, id: { in: removeIds } } })).count : 0;
+    return { updated, added, removed };
+  });
+
+  await logActivity({
+    orderId: order.id, actorId: actor.id, actorName: actor.name,
+    action: 'LAY_PLAN_EDITED',
+    summary: `edited the lay plan: ${counts.updated} changed, ${counts.added} added, ${counts.removed} removed`,
+    entityType: 'Order', entityId: order.id, meta: { ...counts },
+  });
+  await refreshOrderCache(order.id);
+  res.json(counts);
+}));
 
 materialsRouter.post('/:orderId/markers', requirePermission('cutting:write'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);

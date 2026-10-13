@@ -487,6 +487,23 @@ export interface LayingRowDto {
   kind: 'LAY' | 'PANEL';
 }
 
+/** One lay as the Laying & Marker editor saves it. */
+export interface LayDraftDto {
+  id?: string;
+  markerNumber?: string | null;
+  fabricName: string;
+  fabricColor?: string | null;
+  panel: string;
+  sizeRatio: string;
+  layers: number;
+  markerLengthM: number;
+  totalLengthM?: number | null;
+  nestPcs?: number | null;
+  efficiencyPct?: number | null;
+  maxLayer?: number | null;
+  notes?: string | null;
+}
+
 /** What the factory's own laying sheet says beyond its lay rows. */
 export interface LayingExtrasDto {
   layout: 'AGE';
@@ -948,6 +965,9 @@ export const api = {
       post<{ id: string; newIssuedQty: number; stillShort: number }>(`/materials/bom/${bomItemId}/issue`, body),
     markers: (orderId: string) => get<{ plan: unknown; fabrics: unknown[]; cutting: unknown[] }>(`/materials/${orderId}/markers`),
     addMarker: (orderId: string, body: unknown) => post<{ id: string }>(`/materials/${orderId}/markers`, body),
+    /** The lay plan as edited on screen: changed rows, new rows, and the ids of removed rows. */
+    saveMarkers: (orderId: string, body: { items: LayDraftDto[]; removeIds: string[] }) =>
+      put<{ updated: number; added: number; removed: number }>(`/materials/${orderId}/markers`, body),
     removeMarker: (id: string) => del(`/materials/markers/${id}`),
     /** Remove the whole lay plan (and the cutting/fabric records an import wrote). */
     clearMarkers: (orderId: string) =>

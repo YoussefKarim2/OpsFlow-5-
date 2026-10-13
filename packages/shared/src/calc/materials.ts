@@ -124,6 +124,9 @@ export interface LayInput {
   efficiencyPct?: number | null;
   /** The sheet's MAXLAYER figure, carried through for display. */
   maxLayer?: number | null;
+  /** Carried through for the editor; not used by the arithmetic. */
+  markerNumber?: string | null;
+  notes?: string | null;
 }
 
 export interface LayResult extends Omit<LayInput, 'totalLengthM'> {

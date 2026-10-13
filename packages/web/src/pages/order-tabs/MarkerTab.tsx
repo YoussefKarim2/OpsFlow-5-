@@ -8,19 +8,20 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { FileUp, Trash2 } from 'lucide-react';
+import { FileUp, Trash2, Pencil } from 'lucide-react';
 import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
 import { useAuth } from '../../lib/auth';
 import { api } from '../../lib/api';
 import { Card, CardHeader, StatTile, Num, Spinner, EmptyState, ConfirmDialog, clsx, useToast } from '../../components/ui';
 import { LayingMarkingImportWizard } from './LayingMarkingImportWizard';
 import { AttachmentsPanel } from '../../components/Attachments';
+import { LayPlanEditor } from '../../components/LayPlanEditor';
 
 interface Plan {
   lays: Array<{
     id: string; fabric: string; color: string; panel: string; ratio: string;
     layers: number; markerLengthM: number; nestPcs: number | null;
-    efficiencyPct?: number | null; maxLayer?: number | null;
+    efficiencyPct?: number | null; maxLayer?: number | null; markerNumber?: string | null; notes?: string | null;
     output: Record<string, number>; totalPieces: number; totalLengthM: number;
     consumptionPerPieceM: number | null;
   }>;
@@ -49,6 +50,7 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
   const qc = useQueryClient();
   const toast = useToast();
   const [importing, setImporting] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
 
   const clearPlan = useMutation({
@@ -129,9 +131,14 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
           subtitle="Each row is one marker: a size ratio, a layer count and a marker length"
           action={
             <div className="flex items-center gap-2">
-              {plan.lays.length > 0 && can('cutting:write') && (
+              {plan.lays.length > 0 && can('cutting:write') && !editing && (
                 <button className="btn-ghost btn-sm text-red-600 hover:bg-red-50" onClick={() => setConfirmClear(true)}>
                   <Trash2 className="h-3.5 w-3.5" /> Clear lay plan
+                </button>
+              )}
+              {can('cutting:write') && !editing && (
+                <button className="btn-secondary btn-sm" onClick={() => setEditing(true)}>
+                  <Pencil className="h-3.5 w-3.5" /> {lays.length > 0 ? 'Edit lay plan' : 'Enter lays'}
                 </button>
               )}
               {can('import:laying') && (
@@ -142,8 +149,16 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
             </div>
           }
         />
-        {plan.lays.length === 0 ? (
-          <EmptyState title="No lays recorded" detail="The cutting and marker department adds the lay plan here." />
+        {editing ? (
+          <LayPlanEditor
+            orderId={order.id}
+            lays={lays.map((l) => ({ ...l, color: l.color ?? '', totalLengthM: l.totalLengthM }))}
+            defaultFabric={plan.mainFabric ?? order.fabric ?? null}
+            onSaved={() => setEditing(false)}
+            onCancel={() => setEditing(false)}
+          />
+        ) : plan.lays.length === 0 ? (
+          <EmptyState title="No lays recorded" detail="The cutting and marker department adds the lay plan here, or imports the laying sheet." />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
