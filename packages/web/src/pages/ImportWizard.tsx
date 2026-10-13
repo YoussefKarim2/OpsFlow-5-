@@ -28,7 +28,6 @@ import { api, type ImportAnalysisDto } from '../lib/api';
 import {
   Card, CardHeader, EmptyState, ErrorNote, Field, Spinner, clsx, useToast,
 } from '../components/ui';
-import { GridEditor, cleanGrid, gridTotal, type GridDraft } from '../components/GridEditor';
 
 type Step = 'upload' | 'analyse' | 'map' | 'review';
 
@@ -51,15 +50,12 @@ export function ImportWizardPage() {
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [fieldOverrides, setFieldOverrides] = useState<Record<string, string>>({});
   const [reserveMaterials, setReserveMaterials] = useState(true);
-  // The Main Order grid as the coordinator corrected it on the review screen;
-  // null while it is exactly what was read from the file.
-  const [gridEdit, setGridEdit] = useState<GridDraft | null>(null);
 
   const { data: lookups } = useQuery({ queryKey: ['lookups'], queryFn: api.reference.lookups });
 
   const upload = useMutation({
     mutationFn: (f: File) => api.import.upload(f),
-    onSuccess: (r) => { setResult(r); setError(null); setGridEdit(null); setStep('analyse'); },
+    onSuccess: (r) => { setResult(r); setError(null); setStep('analyse'); },
     onError: (e) => { setError(e); setFile(null); },
   });
 
@@ -76,7 +72,6 @@ export function ImportWizardPage() {
       overrides: Object.keys(fieldOverrides).length > 0 ? fieldOverrides : undefined,
       sheetName: result?.analysis?.sheetName,
       reserveMaterials,
-      matrix: gridEdit ? cleanGrid(gridEdit) : undefined,
     }),
     onSuccess: (r) => {
       qc.invalidateQueries();
@@ -99,7 +94,7 @@ export function ImportWizardPage() {
 
   const reset = () => {
     setStep('upload'); setFile(null); setResult(null); setError(null);
-    setColumnMapping({}); setFieldOverrides({}); setGridEdit(null);
+    setColumnMapping({}); setFieldOverrides({});
   };
 
   const analysis = result?.analysis ?? null;
@@ -181,21 +176,20 @@ export function ImportWizardPage() {
         <ReviewStep
           result={result}
           fieldOverrides={fieldOverrides}
+          // The one choice left on this screen: which of two readings of an
+          // ambiguous date the file meant. Applied at once, by re-reading the
+          // file with that reading, so what is shown is what will be saved.
           onField={(field, value) => {
             const next = { ...fieldOverrides, [field]: value };
             setFieldOverrides(next);
+            remap.mutate({ fieldOverrides: next, columnMapping, sheetName: analysis?.sheetName });
           }}
-          onApplyFields={() => remap.mutate({ fieldOverrides, columnMapping, sheetName: analysis?.sheetName })}
           applying={remap.isPending}
           reserveMaterials={reserveMaterials}
           onReserveChange={setReserveMaterials}
           onBack={() => setStep(analysis ? 'map' : 'analyse')}
           onConfirm={() => commit.mutate()}
           committing={commit.isPending}
-          grid={gridEdit ?? gridFromPreview(result)}
-          gridEdited={gridEdit != null}
-          onGrid={setGridEdit}
-          onGridReset={() => setGridEdit(null)}
         />
       )}
     </div>
@@ -645,12 +639,7 @@ function DetectedPanel({
                     </span>
                   </div>
                 ) : (
-                  <p className="mt-1 text-sm font-semibold text-ink-900">
-                    {m.sampleValue}
-                    <span className="ml-2 text-xs font-normal text-ink-500">
-                      — correct it in Order details below if this is wrong
-                    </span>
-                  </p>
+                  <p className="mt-1 text-sm font-semibold text-ink-900">{m.sampleValue}</p>
                 )}
               </li>
             ))}
@@ -698,44 +687,34 @@ function DetectedPanel({
         </div>
         <p className="border-t border-ink-100 bg-ink-50 px-4 py-2 text-2xs text-ink-500">
           A field marked <strong>not in the file</strong> was genuinely absent. It is left empty
-          rather than guessed — type it below if you know it.
+          rather than guessed, and can be filled in on the order afterwards.
         </p>
       </Card>
     </>
   );
 }
 
-function gridFromPreview(result: ImportAnalysisDto): GridDraft {
-  return {
-    sizes: [...result.preview.sizes],
-    rows: result.preview.matrixRows.map((r) => ({ color: r.color, cells: { ...r.cells } })),
-  };
-}
-
 function ReviewStep({
-  result, fieldOverrides, onField, onApplyFields, applying,
+  result, fieldOverrides, onField, applying,
   reserveMaterials, onReserveChange, onBack, onConfirm, committing,
-  grid, gridEdited, onGrid, onGridReset,
 }: {
   result: ImportAnalysisDto;
   fieldOverrides: Record<string, string>;
   onField: (field: string, value: string) => void;
-  onApplyFields: () => void;
   applying: boolean;
   reserveMaterials: boolean;
   onReserveChange: (v: boolean) => void;
   onBack: () => void;
   onConfirm: () => void;
   committing: boolean;
-  grid: GridDraft;
-  gridEdited: boolean;
-  onGrid: (g: GridDraft) => void;
-  onGridReset: () => void;
 }) {
   const p = result.preview;
-  const total = gridTotal(cleanGrid(grid));
+  const total = p.matrixTotal;
   const errors = result.issues.filter((i) => i.level === 'ERROR');
+  // Only what the file stated. Nothing on this screen is typed: a field the
+  // document did not carry is not shown here, and can be filled on the order.
   const value = (field: string) => fieldOverrides[field] ?? String(p.order[field] ?? '');
+  const found = reviewFields(p.order as Record<string, unknown>).filter((f) => value(f.field).trim() !== '');
 
   return (
     <div className="space-y-4">
@@ -744,8 +723,8 @@ function ReviewStep({
         <div className="grid gap-4 p-4 sm:grid-cols-3 lg:grid-cols-6">
           <Summary label="Order" value={String(p.order.poNumber ?? '—')} mono />
           <Summary label="Customer" value={String(p.order.clientName ?? '—')} />
-          <Summary label="Colours" value={String(cleanGrid(grid).rows.length)} />
-          <Summary label="Sizes" value={String(cleanGrid(grid).sizes.length)} />
+          <Summary label="Colours" value={String(p.colors.length)} />
+          <Summary label="Sizes" value={String(p.sizes.length)} />
           <Summary label="Total quantity" value={fmtNumber(total, { places: 0 })} strong />
           <Summary label="Rows read" value={String(result.analysis?.rowsDetected ?? p.matrixRows.length)} />
         </div>
@@ -755,28 +734,66 @@ function ReviewStep({
 
       <Card>
         <CardHeader
-          title="Order details"
-          subtitle="Everything read from the file, and anything it did not carry. All of it editable before the order is created."
-          action={
-            <button className="btn-secondary btn-sm" onClick={onApplyFields} disabled={applying}>
-              {applying ? 'Applying…' : 'Apply changes'}
-            </button>
-          }
+          title="Order details read from the file"
+          subtitle={applying ? 'Re-reading the file…' : 'As they will be saved. Anything the file did not state is left for the order itself.'}
         />
-        <div className="grid gap-3 p-4 sm:grid-cols-3">
-          {reviewFields(p.order as Record<string, unknown>).map((f) => (
-            <Field key={f.field} label={f.label + (f.required ? ' *' : '')}>
-              <input
-                className={clsx('input', f.required && !value(f.field) && 'border-amber-400')}
-                value={value(f.field)}
-                onChange={(e) => onField(f.field, e.target.value)}
-              />
-            </Field>
+        <dl className="grid gap-x-6 gap-y-2 p-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
+          {found.map((f) => (
+            <div key={f.field}>
+              <dt className="label">{f.label}</dt>
+              <dd className="text-ink-900">{value(f.field)}</dd>
+            </div>
           ))}
-        </div>
+        </dl>
       </Card>
 
-      <GridEditor grid={grid} edited={gridEdited} onChange={onGrid} onReset={onGridReset} />
+      {p.matrixRows.length > 0 ? (
+        <Card>
+          <CardHeader title="Main Order quantities" subtitle="As read from the file. The Cut Order is calculated from this grid." />
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="border-b border-ink-200 bg-ink-50">
+                <tr>
+                  <th className="th">Colour</th>
+                  {p.sizes.map((s) => <th key={s} className="th text-right">{s}</th>)}
+                  <th className="th text-right">Total</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-ink-100">
+                {p.matrixRows.map((r) => (
+                  <tr key={r.color}>
+                    <td className="td font-medium">{r.color}</td>
+                    {p.sizes.map((s) => (
+                      <td key={s} className="td tnum text-right text-ink-700">
+                        {r.cells[s] ? r.cells[s].toLocaleString() : <span className="text-ink-300">—</span>}
+                      </td>
+                    ))}
+                    <td className="td tnum text-right font-semibold">{r.total.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="border-t-2 border-ink-300 bg-ink-50">
+                <tr>
+                  <td className="td font-semibold">Total</td>
+                  {p.sizes.map((s) => (
+                    <td key={s} className="td tnum text-right font-semibold">
+                      {p.matrixRows.reduce((a, r) => a + (r.cells[s] ?? 0), 0).toLocaleString()}
+                    </td>
+                  ))}
+                  <td className="td tnum text-right font-bold">{p.matrixTotal.toLocaleString()}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </Card>
+      ) : (
+        <Card className="border-red-300">
+          <CardHeader
+            title="No quantities could be read from this file"
+            subtitle="An order is never created without its Main Order, so this file cannot be imported as it is. Upload the original purchase order — a PDF exported from Excel or Word, or the spreadsheet itself — rather than a scan or a photo."
+          />
+        </Card>
+      )}
 
       {errors.length > 0 && (
         <Card>
@@ -815,16 +832,15 @@ function ReviewStep({
           <ArrowLeft className="h-4 w-4" /> Back
         </button>
         {/*
-          Enabled once the Main Order grid holds pieces. Everything else
-          missing is editable on the order; an empty grid made an order with
-          empty Main Order and Cut Order screens, and the grid above is where
-          it is fixed, so the button says so instead of refusing silently.
+          Enabled once the file yielded Main Order quantities. Nothing on this
+          screen is typed, so a file that yielded none is refused here, and
+          says so, rather than creating an order with an empty Main Order.
         */}
         <div className="flex items-center gap-3">
           {total === 0 && (
-            <span className="text-sm text-red-700">Enter the order's quantities in the Main Order grid above first.</span>
+            <span className="text-sm text-red-700">Nothing to import: the file holds no quantities.</span>
           )}
-          <button className="btn-primary" onClick={onConfirm} disabled={committing || total === 0}>
+          <button className="btn-primary" onClick={onConfirm} disabled={committing || total === 0 || applying}>
             {committing ? 'Creating the order…' : 'Confirm import'}
           </button>
         </div>
