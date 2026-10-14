@@ -221,6 +221,19 @@ export function createApp() {
  * before it can start" is the entire point — a generic 500 would put the
  * coordinator back where the spreadsheet left them.
  */
+/** Whether an error means the database could not be reached, as opposed to refusing a query. */
+export function isDatabaseUnavailable(err: unknown): boolean {
+  if (err instanceof Prisma.PrismaClientInitializationError || err instanceof Prisma.PrismaClientRustPanicError) return true;
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    // P1000–P1017 are connection-level; P2024 is the pool timing out.
+    return /^P10\d\d$/.test(err.code) || err.code === 'P2024';
+  }
+  if (err instanceof Error) {
+    return /Can't reach database server|Connection refused|ECONNREFUSED|ECONNRESET|Server has closed the connection|Timed out fetching a new connection|Connection terminated|the database system is (starting|shutting) up|Closed\b/i.test(err.message);
+  }
+  return false;
+}
+
 function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction): void {
   if (err instanceof AppError) {
     res.status(err.status).json({ error: err.message, code: err.code, details: err.details });
@@ -362,6 +375,26 @@ function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFun
    * Matched on the SQLSTATE inside the message because Prisma does not surface
    * it as a field on this error class.
    */
+  /**
+   * The database is not there.
+   *
+   * It restarts on its own schedule, the connection pool times out under a
+   * burst, a network blip closes the socket — and every one of these came back
+   * as "Something went wrong on our side" with a stack trace in the log, which
+   * reads as a fault in this code. It is not; it is the one dependency being
+   * briefly away. Said so, as a 503 with a Retry-After, so the screen can say
+   * "try again in a moment" and a watching platform does not restart a
+   * perfectly healthy process. The next request reconnects on its own.
+   */
+  if (isDatabaseUnavailable(err)) {
+    res.setHeader('Retry-After', '5');
+    res.status(503).json({
+      error: 'The database is not reachable at the moment. Nothing was changed — try again in a few seconds.',
+      code: 'DATABASE_UNAVAILABLE',
+    });
+    return;
+  }
+
   if (err instanceof Error && /ConnectorError/.test(err.message)) {
     const sqlstate = /code: "(\d{5})"/.exec(err.message)?.[1];
     const known: Record<string, string> = {

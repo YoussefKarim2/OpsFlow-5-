@@ -88,10 +88,24 @@ const queryClient: QueryClient = new QueryClient({
  * a user who types the URL gets an explanation rather than a blank screen.
  */
 function Protected({ children, requires }: { children: React.ReactNode; requires?: Permission }) {
-  const { user, loading, can } = useAuth();
+  const { user, loading, unavailable, retry, can } = useAuth();
   const location = useLocation();
 
   if (loading) return <div className="flex h-full items-center justify-center"><Spinner label="Signing in…" /></div>;
+  // Signed in, but the server could not confirm it: say so and offer to ask
+  // again, rather than a sign-in form that would fail for the same reason.
+  if (!user && unavailable) {
+    return (
+      <div className="flex h-full items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-lg border border-amber-200 bg-amber-50 p-5 text-center">
+          <p className="text-sm font-semibold text-amber-900">OpsFlow cannot reach the server right now</p>
+          <p className="mt-1 text-xs text-amber-800">{unavailable}</p>
+          <p className="mt-1 text-2xs text-amber-700">You are still signed in. Nothing has been lost.</p>
+          <button type="button" className="btn-primary btn-sm mt-4" onClick={retry}>Try again</button>
+        </div>
+      </div>
+    );
+  }
   if (!user) return <Navigate to="/login" replace />;
 
   // The API refuses everything else until the password is changed, so showing

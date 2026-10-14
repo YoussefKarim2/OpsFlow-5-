@@ -9,8 +9,33 @@ import { reconcileAllStockLedgers } from './services/stock-sync.js';
 import { refreshOrderCache } from './services/order-service.js';
 import { fillAllEmptyMainOrders } from './services/fill-main-order.js';
 
+/**
+ * Connect, and keep trying.
+ *
+ * The database is a separate service and restarts on its own schedule; a
+ * deploy that lands while it is restarting used to exit at once, and whether
+ * anything came back then depended on the platform's restart policy. Waiting
+ * is the right answer: nothing can be served without it, and nothing is lost
+ * by trying again in a few seconds. Logged each time, so a database that is
+ * genuinely gone is visible in the log rather than a silent hang.
+ */
+async function connectUntilUp(): Promise<void> {
+  let delay = 2_000;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await prisma.$connect();
+      if (attempt > 1) console.log(`Database reachable after ${attempt} attempts.`);
+      return;
+    } catch (err) {
+      console.error(`Database not reachable (attempt ${attempt}); retrying in ${delay / 1000}s:`, err instanceof Error ? err.message : err);
+      await new Promise((r) => setTimeout(r, delay));
+      delay = Math.min(delay * 2, 30_000);
+    }
+  }
+}
+
 async function main(): Promise<void> {
-  await prisma.$connect();
+  await connectUntilUp();
 
   const app = createApp();
   const server = app.listen(config.PORT, () => {
