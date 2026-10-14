@@ -5,6 +5,7 @@ import { formatCell, isTypeableNumber } from './costing-format.js';
 describe('how a costing field reads at rest', () => {
   test('money, percentages and counts are formatted for reading', () => {
     assert.equal(formatCell(1260, 'money'), '$1,260.00');
+    assert.equal(formatCell(-10, 'percent'), '-10.00%');
     assert.equal(formatCell(-10, 'percent', 1), '-10.0%');
     assert.equal(formatCell(1972, 'number'), '1,972');
     assert.equal(formatCell(3.4210526, 'number', 1), '3.4');

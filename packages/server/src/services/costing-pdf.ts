@@ -93,7 +93,7 @@ export async function renderCostingPdf(order: CostingPdfOrder, opts: CostingPdfO
 
 const money = (v: number | null | undefined, places = 2) => (v == null ? DASH : fmtMoney(v, '$', places));
 const num = (v: number | null | undefined, places = 0) => (v == null ? DASH : fmtNumber(v, { places }));
-const pct = (v: number | null | undefined, places = 1) => (v == null ? DASH : fmtPct(v, places));
+const pct = (v: number | null | undefined, places = 2) => (v == null ? DASH : fmtPct(v, places));
 const text = (v: string | null | undefined) => (v == null || v === '' ? DASH : v);
 
 /** The labels the footnote gives the overridable cells. */
@@ -111,8 +111,8 @@ const OVERRIDE_LABEL: Record<OverrideKey, string> = {
 /** How each overridable cell's calculated figure is written in the footnote. */
 const OVERRIDE_FORMAT: Partial<Record<OverrideKey, (v: number | string | null) => string>> = {
   machineCostPerDay: (v) => money(v as number | null),
-  workDays: (v) => num(v as number | null, 1),
-  productivityRate: (v) => num(v as number | null, 1),
+  workDays: (v) => num(v as number | null, 2),
+  productivityRate: (v) => num(v as number | null, 2),
   diffPct: (v) => pct(v as number | null),
   profitPct: (v) => pct(v as number | null),
   fabricCostUsd: (v) => money(v as number | null),
@@ -306,7 +306,7 @@ class Layout {
       { label: 'Machine cost', value: money(c.machineCostPerDay), key: 'machineCostPerDay', sub: 'per machine-day' },
       { label: 'Machine-days used', value: num(c.machineDaysUsed), key: 'machineDaysUsed', sub: 'line machines × days in line' },
       { label: 'Work days', value: num(c.workDays, 2), key: 'workDays', sub: 'machine-days ÷ all machines' },
-      { label: 'Productivity rate', value: num(c.productivityRate, 1), key: 'productivityRate', sub: 'cut qty ÷ work days, pcs per day' },
+      { label: 'Productivity rate', value: num(c.productivityRate, 2), key: 'productivityRate', sub: 'cut qty ÷ work days, pcs per day' },
     ], 4);
   }
 
@@ -314,13 +314,13 @@ class Layout {
 
   private static readonly COLS = [
     { key: 'section', title: 'Section', w: 64, align: 'left' },
-    { key: 'item', title: 'Item', w: 150, align: 'left' },
+    { key: 'item', title: 'Item', w: 145, align: 'left' },
     { key: 'planned', title: 'Planned', w: 50, align: 'right' },
     { key: 'actual', title: 'Actual cons.', w: 58, align: 'right' },
     { key: 'unit', title: 'Unit', w: 34, align: 'center' },
     { key: 'price', title: 'Unit price', w: 56, align: 'right' },
     { key: 'cost', title: 'Cost', w: 62, align: 'right' },
-    { key: 'pct', title: '%', w: 41, align: 'right' },
+    { key: 'pct', title: '%', w: 46, align: 'right' },
   ] as const;
 
   private tableHead(): void {
@@ -372,7 +372,7 @@ class Layout {
       planned: DASH,
       actual: l.quantity == null ? DASH : fmtNumber(l.quantity, { places: 2 }),
       unit: l.unit,
-      price: l.unitPriceUsd == null ? DASH : fmtMoney(l.unitPriceUsd, '$', 4),
+      price: l.unitPriceUsd == null ? DASH : fmtMoney(l.unitPriceUsd),
       cost: money(l.cost),
       pct: countedIn ? `in ${countedIn}` : pct(l.pctOfTotal),
     });
@@ -414,7 +414,7 @@ class Layout {
       item: 'Production — daily cost ÷ productivity rate, per piece passed',
       actual: num(c.firstDegreeQty),
       unit: 'PCS',
-      price: cmPerPiece == null ? DASH : fmtMoney(cmPerPiece, '$', 4),
+      price: cmPerPiece == null ? DASH : fmtMoney(cmPerPiece),
       cost: this.shown(money(c.cmCostUsd), 'cmCostUsd'),
       pct: pct(share(c.cmCostUsd)),
     }, { fill: INK[50] });
@@ -422,7 +422,7 @@ class Layout {
     this.tableRow({
       section: 'Total', item: 'Total actual cost',
       cost: this.shown(money(total), 'totalCostUsd'),
-      pct: total == null ? DASH : '100.0%',
+      pct: total == null ? DASH : '100.00%',
     }, { fill: INK[100], bold: true, top: true, size: 9 });
     this.y += 12;
   }

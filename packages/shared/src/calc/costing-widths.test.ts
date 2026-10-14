@@ -6,9 +6,11 @@ import { formatCell } from './costing-format.js';
  * Does the widest figure a costing column can hold actually fit in it?
  *
  * The costing table's columns were sized by eye and the unit price did not
- * fit: it carries four decimals, so `$1,234.5678` is eleven characters, and
- * the column left room for about nine. The number went in and could not be
- * read back.
+ * fit: at the time it carried four decimals, so `$1,234.5678` was eleven
+ * characters, and the column left room for about nine. The number went in and
+ * could not be read back. Every figure is shown to two decimals now; the
+ * budget still holds the four-decimal width so a column narrowed later fails
+ * here before a number disappears again.
  *
  * The budget below is arithmetic, not taste. A column's declared Tailwind
  * width, less the cell's own padding, less the input's padding, divided by the
@@ -37,7 +39,8 @@ const COLUMNS = {
 } as const;
 
 describe('every costing column fits the widest value it can hold', () => {
-  test('a unit price with four decimals fits — the figure that did not', () => {
+  test('a unit price fits, even at the four decimals it once carried', () => {
+    assert.equal(formatCell(1234.5678, 'money'), '$1,234.57', 'two decimals is what the sheet shows');
     const widest = formatCell(1234.5678, 'money', 4);
     assert.equal(widest, '$1,234.5678');
     assert.ok(widest.length <= capacity(COLUMNS.unitPrice),

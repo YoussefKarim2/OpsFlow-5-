@@ -640,10 +640,10 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
             hint: 'line machines × days in line',
           })}
           {field('Work Days', 'workDays', live.workDays, 'number', {
-            places: 1, hint: 'machine-days ÷ all machines',
+            places: 2, hint: 'machine-days ÷ all machines',
           })}
           {field('Productivity rate', 'productivityRate', live.productivityRate, 'number', {
-            hint: 'cut qty ÷ work days',
+            places: 2, hint: 'cut qty ÷ work days',
           })}
           {field('Cutted Qty', 'cutQty', live.source.cutQty, 'number', { from: live.source.cutQtySource === 'recorded' ? 'cutting records' : 'cut order' })}
           {field('1st Degree Qty', 'firstDegreeQty', live.source.firstDegreeQty, 'number', { from: 'out-line' })}
@@ -658,10 +658,10 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
           subtitle="Materials from the bill of materials, outside work from the External Order section. Rows can be edited, added and removed here without changing either."
         />
         <div className="overflow-x-auto">
-          {/* Wide enough for the widest figure each column can hold: a unit
-              price carries four decimals, so "$1,234.5678" has to fit without
-              being cut off. The container scrolls sideways rather than
-              squeezing the columns. */}
+          {/* Wide enough for the widest figure each column can hold — every
+              figure on this sheet is shown to two decimals, so "$1,234.56"
+              has to fit without being cut off. The container scrolls
+              sideways rather than squeezing the columns. */}
           <table className="w-full min-w-[64rem]">
             <thead className="border-b border-ink-200 bg-ink-50">
               <tr>
@@ -744,7 +744,7 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
                 </td>
                 <td className="td">PCS</td>
                 <td className="td tnum text-right">
-                  {cmPerPiece == null ? '—' : fmtMoney(cmPerPiece, '$', 4)}
+                  {cmPerPiece == null ? '—' : fmtMoney(cmPerPiece)}
                 </td>
                 <td className="td text-right">
                   <CostCell
@@ -752,7 +752,7 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
                     kind="money" onChange={setOverride('cmCostUsd')} onRevert={revert('cmCostUsd')}
                   />
                 </td>
-                <td className="td tnum text-right">{fmtPct(pctOf(live.cmCostUsd, total), 1)}</td>
+                <td className="td tnum text-right">{fmtPct(pctOf(live.cmCostUsd, total), 2)}</td>
                 {editing && <td className="td" />}
               </tr>
 
@@ -766,7 +766,7 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
                   />
                 </td>
                 <td className="td tnum text-right font-semibold">
-                  {total == null ? '—' : '100.0%'}
+                  {total == null ? '—' : '100.00%'}
                 </td>
                 {editing && <td className="td" />}
               </tr>
@@ -980,7 +980,7 @@ function EditableRow({
         <NumberCell
           editing={editing} value={row.unitPrice}
           derived={row.derivedField === 'unitPrice'}
-          display={row.unitPrice === '' ? '—' : fmtMoney(Number(row.unitPrice), '$', 4)}
+          display={row.unitPrice === '' ? '—' : fmtMoney(Number(row.unitPrice))}
           onChange={(v) => onEditNumber(row.key, 'unitPrice', v)}
         />
       </td>
@@ -995,7 +995,7 @@ function EditableRow({
       <td className="td tnum text-right">
         {countedIn
           ? <span className="text-2xs text-ink-400" title={`Counted in the ${countedIn} row`}>in {countedIn}</span>
-          : fmtPct(pctOf(cost, total), 1)}
+          : fmtPct(pctOf(cost, total), 2)}
       </td>
       {editing && (
         <td className="td text-right">
@@ -1050,7 +1050,7 @@ function SubtotalRow({
           className="font-semibold" onChange={onChange} onRevert={onRevert}
         />
       </td>
-      <td className="td tnum text-right font-semibold">{fmtPct(pctOf(cost, total), 1)}</td>
+      <td className="td tnum text-right font-semibold">{fmtPct(pctOf(cost, total), 2)}</td>
       {editing && <td className="td" />}
     </tr>
   );
@@ -1088,7 +1088,7 @@ function OutsideRow({
           onChange={onChange}
         />
       </td>
-      <td className="td tnum text-right">{fmtPct(pctOf(cost, total), 1)}</td>
+      <td className="td tnum text-right">{fmtPct(pctOf(cost, total), 2)}</td>
       {editing && <td className="td" />}
     </tr>
   );

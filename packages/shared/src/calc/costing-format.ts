@@ -21,7 +21,7 @@ export function formatCell(
   if (kind === 'text') return typeof value === 'string' && value !== '' ? value : '—';
   const n = typeof value === 'number' && Number.isFinite(value) ? value : null;
   if (kind === 'money') return fmtMoney(n, '$', places ?? 2);
-  if (kind === 'percent') return fmtPct(n, places ?? 1);
+  if (kind === 'percent') return fmtPct(n, places ?? 2);
   return fmtNumber(n, { places: places ?? 0 });
 }
 
