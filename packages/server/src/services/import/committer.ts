@@ -8,7 +8,7 @@
  */
 
 import type { PrismaClient, Prisma } from '@prisma/client';
-import { computeCutMatrix, isValidDate, BOM_DEPARTMENTS, bomCategoryFor, type QtyCell, type AxisRef } from '@opsflow/shared';
+import { computeCutMatrix, isValidDate, BOM_DEPARTMENTS, bomCategoryFor, type QtyCell, type AxisRef, colourHexFor } from '@opsflow/shared';
 import type { ExtractionResult, ExtractedMatrix } from './extractor.js';
 import { materialiseWorkflow } from '../workflow-service.js';
 import { logActivity } from '../activity-service.js';
@@ -169,8 +169,14 @@ export async function writeOrderMatrix(
 async function upsertRefColor(tx: Prisma.TransactionClient, name: string, position: number): Promise<string> {
   const clean = name.trim();
   const existing = await tx.refColor.findFirst({ where: { name: { equals: clean, mode: 'insensitive' } } });
-  if (existing) return existing.id;
-  const created = await tx.refColor.create({ data: { name: clean, position: 900 + position } });
+  // The swatch the name describes — "ROY/WHT" is royal and white — so an
+  // imported colour shows one from the start, as a hand-entered one does.
+  const hex = colourHexFor(clean);
+  if (existing) {
+    if (!existing.hex && hex) await tx.refColor.update({ where: { id: existing.id }, data: { hex } });
+    return existing.id;
+  }
+  const created = await tx.refColor.create({ data: { name: clean, hex, position: 900 + position } });
   return created.id;
 }
 

@@ -146,8 +146,11 @@ export function OrdersPage() {
                           <span title={`${o.alertCounts.critical} critical alert(s)`}><AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-500" /></span>
                         )}
                         <div className="min-w-0">
-                          <p className="font-mono text-xs font-semibold text-accent-700">{o.poNumber}</p>
-                          <p className="truncate text-xs text-ink-600">{o.orderName}</p>
+                          <p className="truncate text-sm font-medium text-ink-900">{o.orderName}</p>
+                          <p className="mt-0.5 flex items-center gap-1 text-2xs text-ink-500">
+                            <span className="uppercase tracking-wider">PO</span>
+                            <span className="rounded border border-ink-200 bg-ink-50 px-1 font-mono text-xs font-semibold text-ink-800">{o.poNumber}</span>
+                          </p>
                         </div>
                       </div>
                     </td>

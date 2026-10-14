@@ -10,11 +10,7 @@
 import { type ReactNode, createContext, useContext, useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { X } from 'lucide-react';
-import {
-  fmtNumber, fmtMoney, fmtPct, fmtVariance, isArabic,
-  HEALTH_STYLE, SEVERITY_STYLE, ORDER_STATUS_LABEL,
-  type Health, type OrderStatus, type AlertSeverity, type Priority, type StageStatus,
-} from '@opsflow/shared';
+import { fmtNumber, fmtMoney, fmtPct, fmtVariance, isArabic, HEALTH_STYLE, SEVERITY_STYLE, ORDER_STATUS_LABEL, type Health, type OrderStatus, type AlertSeverity, type Priority, type StageStatus, swatchFor } from '@opsflow/shared';
 
 // ── Numbers ─────────────────────────────────────────────────────────────────
 
@@ -546,3 +542,32 @@ export function Avatar({ name, size = 'md' }: { name: string; size?: 'sm' | 'md'
 }
 
 export { clsx };
+
+/**
+ * The colour beside its name. A stored hex wins; otherwise the swatch the
+ * name itself describes ("ROY/WHT" is royal over white); otherwise a plain
+ * outline, so every row lines up whether or not its colour is known.
+ */
+export function ColourSwatch({ name, hex, size = 'sm', className }: { name: string; hex?: string | null; size?: 'sm' | 'md'; className?: string }) {
+  // A two-tone name is painted as two tones even when a hex is stored: the
+  // hex is its first tone, and "ROY/WHT" as a plain blue square loses the
+  // white that tells it from royal. A stored hex still wins for a single tone.
+  const derived = swatchFor(name);
+  const tones: string[] | null = derived && derived.hexes.length === 2
+    ? [hex ?? derived.hexes[0], derived.hexes[1]]
+    : hex ? [hex] : derived?.hexes ?? null;
+  const dim = size === 'md' ? 'h-4 w-4' : 'h-3 w-3';
+  const style = tones == null
+    ? undefined
+    : tones.length === 1
+      ? { backgroundColor: tones[0] }
+      : { background: `linear-gradient(135deg, ${tones[0]} 0 50%, ${tones[1]} 50% 100%)` };
+  return (
+    <span
+      aria-hidden
+      title={tones ? name : `${name} — no swatch`}
+      className={clsx('inline-block shrink-0 rounded-sm ring-1 ring-inset ring-ink-300', dim, tones == null && 'bg-white', className)}
+      style={style}
+    />
+  );
+}

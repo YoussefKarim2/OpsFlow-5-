@@ -16,7 +16,7 @@ import {
 } from '@opsflow/shared';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { Card, CardHeader, Spinner, ErrorNote, clsx, useToast } from '../../components/ui';
+import { Card, CardHeader, Spinner, ErrorNote, clsx, useToast, ColourSwatch } from '../../components/ui';
 import { GridEditor, cleanGrid, gridTotal, type GridDraft } from '../../components/GridEditor';
 
 /**
@@ -454,12 +454,7 @@ export function QuantityTab({
                   <tr key={c.id} className="hover:bg-accent-50/30">
                     <td className="sticky left-0 z-10 whitespace-nowrap bg-white px-3 py-1.5 text-sm font-medium text-ink-800">
                       <span className="flex items-center gap-2">
-                        {swatch && (
-                          <span
-                            className="h-3 w-3 shrink-0 rounded-sm ring-1 ring-inset ring-ink-300"
-                            style={{ backgroundColor: swatch }}
-                          />
-                        )}
+                        <ColourSwatch name={c.name} hex={swatch} size="md" />
                         {c.name}
                       </span>
                     </td>

@@ -13,7 +13,7 @@
  */
 
 import { fmtNumber, type MatrixResponseDto, QtyLedger } from '@opsflow/shared';
-import { Card, CardHeader, EmptyState, Spinner } from './ui';
+import { Card, CardHeader, EmptyState, Spinner, ColourSwatch } from './ui';
 
 export function CutOrderGrid({
   data, isLoading, onOpenCutOrder,
@@ -86,12 +86,7 @@ export function CutOrderGrid({
                 <tr key={c.id}>
                   <td className="sticky left-0 z-10 whitespace-nowrap bg-white px-3 py-1.5 text-sm font-medium text-ink-800">
                     <span className="inline-flex items-center gap-2">
-                      {swatch && (
-                        <span
-                          className="inline-block h-3 w-3 shrink-0 rounded-sm ring-1 ring-ink-300/60"
-                          style={{ backgroundColor: swatch }}
-                        />
-                      )}
+                      <ColourSwatch name={c.name} hex={swatch} size="md" />
                       {c.name}
                     </span>
                   </td>

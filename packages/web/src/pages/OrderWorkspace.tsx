@@ -159,19 +159,33 @@ export function OrderWorkspacePage() {
           thing to do. */}
       <div className="shrink-0 border-b border-ink-200 bg-white">
         <div className="px-5 pt-2">
+          {/* The order's name and number, set like a document title: a small
+              line saying where you are and which purchase order this is, then
+              the name itself. The number is a labelled tag rather than a grey
+              lozenge, so it reads as the identifier it is. */}
           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
-            <Link to="/orders" className="inline-flex items-center gap-0.5 text-xs text-ink-500 hover:text-ink-800">
-              <ChevronLeft className="h-3.5 w-3.5" /> Orders
-            </Link>
-            <h1 className="text-lg font-semibold uppercase leading-tight tracking-tight text-ink-900">
-              {order.orderName}
-            </h1>
-            <span className="rounded bg-ink-100 px-1.5 py-0.5 font-mono text-xs font-semibold text-ink-700">
-              PO {order.poNumber}
-            </span>
-            <StatusBadge status={order.status} />
-            <HealthBadge health={order.health} />
-            <PriorityBadge priority={order.priority} />
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wider text-ink-500">
+                <Link to="/orders" className="inline-flex items-center gap-0.5 hover:text-ink-800">
+                  <ChevronLeft className="h-3 w-3" /> Orders
+                </Link>
+                <span className="text-ink-300">/</span>
+                <span>Purchase order</span>
+                <span className="rounded border border-ink-300 bg-white px-1.5 py-px font-mono text-xs font-bold normal-case tracking-normal text-ink-900">
+                  {order.poNumber}
+                </span>
+                <span className="text-ink-300">·</span>
+                <span className="normal-case tracking-normal text-ink-600">{order.client.name}</span>
+              </div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-2.5 gap-y-1">
+                <h1 className="truncate text-xl font-semibold leading-tight tracking-tight text-ink-900" title={order.orderName}>
+                  {order.orderName}
+                </h1>
+                <StatusBadge status={order.status} />
+                <HealthBadge health={order.health} />
+                <PriorityBadge priority={order.priority} />
+              </div>
+            </div>
 
             {/* Progress, in the title row rather than a block of its own. The
                 sentence about where the number comes from is the tooltip. */}

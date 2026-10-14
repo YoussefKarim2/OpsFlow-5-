@@ -7,6 +7,7 @@ export * from './order-steps.js';
 export * from './change-catalogue.js';
 export * from './excel-date.js';
 export * from './bom-departments.js';
+export * from './colour-swatch.js';
 
 export * from './calc/num.js';
 export * from './calc/quantities.js';
