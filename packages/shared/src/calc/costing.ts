@@ -1,8 +1,11 @@
 /**
  * Actual costing — the brief's section 25.
  *
- * Ports `Actual Costing_Coordinator` including its EGP→USD conversion pattern
- * (`=0.4/$D$12` at a 48.5 dollar rate). Its CM formula (`=D17*D13` — work
+ * Ports `Actual Costing_Coordinator`. Everything is in US dollars: the daily
+ * cost, every unit price, every total. The workbook quoted accessories and
+ * the daily cost in Egyptian pounds and converted at a stored rate
+ * (`=0.4/$D$12`); OpsFlow has no second currency and no rate — a figure is
+ * typed in dollars or it is not a figure. Its CM formula (`=D17*D13` — work
  * days × daily cost) is charged against the pieces that passed inspection
  * here; see the C.M block below.
  *
@@ -23,7 +26,7 @@ export interface CostLineInput {
   /** Actual consumption. Null when not yet recorded. */
   quantity: number | null;
   unit: string;
-  /** Unit price in USD. Accessory prices in the sheet are EGP/dollarRate. */
+  /** Unit price in USD. */
   unitPriceUsd: number | null;
   /** `section:grouping` — what the line was derived from, where it was. */
   sourceRef?: string | null;
@@ -63,17 +66,8 @@ export interface CostingInput {
   orderQty: number;
   cutQty: number;
   shippedQty: number | null;
-  /**
-   * EGP per USD. 48.5 in the source workbook.
-   *
-   * Nullable because the sheet is shown from the moment the order exists, and
-   * before anybody has opened the costing there is no rate. Every conversion
-   * that needs one goes through `safeDiv`, so an unset rate leaves those cells
-   * uncalculated rather than converting at a rate nobody chose.
-   */
-  dollarRate: number | null;
-  /** Factory daily running cost in EGP. 1867 in the source workbook. */
-  dailyCostEgp: number | null;
+  /** Factory daily running cost in US dollars. */
+  dailyCostUsd: number | null;
   /** Total machines on the floor. 38 in the source workbook. */
   machineCount: number | null;
   /** Machine-days actually consumed by this order. 130 in the source workbook. */
@@ -167,10 +161,8 @@ export interface CostingResult {
    *  off the order alone and nobody has entered the factory's figures yet. */
   hasRecord: boolean;
   costingDate: string | null;
-  /** EGP per USD, as stored with the costing. Null until one is set. */
-  dollarRate: number | null;
-  /** The factory's daily running cost in EGP, as stored. */
-  dailyCostEgp: number | null;
+  /** The factory's daily running cost in dollars, as stored. */
+  dailyCostUsd: number | null;
   /** Whatever the coordinator wrote in the sheet's Notes row. */
   notes: string | null;
   /** Factory-wide machine count, as stored. */
@@ -195,7 +187,8 @@ export interface CostingResult {
   shippedVsOrderedPct: number | null;
 
   // Machine economics — `=D13/D14` and `=D22/D14`
-  machineCostEgpPerDay: number | null;
+  /** Dollars per machine-day: daily cost over all factory machines. */
+  machineCostPerDay: number | null;
   workDays: number | null;
   /** `=J12/D17` — pieces per work day. */
   productivityRate: number | null;
@@ -218,14 +211,13 @@ export interface CostingResult {
   sublimationCostUsd: number | null;
   /** Outside work billed as embroidery. */
   embroideryCostUsd: number | null;
-  /** Cut-and-make: daily cost ÷ productivity rate × 1st degree qty, in EGP, converted here. */
+  /** Cut-and-make: daily cost ÷ productivity rate × 1st degree qty. */
   cmCostUsd: number | null;
   otherCostUsd: number | null;
   totalCostUsd: number | null;
 
   // Per unit
   unitActualCostUsd: number | null;
-  unitActualCostEgp: number | null;
   sellPriceUsd: number | null;
   profitPerUnitUsd: number | null;
   profitPct: number | null;
@@ -241,7 +233,7 @@ export interface CostingResult {
 export function computeCosting(input: CostingInput): CostingResult {
   const {
     orderQty: orderQtyIn, cutQty: cutQtyIn, shippedQty: shippedQtyIn,
-    dollarRate, dailyCostEgp, machineCount,
+    dailyCostUsd, machineCount,
     machineDaysUsed: machineDaysUsedIn, daysInLine, sewingDays = null,
     sellPriceUsd: sellPriceIn, lines,
     lineMachineQty = null, firstDegreeQty: firstDegreeIn = null,
@@ -285,7 +277,7 @@ export function computeCosting(input: CostingInput): CostingResult {
   // --- Machine economics -------------------------------------------------
   // Actual Costing!D16/D17/D18: cost per machine-day, the factory days this
   // order consumed, and pieces cut per factory day.
-  const machineCostEgpPerDay = pick('machineCostEgpPerDay', safeDiv(dailyCostEgp, machineCount));
+  const machineCostPerDay = pick('machineCostPerDay', safeDiv(dailyCostUsd, machineCount));
 
   /**
    * Machine-days this order consumed.
@@ -389,22 +381,19 @@ export function computeCosting(input: CostingInput): CostingResult {
    * so when every cut piece passes it is exactly the workbook's `=D17*D13`,
    * work days × daily cost. An earlier version divided the whole run cost by
    * the productivity rate instead of the daily cost; the units of that are
-   * EGP × days, not EGP, and it charged an order work-days times what its
+   * dollars × days, not dollars, and it charged an order work-days times what its
    * machines had cost to run (3.3× on an 11-day order).
    *
    * Nothing is rounded on the way through — only the figure that reaches the
    * screen is formatted — and every division goes through `safeDiv`, so a
    * productivity rate of zero or an unrecorded one leaves the whole thing
    * uncalculated rather than infinite.
-   *
-   * In EGP, like the daily cost it descends from, and converted at the rate
-   * stored with the costing so the Total column is one currency.
    */
-  const costPerPieceEgp = safeDiv(dailyCostEgp, productivityRate);
-  const cmCostEgp = costPerPieceEgp != null && firstDegreeQty != null
-    ? costPerPieceEgp * firstDegreeQty
-    : null;
-  const cmCostUsd = pick('cmCostUsd', safeDiv(cmCostEgp, dollarRate));
+  const costPerPiece = safeDiv(dailyCostUsd, productivityRate);
+  const cmCostUsd = pick(
+    'cmCostUsd',
+    costPerPiece != null && firstDegreeQty != null ? costPerPiece * firstDegreeQty : null,
+  );
 
   const costParts = [fabricCostUsd, accessoryCostUsd, externalCostUsd, cmCostUsd, otherCostUsd];
   const totalCostUsd = pick('totalCostUsd', costParts.every((p) => p == null) ? null : sum(costParts));
@@ -433,8 +422,6 @@ export function computeCosting(input: CostingInput): CostingResult {
   // by shipped qty when known, and fall back to nothing — not to cut qty —
   // because a unit cost against an assumed denominator is worse than none.
   const unitActualCostUsd = pick('unitActualCostUsd', safeDiv(totalCostUsd, shippedQty));
-  const unitActualCostEgp =
-    unitActualCostUsd != null && dollarRate != null ? unitActualCostUsd * dollarRate : null;
 
   const profitPerUnitUsd = pick(
     'profitPerUnitUsd',
@@ -469,11 +456,10 @@ export function computeCosting(input: CostingInput): CostingResult {
     if (value == null && reason != null) waiting[key] = reason;
   };
 
-  const noRate = dollarRate == null || dollarRate === 0 ? 'the dollar rate' : null;
   const noMachines = machineCount == null || machineCount === 0 ? 'the factory machine count' : null;
-  const noDaily = dailyCostEgp == null ? "the factory's daily cost" : null;
+  const noDaily = dailyCostUsd == null ? "the factory's daily cost" : null;
 
-  needs('machineCostEgpPerDay', machineCostEgpPerDay,
+  needs('machineCostPerDay', machineCostPerDay,
     noDaily && noMachines ? `Waiting for ${noDaily} and ${noMachines}`
       : noDaily ? `Waiting for ${noDaily}`
       : noMachines ? `Waiting for ${noMachines}` : null);
@@ -493,8 +479,7 @@ export function computeCosting(input: CostingInput): CostingResult {
     noDaily ? `Waiting for ${noDaily}`
       : machineDaysUsed == null ? 'Waiting for the line machines and days in line'
       : productivityRate == null || productivityRate === 0 ? 'Waiting for the productivity rate'
-      : firstDegreeQty == null ? 'Waiting for the 1st degree quantity'
-      : noRate ? `Waiting for ${noRate}` : null);
+      : firstDegreeQty == null ? 'Waiting for the 1st degree quantity' : null);
   needs('machineDaysUsed', machineDaysUsed,
     lineMachineQty == null ? 'Waiting for the line machines'
       : 'Waiting for the days in line — type them, or record sewing on the Production step');
@@ -519,13 +504,6 @@ export function computeCosting(input: CostingInput): CostingResult {
       : orderQty === 0 ? 'Waiting for an order quantity' : null);
   needs('targetPriceUsd', targetPriceUsd,
     profitPerUnitUsd == null ? 'Waiting for the profit' : null);
-  needs('unitActualCostEgp', unitActualCostEgp,
-    unitActualCostUsd == null ? 'Waiting for the actual cost per unit'
-      : noRate ? `Waiting for ${noRate}` : null);
-  // Asked for by name, so the screen's list of what is missing can say it: the
-  // rate is only ever typed, and nothing else on the sheet converts without it.
-  needs('dollarRate', dollarRate == null || dollarRate === 0 ? null : dollarRate,
-    'Waiting for the dollar rate');
   needs('sellPriceUsd', sellPriceUsd, 'Waiting for a price per piece on Order Details');
   needs('shippedQty', shippedQty, 'Waiting for a shipment to be recorded');
 
@@ -552,20 +530,20 @@ export function computeCosting(input: CostingInput): CostingResult {
     },
     hasRecord: input.hasRecord ?? true,
     costingDate: input.costingDate ?? null,
-    dollarRate, dailyCostEgp, machineCount, machineDaysUsed,
+    dailyCostUsd, machineCount, machineDaysUsed,
     notes: input.notes ?? null,
     orderQty, cutQty, shippedQty,
     firstDegreeQty, secondDegreeQty,
     diffPct,
     shippedVsOrderedPct: shippedShare,
-    machineCostEgpPerDay, workDays, productivityRate,
+    machineCostPerDay, workDays, productivityRate,
     lineMachineQty, daysInLine, daysInLineUsed, daysInLineSource,
     lines: linesOut, groups,
     fabricCostUsd, accessoryCostUsd, externalCostUsd,
     sublimationCostUsd: resolvedSublimation,
     embroideryCostUsd: resolvedEmbroidery,
     cmCostUsd, otherCostUsd, totalCostUsd,
-    unitActualCostUsd, unitActualCostEgp, sellPriceUsd,
+    unitActualCostUsd, sellPriceUsd,
     profitPerUnitUsd, profitPct, totalProfitUsd, targetPriceUsd, isProfitable,
   };
 }
@@ -586,11 +564,6 @@ export function outsideWorkKind(
   if (text.includes('SUBLIMATION')) return 'SUBLIMATION';
   if (text.includes('EMBROIDER')) return 'EMBROIDERY';
   return null;
-}
-
-/** Convert an EGP price to USD — the sheet's `=0.4/$D$12` pattern, made explicit. */
-export function egpToUsd(egp: number | null, dollarRate: number): number | null {
-  return safeDiv(egp, dollarRate);
 }
 
 /** Order value at the agreed selling price. */

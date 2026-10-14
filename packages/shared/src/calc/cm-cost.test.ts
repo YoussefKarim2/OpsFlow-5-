@@ -18,15 +18,13 @@ import { fmtMoney, NOT_CALCULATED } from './num.js';
  * pieces cut, so it can never exceed what the machines cost to run, and when
  * every cut piece passes it is the workbook's own work days × daily cost.
  *
- * Everything is in EGP, as the daily cost is, and converted once at the stored
- * rate — the Total column is in dollars and mixing the two is what the source
- * workbook does wrong.
+ * Everything is in dollars, as every figure in OpsFlow is.
  */
 
-/** A costing with the rate set to 1, so EGP and USD are the same number. */
+/** A costing with nothing recorded beyond the quantities. */
 const base = (over: Partial<CostingInput> = {}): CostingInput => ({
   orderQty: 1000, cutQty: 1000, shippedQty: 1000,
-  dollarRate: 1, dailyCostEgp: null, machineCount: null,
+  dailyCostUsd: null, machineCount: null,
   machineDaysUsed: null, daysInLine: null, lineMachineQty: null,
   firstDegreeQty: null, secondDegreeQty: null,
   sellPriceUsd: null, lines: [], ...over,
@@ -37,11 +35,11 @@ describe('the C.M formula, on the figures given', () => {
     // Stated directly: every input pinned, so only the final arithmetic is
     // under test. (100 ÷ 2) × 100.
     const r = computeCosting(base({
-      dailyCostEgp: 100, machineCount: 10,          // machine cost 10
+      dailyCostUsd: 100, machineCount: 10,          // machine cost 10
       firstDegreeQty: 100,
       overrides: { machineDaysUsed: 5, productivityRate: 2 },
     }));
-    assert.equal(r.machineCostEgpPerDay, 10);
+    assert.equal(r.machineCostPerDay, 10);
     assert.equal(r.machineDaysUsed, 5);
     assert.equal(r.productivityRate, 2);
     assert.equal(r.cmCostUsd, 5000);
@@ -49,11 +47,11 @@ describe('the C.M formula, on the figures given', () => {
 
   test('the whole chain: 100 ÷ 10, 2 × 5, 10 ÷ 10, 1000 ÷ 1, then (100 ÷ 1000) × 100 → 10', () => {
     const r = computeCosting(base({
-      dailyCostEgp: 100, machineCount: 10,
+      dailyCostUsd: 100, machineCount: 10,
       lineMachineQty: 2, daysInLine: 5,
       cutQty: 1000, firstDegreeQty: 100,
     }));
-    assert.equal(r.machineCostEgpPerDay, 10, 'Daily Cost ÷ All Factory Machines');
+    assert.equal(r.machineCostPerDay, 10, 'Daily Cost ÷ All Factory Machines');
     assert.equal(r.machineDaysUsed, 10, 'Line Machines Qty × Days in Line');
     assert.equal(r.workDays, 1, 'Machine Already Used ÷ All Factory Machines');
     assert.equal(r.productivityRate, 1000, 'Cut Qty ÷ Work Days');
@@ -61,10 +59,10 @@ describe('the C.M formula, on the figures given', () => {
   });
 
   test('multiplied out, it is the machine run cost spread over the pieces cut', () => {
-    // Machine cost 10 × 10 machine-days = 100 EGP to run the machines, over
+    // Machine cost 10 × 10 machine-days = $100 to run the machines, over
     // 1,000 pieces cut = 0.1 a piece, charged for the 100 that passed.
     const r = computeCosting(base({
-      dailyCostEgp: 100, machineCount: 10, lineMachineQty: 2, daysInLine: 5,
+      dailyCostUsd: 100, machineCount: 10, lineMachineQty: 2, daysInLine: 5,
       cutQty: 1000, firstDegreeQty: 100,
     }));
     assert.equal(r.cmCostUsd, (10 * 10) / 1000 * 100);
@@ -72,16 +70,16 @@ describe('the C.M formula, on the figures given', () => {
 
   test('it never exceeds what the machines cost to run', () => {
     // 1,867 a day, 38 machines, 12 on the line for 11 days: the run cost is
-    // 49.13 × 132 = 6,486 EGP. With every cut piece passing, C.M is exactly
+    // 49.13 × 132 = $6,486. With every cut piece passing, C.M is exactly
     // that; it cannot be three times it, as it once was.
     const run = (1867 / 38) * 132;
     const all = computeCosting(base({
-      dailyCostEgp: 1867, machineCount: 38, lineMachineQty: 12, daysInLine: 11,
+      dailyCostUsd: 1867, machineCount: 38, lineMachineQty: 12, daysInLine: 11,
       cutQty: 2084, firstDegreeQty: 2084,
     }));
     assert.ok(Math.abs(all.cmCostUsd! - run) < 1e-9, `${all.cmCostUsd} should be ${run}`);
     const some = computeCosting(base({
-      dailyCostEgp: 1867, machineCount: 38, lineMachineQty: 12, daysInLine: 11,
+      dailyCostUsd: 1867, machineCount: 38, lineMachineQty: 12, daysInLine: 11,
       cutQty: 2084, firstDegreeQty: 1950,
     }));
     assert.ok(some.cmCostUsd! < run);
@@ -112,13 +110,13 @@ describe('the C.M formula, on the figures given', () => {
 describe('every input moves C.M, and nothing else does', () => {
   // Machine cost 10, machine-days 10, work days 1, productivity 1,000 → C.M 10.
   const settled = base({
-    dailyCostEgp: 100, machineCount: 10, lineMachineQty: 2, daysInLine: 5,
+    dailyCostUsd: 100, machineCount: 10, lineMachineQty: 2, daysInLine: 5,
     cutQty: 1000, firstDegreeQty: 100,
   });
   const cm = (over: Partial<CostingInput>) => computeCosting({ ...settled, ...over }).cmCostUsd;
 
   test('doubling the daily cost doubles it', () => {
-    assert.equal(cm({ dailyCostEgp: 200 }), 20);
+    assert.equal(cm({ dailyCostUsd: 200 }), 20);
   });
 
   test('doubling the factory machines halves it', () => {
@@ -155,7 +153,7 @@ describe('every input moves C.M, and nothing else does', () => {
 
 describe('C.M when something it needs is missing', () => {
   const partial = base({
-    dailyCostEgp: 100, machineCount: 10, lineMachineQty: 2, daysInLine: 5, firstDegreeQty: 100,
+    dailyCostUsd: 100, machineCount: 10, lineMachineQty: 2, daysInLine: 5, firstDegreeQty: 100,
   });
 
   test('a productivity rate of zero divides by nothing', () => {
@@ -179,7 +177,7 @@ describe('C.M when something it needs is missing', () => {
   });
 
   test('no daily cost says so', () => {
-    const r = computeCosting({ ...partial, dailyCostEgp: null, overrides: { productivityRate: 2 } });
+    const r = computeCosting({ ...partial, dailyCostUsd: null, overrides: { productivityRate: 2 } });
     assert.equal(r.cmCostUsd, null);
     assert.match(r.waiting.cmCostUsd!, /daily cost/);
   });
@@ -203,8 +201,8 @@ describe('C.M when something it needs is missing', () => {
 
   test('nothing can ever render as an error code', () => {
     const hostile: Array<Partial<CostingInput>> = [
-      { machineCount: 0 }, { dailyCostEgp: 0 }, { lineMachineQty: 0 }, { daysInLine: 0 },
-      { firstDegreeQty: 0 }, { cutQty: 0 }, { dollarRate: 0 }, { dollarRate: null },
+      { machineCount: 0 }, { dailyCostUsd: 0 }, { lineMachineQty: 0 }, { daysInLine: 0 },
+      { firstDegreeQty: 0 }, { cutQty: 0 },
       { overrides: { productivityRate: 0 } },
     ];
     for (const over of hostile) {
@@ -218,7 +216,7 @@ describe('C.M when something it needs is missing', () => {
 
 describe('the Total follows C.M', () => {
   const withFabric = base({
-    dailyCostEgp: 100, machineCount: 10, lineMachineQty: 2, daysInLine: 5,
+    dailyCostUsd: 100, machineCount: 10, lineMachineQty: 2, daysInLine: 5,
     firstDegreeQty: 100, overrides: { productivityRate: 2 },
     lines: [{ group: 'FABRIC', label: 'Jersey', quantity: 100, unit: 'M', unitPriceUsd: 3 }],
   });
@@ -243,11 +241,11 @@ describe('the Total follows C.M', () => {
     assert.equal(r.totalCostUsd, 300, 'fabric alone, not zero and not null');
   });
 
-  test('the dollar rate converts C.M once, and only C.M', () => {
-    const r = computeCosting({ ...withFabric, dollarRate: 50 });
-    assert.equal(r.cmCostUsd, 100, '5,000 EGP at 50 to the dollar');
-    assert.equal(r.groups.fabric.total, 300, 'material prices are already in dollars');
-    assert.equal(r.totalCostUsd, 400);
+  test('C.M joins the material costs as it is — one currency, nothing converted', () => {
+    const r = computeCosting(withFabric);
+    assert.equal(r.cmCostUsd, 5000);
+    assert.equal(r.groups.fabric.total, 300);
+    assert.equal(r.totalCostUsd, 5300);
   });
 });
 
@@ -280,7 +278,7 @@ describe('filled in from the production records', () => {
 
   test('nothing counted at end-line leaves C.M waiting, not $0', () => {
     const r = computeCosting(base({
-      dailyCostEgp: 100, machineCount: 10, lineMachineQty: 2, daysInLine: 5, firstDegreeQty: null,
+      dailyCostUsd: 100, machineCount: 10, lineMachineQty: 2, daysInLine: 5, firstDegreeQty: null,
     }));
     assert.equal(r.cmCostUsd, null);
     assert.match(r.waiting.cmCostUsd ?? '', /1st degree/);

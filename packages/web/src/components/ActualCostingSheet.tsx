@@ -46,8 +46,7 @@ type Group = CostLineDto['group'];
 /** The figures stored in their own columns, as opposed to typed over a formula. */
 interface Stored {
   costingDate: string;
-  dollarRate: string;
-  dailyCostEgp: string;
+  dailyCostUsd: string;
   machineCount: string;
   lineMachineQty: string;
   daysInLine: string;
@@ -120,8 +119,7 @@ const asWhole = (s: string): number | null | undefined => {
 function storedFrom(record: CostingDto | null): Stored {
   return {
     costingDate: record?.costingDate?.slice(0, 10) ?? '',
-    dollarRate: numText(record?.dollarRate),
-    dailyCostEgp: numText(record?.dailyCostEgp),
+    dailyCostUsd: numText(record?.dailyCostUsd),
     machineCount: numText(record?.machineCount),
     lineMachineQty: numText(record?.lineMachineQty),
     daysInLine: numText(record?.daysInLine),
@@ -283,8 +281,7 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
   const save = useMutation({
     mutationFn: () => api.steps.saveCosting(order.id, {
       costingDate: stored.costingDate || null,
-      dollarRate: asNumber(stored.dollarRate) ?? undefined,
-      dailyCostEgp: asNumber(stored.dailyCostEgp),
+      dailyCostUsd: asNumber(stored.dailyCostUsd),
       // Undefined — a count that is not a whole number — is dropped from the
       // request, so the rest of the draft still saves.
       machineCount: asWhole(stored.machineCount),
@@ -371,8 +368,7 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
     hasRecord: c.hasRecord,
     costingDate: stored.costingDate || null,
     notes: stored.notes || null,
-    dollarRate: asNumber(stored.dollarRate),
-    dailyCostEgp: asNumber(stored.dailyCostEgp),
+    dailyCostUsd: asNumber(stored.dailyCostUsd),
     // Only what would be saved, so the figures on screen are the ones stored.
     machineCount: asWhole(stored.machineCount) ?? null,
     machineDaysUsed: asWhole(stored.machineDaysUsed) ?? null,
@@ -607,15 +603,14 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
       <Card>
         <CardHeader
           title="What you enter"
-          subtitle="The factory's own figures. These six are the only ones OpsFlow cannot work out for itself."
+          subtitle="The factory's own figures, in dollars. These five are the only ones OpsFlow cannot work out for itself."
         />
-        <div className="grid gap-3 p-4 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="grid gap-3 p-4 sm:grid-cols-3 lg:grid-cols-5">
           <StoredField
             label="Date" editing={editing} type="date"
             value={stored.costingDate} onChange={setField('costingDate')}
           />
-          {plain('Dollar Rate', 'dollarRate', 'EGP per $')}
-          {plain('Daily Cost', 'dailyCostEgp', 'EGP per day')}
+          {plain('Daily Cost', 'dailyCostUsd', '$ per day, the whole factory')}
           {plain('All F. Machines', 'machineCount')}
           {plain('Line Machines Qty', 'lineMachineQty')}
           {plain('Days in line', 'daysInLine',
@@ -638,8 +633,8 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
           subtitle="Calculated from the figures above and from what production recorded. The sum under each says how."
         />
         <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-4">
-          {field('Machine Cost', 'machineCostEgpPerDay', live.machineCostEgpPerDay, 'number', {
-            places: 2, hint: 'daily cost ÷ all machines',
+          {field('Machine Cost', 'machineCostPerDay', live.machineCostPerDay, 'money', {
+            places: 2, hint: 'daily cost ÷ all machines, per machine-day',
           })}
           {field('Machine Already Used', 'machineDaysUsed', live.machineDaysUsed, 'number', {
             hint: 'line machines × days in line',
@@ -1111,7 +1106,7 @@ function MissingNotes({ live }: { live: CostingResult }) {
   // screen reads. The engine names them because it is the only thing that
   // knows which input was missing.
   const seen = new Set<string>();
-  const missing = ['sellPriceUsd', 'shippedQty', 'dollarRate', 'machineCostEgpPerDay', 'workDays', 'totalCostUsd']
+  const missing = ['sellPriceUsd', 'shippedQty', 'machineCostPerDay', 'workDays', 'totalCostUsd']
     .map((k) => live.waiting[k])
     .filter((m): m is string => !!m && !seen.has(m) && (seen.add(m), true));
 

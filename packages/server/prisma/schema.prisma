@@ -1146,13 +1146,9 @@ model CostingRecord {
   id                     String     @id @default(cuid())
   orderId                String     @unique
   costingDate            DateTime?
-  /// EGP per USD. Accessory prices on the sheet are quoted in EGP and divided
-  /// by this (=0.4/$D$12), so it must be stored with the costing, not inferred.
-  /// Null until somebody enters one: a default rate was stored by the first
-  /// autosave, so the sheet converted at a rate nobody chose and never said it
-  /// was waiting for one.
-  dollarRate             Decimal?   @db.Decimal(10, 4)
-  dailyCostEgp           Decimal?   @db.Decimal(14, 4)
+  /// The factory's daily running cost, in dollars — the one currency OpsFlow
+  /// holds. Null until somebody enters it; the sheet says it is waiting.
+  dailyCostUsd           Decimal?   @db.Decimal(14, 4)
   machineCount           Int?
   machineDaysUsed        Int?
   daysInLine             Int?
@@ -1191,8 +1187,6 @@ model CostLine {
   quantity     Decimal?      @db.Decimal(14, 4)
   unit         String
   unitPriceUsd Decimal?      @db.Decimal(14, 6)
-  /// Original EGP price where the sheet quoted one, kept for traceability.
-  unitPriceEgp Decimal?      @db.Decimal(14, 4)
   /// Where the number came from. DERIVED lines are recomputed from the
   /// production sections on every save and must not be hand-edited; MANUAL ones
   /// are typed by a person and survive untouched. Without the distinction a
@@ -1231,9 +1225,6 @@ model ProformaInvoice {
   shipmentFrom        String?               @default("Cairo / Egypt")
   shipmentTo          String?
   consolidatingVendor String?
-  /// Currency of unitPrice on every line. USD throughout the workbook, but a
-  /// column beats an assumption baked into five screens.
-  currency            String                @default("USD")
   /// B37:D47 on the sheet — origin, payment terms, bank details. Boilerplate,
   /// but boilerplate that changes; stored per invoice so an old one still
   /// reads as it was sent.

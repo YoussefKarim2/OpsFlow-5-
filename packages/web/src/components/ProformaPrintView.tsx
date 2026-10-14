@@ -38,14 +38,13 @@ export interface PrintInvoice {
   containerSeal: string | null;
   shippingDate: string | null;
   consolidatingVendor: string | null;
-  currency: string;
   terms: string | null;
   lines: PrintLine[];
   sentAt?: string | null;
 }
 
-const money = (n: number | null, currency: string) =>
-  n == null ? '—' : `${currency} ${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const money = (n: number | null) =>
+  n == null ? '—' : `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const lineTotal = (l: PrintLine) =>
   l.quantity == null || l.unitPrice == null ? null : l.quantity * l.unitPrice;
@@ -141,10 +140,10 @@ export function ProformaPrintView({
               </td>
               <td className="py-1.5 pl-3 text-sm text-ink-700">{l.unit}</td>
               <td className="py-1.5 text-right text-sm tabular-nums text-ink-900">
-                {money(l.unitPrice, invoice.currency)}
+                {money(l.unitPrice)}
               </td>
               <td className="py-1.5 text-right text-sm tabular-nums font-medium text-ink-900">
-                {money(lineTotal(l), invoice.currency)}
+                {money(lineTotal(l))}
               </td>
             </tr>
           ))}
@@ -158,7 +157,7 @@ export function ProformaPrintView({
               </td>
               <td colSpan={2} />
               <td className="py-2 text-right text-base tabular-nums font-bold text-ink-900">
-                {money(total, invoice.currency)}
+                {money(total)}
               </td>
             </tr>
           </tfoot>

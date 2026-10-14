@@ -522,10 +522,12 @@ export async function commitImport(
       await tx.costingRecord.create({
         data: {
           orderId: order.id,
-          // Only a rate the workbook states. A made-up 48.5 looked like a real
-          // figure and hid the "waiting for the dollar rate" state from costing.
-          dollarRate: extraction.costing.dollarRate ?? null,
-          dailyCostEgp: extraction.costing.dailyCostEgp,
+          // The workbook writes its daily cost in pounds beside the rate it
+          // used. OpsFlow holds dollars only, so the figure is converted here,
+          // once, at the workbook's own rate — and left blank when the
+          // workbook states no rate, rather than stored as a pound figure
+          // that would read as dollars.
+          dailyCostUsd: workbookDailyCostUsd(extraction.costing),
           machineCount: extraction.costing.machineCount ? Math.round(extraction.costing.machineCount) : null,
           machineDaysUsed: extraction.costing.machineDaysUsed ? Math.round(extraction.costing.machineDaysUsed) : null,
           daysInLine: extraction.costing.daysInLine ? Math.round(extraction.costing.daysInLine) : null,
@@ -564,4 +566,11 @@ export async function commitImport(
   }, { timeout: 30_000 });
 
   return result;
+}
+
+/** The workbook's pound daily cost in dollars, at the rate the workbook states. */
+export function workbookDailyCostUsd(costing: Record<string, number | null>): number | null {
+  const daily = costing.dailyCost ?? null;
+  const rate = costing.dollarRate ?? null;
+  return daily != null && rate != null && rate > 0 ? daily / rate : null;
 }

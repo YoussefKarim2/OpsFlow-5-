@@ -568,8 +568,7 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
       .filter((p) => p.operation === 'SEWING')
       .map((p) => p.date.toISOString().slice(0, 10))).size,
     shippedQty: shippedQty > 0 ? shippedQty : null,
-    dollarRate: dec(cr?.dollarRate),
-    dailyCostEgp: dec(cr?.dailyCostEgp),
+    dailyCostUsd: dec(cr?.dailyCostUsd),
     machineCount: cr?.machineCount ?? null,
     machineDaysUsed: cr?.machineDaysUsed ?? null,
     daysInLine: cr?.daysInLine ?? null,

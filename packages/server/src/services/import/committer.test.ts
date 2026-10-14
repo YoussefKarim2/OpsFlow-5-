@@ -194,14 +194,14 @@ describe('what the rest of the workbook carries', () => {
 });
 
 describe('the costing record', () => {
-  test('a workbook with no dollar rate leaves the rate empty, not 48.5', async () => {
-    const created = await commit(extraction({ costing: { dollarRate: null, dailyCostEgp: 1867 } }));
-    assert.equal(created.costingRecord![0]!.dollarRate, null);
+  test('the workbook daily cost, written in pounds, arrives in dollars at the rate it states', async () => {
+    const created = await commit(extraction({ costing: { dollarRate: 50, dailyCost: 1867 } }));
+    assert.equal(created.costingRecord![0]!.dailyCostUsd, 1867 / 50);
   });
 
-  test('a rate the workbook states is kept', async () => {
-    const created = await commit(extraction({ costing: { dollarRate: 50.25, dailyCostEgp: 1867 } }));
-    assert.equal(created.costingRecord![0]!.dollarRate, 50.25);
+  test('a workbook with no rate leaves the daily cost for the sheet to ask for, not a pound figure', async () => {
+    const created = await commit(extraction({ costing: { dollarRate: null, dailyCost: 1867 } }));
+    assert.equal(created.costingRecord![0]!.dailyCostUsd, null);
   });
 });
 

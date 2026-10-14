@@ -21,7 +21,6 @@ export interface CostingOverviewRow {
   /** True when a costing record has been saved on the order. */
   hasRecord: boolean;
   costingDate: string | null;
-  dollarRate: number | null;
   sellPriceUsd: number | null;
   fabricCostUsd: number | null;
   accessoryCostUsd: number | null;

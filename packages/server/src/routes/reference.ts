@@ -230,7 +230,7 @@ referenceRouter.get('/costing/overview', requirePermission('costing:read'), asyn
       orderId: o.id, poNumber: o.poNumber, orderName: o.orderName, clientName: o.client.name,
       status: d.status,
       orderQty: c.orderQty, shippedQty: c.shippedQty,
-      hasRecord: c.hasRecord, costingDate: c.costingDate, dollarRate: c.dollarRate,
+      hasRecord: c.hasRecord, costingDate: c.costingDate,
       sellPriceUsd: c.sellPriceUsd,
       fabricCostUsd: c.fabricCostUsd, accessoryCostUsd: c.accessoryCostUsd, externalCostUsd: c.externalCostUsd,
       cmCostUsd: c.cmCostUsd, otherCostUsd: c.otherCostUsd, totalCostUsd: c.totalCostUsd,

@@ -462,14 +462,14 @@ describe('materials — marker plan reproduces the Laying sheet', () => {
 
 describe('costing — the #DIV/0! cells become "Not calculated"', () => {
   const base = {
-    orderQty: 1972, cutQty: 2084, dollarRate: 48.5,
-    dailyCostEgp: 1867, machineCount: 38, machineDaysUsed: 130, daysInLine: 11,
+    orderQty: 1972, cutQty: 2084, 
+    dailyCostUsd: 1867, machineCount: 38, machineDaysUsed: 130, daysInLine: 11,
     sellPriceUsd: 7.25, lines: [],
   };
 
   test('machine economics match Actual Costing!D16/D17/D18', () => {
     const r = computeCosting({ ...base, shippedQty: null });
-    assert.ok(Math.abs((r.machineCostEgpPerDay ?? 0) - 49.1315789) < 1e-5);
+    assert.ok(Math.abs((r.machineCostPerDay ?? 0) - 49.1315789) < 1e-5);
     assert.ok(Math.abs((r.workDays ?? 0) - 3.4210526) < 1e-6);
     assert.ok(Math.abs((r.productivityRate ?? 0) - 609.1692308) < 1e-4);
   });
@@ -496,10 +496,10 @@ describe('costing — the #DIV/0! cells become "Not calculated"', () => {
     const r = computeCosting({ ...base, shippedQty: 1972, firstDegreeQty: 1950 });
     const workDays = 130 / 38;
     const productivity = 2084 / workDays;
-    const expected = (1867 / productivity) * 1950 / 48.5;
+    const expected = (1867 / productivity) * 1950;
     assert.ok(Math.abs((r.cmCostUsd ?? 0) - expected) < 0.01,
       `got ${r.cmCostUsd}, expected ${expected}`);
-    assert.ok(Math.abs(expected - (workDays * 1867 / 48.5) * 1950 / 2084) < 1e-9);
+    assert.ok(Math.abs(expected - (workDays * 1867) * 1950 / 2084) < 1e-9);
   });
 
   test('a shipped order produces a real unit cost and profit', () => {

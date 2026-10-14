@@ -23,13 +23,13 @@ const order = (costing: Partial<CostingInput> = {}): CostingPdfOrder => ({
   coordinator: null,
   costing: computeCosting({
     orderQty: 1972, cutQty: 2084, shippedQty: 1950,
-    dollarRate: 48.5, dailyCostEgp: 1867, machineCount: 38,
+    dailyCostUsd: 38.49, machineCount: 38,
     machineDaysUsed: null, daysInLine: 11, lineMachineQty: 12,
     firstDegreeQty: 1950, secondDegreeQty: 24, sellPriceUsd: 7.25,
     customer: 'Kittrich', orderName: 'Rosetta tee', poNumber: '89-39', styleNumber: 'RS-1', itemType: 'T-shirt',
     lines: [
       { group: 'FABRIC', label: 'Rosetta', quantity: 1194, unit: 'met.', unitPriceUsd: 2.1, sourceRef: 'bom:FABRIC:a' },
-      { group: 'ACCESSORY', label: 'Poly bag', quantity: 2084, unit: 'Pcs', unitPriceUsd: 0.25 / 48.5, sourceRef: 'bom:PACKAGING:b' },
+      { group: 'ACCESSORY', label: 'Poly bag', quantity: 2084, unit: 'Pcs', unitPriceUsd: 0.0052, sourceRef: 'bom:PACKAGING:b' },
       { group: 'EXTERNAL', label: 'Sublimation', quantity: 2000, unit: 'PCS', unitPriceUsd: 0.3, sourceRef: 'external:SUBLIMATION' },
       { group: 'EXTERNAL', label: 'Printing', quantity: 2000, unit: 'PCS', unitPriceUsd: 0.1, sourceRef: 'external:PRINTING' },
     ],
@@ -52,7 +52,7 @@ describe('the costing PDF', () => {
 
   test('a costing with nothing recorded yet still renders', async () => {
     const buf = await render(order({
-      shippedQty: null, dollarRate: null, dailyCostEgp: null, machineCount: null,
+      shippedQty: null, dailyCostUsd: null, machineCount: null,
       daysInLine: null, lineMachineQty: null, firstDegreeQty: null, secondDegreeQty: null,
       sellPriceUsd: null, lines: [],
     }));

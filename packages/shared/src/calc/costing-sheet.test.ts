@@ -7,14 +7,14 @@ import { sanitiseOverrides } from './costing-overrides.js';
 /**
  * The Actual Costing sheet, cell by cell.
  *
- * The figures below are the workbook's own: 1,867 EGP a day across 38
+ * The figures below are the workbook's own, read as dollars: 1,867 a day across 38
  * machines, 130 machine-days on this order, sold at $7.25. The tests assert
  * the arithmetic the sheet performs, and — just as importantly — that the five
  * cells which read `#DIV/0!` in the live workbook read "Not calculated" here.
  */
 const BASE: CostingInput = {
   orderQty: 1972, cutQty: 2084, shippedQty: null,
-  dollarRate: 48.5, dailyCostEgp: 1867, machineCount: 38,
+  dailyCostUsd: 1867, machineCount: 38,
   machineDaysUsed: 130, daysInLine: 11, lineMachineQty: 12,
   firstDegreeQty: 1950, secondDegreeQty: 24,
   sellPriceUsd: 7.25, lines: [],
@@ -29,7 +29,7 @@ const line = (
 describe('actual costing — the header block', () => {
   test('machine cost is the daily cost spread over the factory', () => {
     const r = computeCosting(BASE);
-    assert.ok(Math.abs((r.machineCostEgpPerDay ?? 0) - 1867 / 38) < 1e-9);
+    assert.ok(Math.abs((r.machineCostPerDay ?? 0) - 1867 / 38) < 1e-9);
   });
 
   test('work days and productivity follow the machine-days actually used', () => {
@@ -47,8 +47,7 @@ describe('actual costing — the header block', () => {
     assert.equal(r.daysInLine, 11);
     assert.equal(r.machineCount, 38);
     assert.equal(r.machineDaysUsed, 132, '12 line machines × 11 days');
-    assert.equal(r.dailyCostEgp, 1867);
-    assert.equal(r.dollarRate, 48.5);
+    assert.equal(r.dailyCostUsd, 1867);
   });
 });
 
@@ -222,13 +221,13 @@ describe('actual costing — the money', () => {
   };
 
   test('C.M is the daily cost per piece produced, over the pieces that passed', () => {
-    // daily cost ÷ productivity × 1st degree qty, in EGP, converted once. The
+    // daily cost ÷ productivity × 1st degree qty, in dollars throughout. The
     // formula itself is covered in `cm-cost.test.ts`; this holds that the
     // sheet as a whole still produces it.
     const r = computeCosting(shipped);
     const used = 12 * 11;
     const productivity = 2084 / (used / 38);
-    const expected = (1867 / productivity) * 1950 / 48.5;
+    const expected = (1867 / productivity) * 1950;
     assert.ok(Math.abs((r.cmCostUsd ?? 0) - expected) < 1e-9,
       `got ${r.cmCostUsd}, expected ${expected}`);
   });
@@ -261,9 +260,9 @@ describe('actual costing — the money', () => {
 
   test('no cell can ever render NaN, Infinity or an Excel error code', () => {
     const hostile: CostingInput[] = [
-      { ...BASE, machineCount: 0, dailyCostEgp: 0, shippedQty: 0, orderQty: 0, cutQty: 0 },
-      { ...BASE, dollarRate: 0, shippedQty: 1 },
-      { ...BASE, dollarRate: null, dailyCostEgp: null, machineCount: null, machineDaysUsed: null },
+      { ...BASE, machineCount: 0, dailyCostUsd: 0, shippedQty: 0, orderQty: 0, cutQty: 0 },
+      { ...BASE, shippedQty: 1 },
+      { ...BASE, dailyCostUsd: null, machineCount: null, machineDaysUsed: null },
       { ...BASE, sellPriceUsd: 0, shippedQty: 5, lines: [line('FABRIC', 'F', 1, 'M', 1)] },
       { ...BASE, orderQty: 0, shippedQty: 0, cutQty: 0, lines: [line('FABRIC', 'F', null, 'M', null)] },
     ];
@@ -282,17 +281,11 @@ describe('actual costing — the money', () => {
     }
   });
 
-  test('without a dollar rate nothing is converted at a rate nobody chose', () => {
-    const r = computeCosting({ ...BASE, dollarRate: null, shippedQty: 1950 });
-    assert.equal(r.cmCostUsd, null);
-    assert.equal(r.unitActualCostEgp, null);
-  });
-
   test('a brand-new order costs nothing and claims nothing', () => {
     const r = computeCosting({
       hasRecord: false,
       orderQty: 0, cutQty: 0, shippedQty: null,
-      dollarRate: null, dailyCostEgp: null, machineCount: null,
+      dailyCostUsd: null, machineCount: null,
       machineDaysUsed: null, daysInLine: null, sellPriceUsd: null, lines: [],
     });
     assert.equal(r.hasRecord, false);
@@ -442,16 +435,11 @@ describe('actual costing — outside work has one row each', () => {
   });
 });
 
-describe('actual costing — the dollar rate', () => {
-  test('an unset rate is named as missing, not assumed', () => {
-    const r = computeCosting({ ...BASE, dollarRate: null });
-    assert.equal(r.dollarRate, null);
-    assert.equal(r.waiting.dollarRate, 'Waiting for the dollar rate');
-    assert.equal(r.cmCostUsd, null);
-  });
-
-  test('a recorded rate asks for nothing', () => {
-    assert.equal(computeCosting(BASE).waiting.dollarRate, undefined);
+describe('actual costing — one currency', () => {
+  test('nothing on the sheet is a rate, in either direction', () => {
+    const r = computeCosting(BASE);
+    for (const key of Object.keys(r)) assert.doesNotMatch(key, /egp|dollar/i, key);
+    assert.equal(r.waiting.dollarRate, undefined);
   });
 });
 

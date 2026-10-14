@@ -283,7 +283,7 @@ const HIGHLIGHT_FIELDS: Record<string, string[]> = {
   TaskComment: ['body'],
   BomItem: ['item', 'requiredQty', 'unit'],
   Material: ['name', 'type', 'unit'],
-  ProformaInvoice: ['number', 'currency'],
+  ProformaInvoice: ['number'],
   Marker: ['fabricName', 'layers'],
   User: ['name', 'email', 'department'],
 };

@@ -27,7 +27,7 @@ const cost = (issued: number | null, price: number | null) => {
   });
   return computeCosting({
     orderQty: 1000, cutQty: 1000, shippedQty: 1000,
-    dollarRate: 1, dailyCostEgp: null, machineCount: null,
+    dailyCostUsd: null, machineCount: null,
     machineDaysUsed: null, daysInLine: null, sellPriceUsd: 10,
     lines: lines.map((l) => ({
       group: l.group, label: l.label, quantity: l.quantity,

@@ -9,7 +9,7 @@
  * them, so a costing that was reconciled against an invoice still shows what
  * the records said.
  *
- * Built with pdfkit on its standard fonts, which carry the Latin-1 characters
+ * Every figure is in dollars. Built with pdfkit on its standard fonts, which carry the Latin-1 characters
  * the sheet uses ("÷", "×", "—") and nothing beyond them. Nothing is drawn
  * from the database here: the order detail comes in, a buffer goes out, so
  * it can be exercised by value.
@@ -92,7 +92,6 @@ export async function renderCostingPdf(order: CostingPdfOrder, opts: CostingPdfO
 // ── Formatting ───────────────────────────────────────────────────────────────
 
 const money = (v: number | null | undefined, places = 2) => (v == null ? DASH : fmtMoney(v, '$', places));
-const egp = (v: number | null | undefined, places = 2) => (v == null ? DASH : `EGP ${fmtNumber(v, { places })}`);
 const num = (v: number | null | undefined, places = 0) => (v == null ? DASH : fmtNumber(v, { places }));
 const pct = (v: number | null | undefined, places = 1) => (v == null ? DASH : fmtPct(v, places));
 const text = (v: string | null | undefined) => (v == null || v === '' ? DASH : v);
@@ -100,7 +99,7 @@ const text = (v: string | null | undefined) => (v == null || v === '' ? DASH : v
 /** The labels the footnote gives the overridable cells. */
 const OVERRIDE_LABEL: Record<OverrideKey, string> = {
   customer: 'Customer', orderName: 'Order name', itemType: 'Item type', poNumber: 'PO no', styleNumber: 'Style no',
-  machineCostEgpPerDay: 'Machine cost', machineDaysUsed: 'Machine-days used', workDays: 'Work days',
+  machineCostPerDay: 'Machine cost', machineDaysUsed: 'Machine-days used', workDays: 'Work days',
   productivityRate: 'Productivity rate',
   orderQty: 'Order qty', cutQty: 'Cut qty', shippedQty: 'Shipped qty', firstDegreeQty: '1st degree qty',
   secondDegreeQty: '2nd degree qty', diffPct: 'Diff. percentage',
@@ -111,7 +110,7 @@ const OVERRIDE_LABEL: Record<OverrideKey, string> = {
 
 /** How each overridable cell's calculated figure is written in the footnote. */
 const OVERRIDE_FORMAT: Partial<Record<OverrideKey, (v: number | string | null) => string>> = {
-  machineCostEgpPerDay: (v) => egp(v as number | null),
+  machineCostPerDay: (v) => money(v as number | null),
   workDays: (v) => num(v as number | null, 1),
   productivityRate: (v) => num(v as number | null, 1),
   diffPct: (v) => pct(v as number | null),
@@ -275,7 +274,7 @@ class Layout {
       { label: 'Item type', value: text(c.identity.itemType), key: 'itemType' },
       { label: 'Season', value: text(order.season) },
       { label: 'Coordinator', value: text(order.coordinator?.name) },
-      { label: 'Dollar rate', value: c.dollarRate == null ? DASH : fmtNumber(c.dollarRate, { places: 2 }), sub: 'EGP per $' },
+      { label: 'Costing date', value: c.costingDate ? fmtDate(c.costingDate) : DASH },
     ], 4);
   }
 
@@ -300,11 +299,11 @@ class Layout {
       : c.daysInLineSource === 'typed' ? 'as entered' : undefined;
     this.sectionTitle('Machine economics', "the factory's figures and what follows from them");
     this.grid([
-      { label: 'Daily cost', value: egp(c.dailyCostEgp, 0), sub: 'the whole factory, per day' },
+      { label: 'Daily cost', value: money(c.dailyCostUsd), sub: 'the whole factory, per day' },
       { label: 'All factory machines', value: num(c.machineCount) },
       { label: 'Line machines', value: num(c.lineMachineQty) },
       { label: 'Days in line', value: num(c.daysInLineUsed), sub: daysSub },
-      { label: 'Machine cost', value: egp(c.machineCostEgpPerDay), key: 'machineCostEgpPerDay', sub: 'daily cost ÷ all machines' },
+      { label: 'Machine cost', value: money(c.machineCostPerDay), key: 'machineCostPerDay', sub: 'per machine-day' },
       { label: 'Machine-days used', value: num(c.machineDaysUsed), key: 'machineDaysUsed', sub: 'line machines × days in line' },
       { label: 'Work days', value: num(c.workDays, 2), key: 'workDays', sub: 'machine-days ÷ all machines' },
       { label: 'Productivity rate', value: num(c.productivityRate, 1), key: 'productivityRate', sub: 'cut qty ÷ work days, pcs per day' },
@@ -451,7 +450,7 @@ class Layout {
     const cells: Cell[] = [
       { label: 'Total actual cost', value: money(c.totalCostUsd), key: 'totalCostUsd', sub: 'every cost above, added up' },
       { label: 'Actual cost / unit', value: money(c.unitActualCostUsd), key: 'unitActualCostUsd',
-        sub: c.unitActualCostEgp == null ? 'total cost ÷ shipped qty' : `${egp(c.unitActualCostEgp)} · total ÷ shipped` },
+        sub: 'total cost ÷ shipped qty' },
       { label: 'Sell price', value: money(c.sellPriceUsd), key: 'sellPriceUsd', sub: 'per piece, from Order Details' },
       { label: 'Profit / unit', value: money(c.profitPerUnitUsd), key: 'profitPerUnitUsd', sub: 'sell price - cost per unit',
         tone: c.isProfitable === true ? 'good' : c.isProfitable === false ? 'bad' : undefined },
@@ -520,7 +519,7 @@ class Layout {
 
     const seen = new Set<string>();
     const waiting = [
-      'sellPriceUsd', 'shippedQty', 'dollarRate', 'machineCostEgpPerDay', 'machineDaysUsed', 'workDays',
+      'sellPriceUsd', 'shippedQty', 'machineCostPerDay', 'machineDaysUsed', 'workDays',
       'productivityRate', 'cmCostUsd', 'fabricCostUsd', 'accessoryCostUsd', 'totalCostUsd',
     ]
       .map((k) => c.waiting[k])

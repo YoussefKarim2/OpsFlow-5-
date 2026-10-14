@@ -33,7 +33,6 @@ export interface ProformaDraft {
   billingAddress: string | null;
   email: string | null;
   shipmentTo: string | null;
-  currency: string;
   terms: string | null;
   lines: ProformaDraftLine[];
   /** HIGH only when the document said so plainly. */
@@ -89,7 +88,6 @@ export function buildProformaDraft(extraction: ExtractionResult): ProformaDraft 
     return (field ? num(f[field]) : null) ?? num(f[concept]);
   };
 
-  const currency = pick(ImportConcept.CURRENCY)?.toUpperCase().slice(0, 3) ?? 'USD';
   const unitPrice = pickNum(ImportConcept.UNIT_PRICE);
 
   const style = pick(ImportConcept.STYLE) ?? pick(ImportConcept.ORDER_NAME);
@@ -165,7 +163,7 @@ export function buildProformaDraft(extraction: ExtractionResult): ProformaDraft 
     issues.push({
       level: 'INFO', field: 'unitPrice', sheet: null, cell: null,
       message:
-        `Every line was priced at ${unitPrice} ${currency}, the only price found in the document. ` +
+        `Every line was priced at $${unitPrice}, the only price found in the document. ` +
         'Change any line that differs.',
     });
   }
@@ -184,7 +182,6 @@ export function buildProformaDraft(extraction: ExtractionResult): ProformaDraft 
     billingAddress: null,
     email: null,
     shipmentTo: pick(ImportConcept.DESTINATION),
-    currency,
     terms: null,
     lines,
     confidence,

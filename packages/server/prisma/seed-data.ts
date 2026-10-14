@@ -254,31 +254,30 @@ export const EXTERNAL_COLORS: Array<{ color: string; qty: number; rate: number; 
   { color: 'LIME',      qty: 575, rate: 0.035, areaM: 21 },
 ];
 
-/** Actual Costing_Coordinator — the machine and rate figures. */
+/** Actual Costing_Coordinator — the machine figures. Dollars: the sheet's 1,867 EGP a day at its 48.5 rate. */
 export const COSTING = {
-  dollarRate: 48.5,      // D12
-  dailyCostEgp: 1867,    // D13
+  dailyCostUsd: 38.49,   // D13 ÷ D12
   machineCount: 38,      // D14 — All F. Machines
   machineDaysUsed: 130,  // D22 — Machine Already Used
   daysInLine: 11,        // F22
   productionLineMachines: { Single: 7, Over: 6, 'Cover Stitch': 1 }, // D31/D32/D34
 };
 
-/** Accessory unit prices, quoted in EGP on the sheet and divided by the rate. */
-export const COST_LINES: Array<{ group: string; label: string; unit: string; unitPriceEgp: number | null; unitPriceUsd: number | null }> = [
-  { group: 'ACCESSORY', label: 'Logo',                 unit: 'Pcs',  unitPriceEgp: null, unitPriceUsd: 0.1 },
-  { group: 'ACCESSORY', label: 'Tie Cord',             unit: 'Pcs',  unitPriceEgp: 1,    unitPriceUsd: null },
-  { group: 'ACCESSORY', label: 'Heat Transfer Size',   unit: 'Pcs',  unitPriceEgp: 0.12, unitPriceUsd: null },
-  { group: 'ACCESSORY', label: 'Hang Tag + Pins gun',  unit: 'Pcs',  unitPriceEgp: 0.4,  unitPriceUsd: null },
-  { group: 'ACCESSORY', label: 'Elastic',              unit: 'Kg',   unitPriceEgp: 55,   unitPriceUsd: null },
-  { group: 'ACCESSORY', label: 'Washing inst',         unit: 'Pcs',  unitPriceEgp: 0.25, unitPriceUsd: null },
-  { group: 'ACCESSORY', label: 'Poly Bag',             unit: 'Pcs',  unitPriceEgp: 0.25, unitPriceUsd: null },
-  { group: 'ACCESSORY', label: 'Butter Paper',         unit: 'Pcs',  unitPriceEgp: 0.4,  unitPriceUsd: null },
-  { group: 'ACCESSORY', label: 'Thread',               unit: 'Roll', unitPriceEgp: 18,   unitPriceUsd: null },
-  { group: 'ACCESSORY', label: 'Sticky Tape',          unit: 'Roll', unitPriceEgp: 5,    unitPriceUsd: null },
-  { group: 'ACCESSORY', label: 'Dzn. Box',             unit: 'Pcs',  unitPriceEgp: 3,    unitPriceUsd: null },
-  { group: 'ACCESSORY', label: 'Carton',               unit: 'Pcs',  unitPriceEgp: 16,   unitPriceUsd: null },
-  { group: 'FABRIC',    label: 'Rosetta (main)',       unit: 'met.', unitPriceEgp: null, unitPriceUsd: null },
+/** Accessory unit prices in dollars — the sheet's pound prices at its 48.5 rate. */
+export const COST_LINES: Array<{ group: string; label: string; unit: string; unitPriceUsd: number | null }> = [
+  { group: 'ACCESSORY', label: 'Logo',                 unit: 'Pcs',  unitPriceUsd: 0.1 },
+  { group: 'ACCESSORY', label: 'Tie Cord',             unit: 'Pcs',  unitPriceUsd: 0.0206 },
+  { group: 'ACCESSORY', label: 'Heat Transfer Size',   unit: 'Pcs',  unitPriceUsd: 0.0025 },
+  { group: 'ACCESSORY', label: 'Hang Tag + Pins gun',  unit: 'Pcs',  unitPriceUsd: 0.0082 },
+  { group: 'ACCESSORY', label: 'Elastic',              unit: 'Kg',   unitPriceUsd: 1.134 },
+  { group: 'ACCESSORY', label: 'Washing inst',         unit: 'Pcs',  unitPriceUsd: 0.0052 },
+  { group: 'ACCESSORY', label: 'Poly Bag',             unit: 'Pcs',  unitPriceUsd: 0.0052 },
+  { group: 'ACCESSORY', label: 'Butter Paper',         unit: 'Pcs',  unitPriceUsd: 0.0082 },
+  { group: 'ACCESSORY', label: 'Thread',               unit: 'Roll', unitPriceUsd: 0.3711 },
+  { group: 'ACCESSORY', label: 'Sticky Tape',          unit: 'Roll', unitPriceUsd: 0.1031 },
+  { group: 'ACCESSORY', label: 'Dzn. Box',             unit: 'Pcs',  unitPriceUsd: 0.0619 },
+  { group: 'ACCESSORY', label: 'Carton',               unit: 'Pcs',  unitPriceUsd: 0.3299 },
+  { group: 'FABRIC',    label: 'Rosetta (main)',       unit: 'met.', unitPriceUsd: null },
 ];
 
 /**

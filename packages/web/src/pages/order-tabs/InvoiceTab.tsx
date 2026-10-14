@@ -111,12 +111,10 @@ export function InvoiceTab({ order }: { order: OrderDetailDto }) {
                   ? <> was sent to the customer on {fmtDate(proforma.sentAt)}.</>
                   : <> is still a draft.</>}
                 {proforma.grandTotal != null && (
-                  <> Quoted value: {proforma.currency} {proforma.grandTotal.toLocaleString('en-GB', { minimumFractionDigits: 2 })}.</>
+                  <> Quoted value: ${proforma.grandTotal.toLocaleString('en-GB', { minimumFractionDigits: 2 })}.</>
                 )}
               </p>
-              {/* The invoice value is in dollars; a quotation in another
-                  currency cannot be compared with it figure for figure. */}
-              {proforma.grandTotal != null && invoiceTotal != null && proforma.currency === 'USD'
+              {proforma.grandTotal != null && invoiceTotal != null
                 && Math.abs(proforma.grandTotal - invoiceTotal) > 0.01 && (
                 <p className="mt-1 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-amber-900">
                   The invoice value differs from the quotation by{' '}

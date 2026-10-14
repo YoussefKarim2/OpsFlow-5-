@@ -432,8 +432,7 @@ async function main(): Promise<void> {
     data: {
       orderId: order.id,
       costingDate: new Date(),
-      dollarRate: COSTING.dollarRate,
-      dailyCostEgp: COSTING.dailyCostEgp,
+      dailyCostUsd: COSTING.dailyCostUsd,
       machineCount: COSTING.machineCount,
       machineDaysUsed: COSTING.machineDaysUsed,
       daysInLine: COSTING.daysInLine,
@@ -448,8 +447,7 @@ async function main(): Promise<void> {
         group: l.group as never,
         label: l.label,
         unit: l.unit,
-        unitPriceEgp: l.unitPriceEgp,
-        unitPriceUsd: l.unitPriceUsd ?? (l.unitPriceEgp != null ? l.unitPriceEgp / COSTING.dollarRate : null),
+        unitPriceUsd: l.unitPriceUsd,
         quantity: null, // not yet consumed — this is exactly why the sheet shows #DIV/0!
         position: i,
       },

@@ -14,7 +14,7 @@ import { applyRowEdit, rowCost, type RowState } from './costing-rows.js';
  */
 const BASE: CostingInput = {
   orderQty: 1000, cutQty: 1050, shippedQty: 1000,
-  dollarRate: 48.5, dailyCostEgp: 1867, machineCount: 38,
+  dailyCostUsd: 1867, machineCount: 38,
   machineDaysUsed: 38, daysInLine: 11, lineMachineQty: 12,
   firstDegreeQty: 990, secondDegreeQty: 10,
   sellPriceUsd: 10, lines: [],
@@ -139,11 +139,11 @@ describe('one value in, the whole chain moves', () => {
 describe('what a missing figure says instead of an error code', () => {
   test('each unknown names the fact it is waiting for', () => {
     const r = computeCosting({
-      ...BASE, shippedQty: null, dailyCostEgp: null, machineCount: null,
-      dollarRate: null, sellPriceUsd: null, lines: [],
+      ...BASE, shippedQty: null, dailyCostUsd: null, machineCount: null,
+      sellPriceUsd: null, lines: [],
     });
     assert.match(r.waiting.unitActualCostUsd!, /Waiting for/);
-    assert.match(r.waiting.machineCostEgpPerDay!, /daily cost|machine count/);
+    assert.match(r.waiting.machineCostPerDay!, /daily cost|machine count/);
     assert.match(r.waiting.workDays!, /machine/);
     assert.match(r.waiting.profitPerUnitUsd!, /sell price/);
     assert.match(r.waiting.diffPct!, /shipped/);
@@ -161,7 +161,7 @@ describe('what a missing figure says instead of an error code', () => {
     // Nothing costed at all — no materials and no machine figures, so there is
     // no C.M either.
     const noCosts = computeCosting({
-      ...BASE, lines: [], dailyCostEgp: null, machineCount: null, machineDaysUsed: null,
+      ...BASE, lines: [], dailyCostUsd: null, machineCount: null, machineDaysUsed: null,
     });
     assert.equal(noCosts.totalCostUsd, null);
     assert.match(noCosts.waiting.unitActualCostUsd!, /costs below/);
@@ -172,8 +172,8 @@ describe('what a missing figure says instead of an error code', () => {
 
   test('no message ever contains an error code', () => {
     const r = computeCosting({
-      ...BASE, orderQty: 0, cutQty: 0, shippedQty: 0, dollarRate: 0,
-      dailyCostEgp: 0, machineCount: 0, machineDaysUsed: 0, sellPriceUsd: 0, lines: [],
+      ...BASE, orderQty: 0, cutQty: 0, shippedQty: 0, 
+      dailyCostUsd: 0, machineCount: 0, machineDaysUsed: 0, sellPriceUsd: 0, lines: [],
     });
     for (const text of Object.values(r.waiting)) {
       assert.doesNotMatch(text!, /NaN|Infinity|#DIV|#VALUE|undefined|null/);

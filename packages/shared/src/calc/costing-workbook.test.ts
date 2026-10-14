@@ -29,10 +29,9 @@ import { computeCosting, type CostingInput } from './costing.js';
  * checked against numbers Excel itself produced.
  */
 const SHEET = {
-  dailyCostEgp: 1867,     // D13
+  dailyCostUsd: 1867,     // D13
   machineCount: 38,       // D14
   machineDaysUsed: 130,   // D22
-  dollarRate: 48.5,       // D12
 };
 
 const BASE: CostingInput = {
@@ -44,7 +43,7 @@ describe('the workbook formulas, cell by cell', () => {
   test('D16 — Machine Cost is the daily cost over all factory machines', () => {
     const r = computeCosting(BASE);
     // Excel's own value in D16.
-    assert.ok(Math.abs(r.machineCostEgpPerDay! - 49.131578947368418) < 1e-12);
+    assert.ok(Math.abs(r.machineCostPerDay! - 49.131578947368418) < 1e-12);
   });
 
   test('D17 — Work Days is machine-days used over all factory machines', () => {
@@ -82,16 +81,16 @@ describe('the workbook formulas, cell by cell', () => {
       lines: [
         { group: 'FABRIC', label: 'F1', quantity: 10, unit: 'met.', unitPriceUsd: 2 },
         { group: 'FABRIC', label: 'F2', quantity: 5, unit: 'met.', unitPriceUsd: 3 },
-        { group: 'ACCESSORY', label: 'Bag', quantity: 100, unit: 'Pcs', unitPriceUsd: 1 / 48.5 },
+        { group: 'ACCESSORY', label: 'Bag', quantity: 100, unit: 'Pcs', unitPriceUsd: 1 },
       ],
     });
     assert.equal(r.groups.fabric.total, 35);
-    assert.ok(Math.abs(r.groups.accessory.total! - 100 / 48.5) < 1e-12);
+    assert.ok(Math.abs(r.groups.accessory.total! - 100) < 1e-12);
   });
 
   test('N36 — work days × daily cost, charged for the pieces that passed', () => {
-    // The workbook's own formula: `=D17*D13`, the machine run cost in EGP.
-    const workbookEgp = (130 / 38) * 1867;
+    // The workbook's own formula: `=D17*D13`, the machine run cost.
+    const workbook = (130 / 38) * 1867;
 
     // The factory's C.M is daily cost ÷ productivity × 1st degree qty, which
     // is that same run cost spread over the pieces cut and charged for the
@@ -99,9 +98,9 @@ describe('the workbook formulas, cell by cell', () => {
     // when every cut piece passed, and that share of it otherwise. Held in
     // `cm-cost.test.ts`; recorded here against the source cell.
     const all = computeCosting({ ...BASE, firstDegreeQty: 2084 });
-    assert.ok(Math.abs(all.cmCostUsd! - workbookEgp / 48.5) < 1e-9);
+    assert.ok(Math.abs(all.cmCostUsd! - workbook) < 1e-9);
     const some = computeCosting({ ...BASE, firstDegreeQty: 1950 });
-    assert.ok(Math.abs(some.cmCostUsd! - (workbookEgp * 1950 / 2084) / 48.5) < 1e-9);
+    assert.ok(Math.abs(some.cmCostUsd! - (workbook * 1950 / 2084)) < 1e-9);
   });
 
   test('N37 — the Total is the sections plus C.M', () => {
@@ -164,10 +163,11 @@ describe('the workbook formulas, cell by cell', () => {
  * a decision, not a drift, and is listed so it stays a decision.
  */
 describe('deliberate departures from the workbook', () => {
-  test('C.M is converted to dollars; the workbook leaves it in pounds', () => {
+  test('there is no dollar rate: the daily cost is entered in dollars', () => {
+    // The workbook kept D13 in pounds and converted at D12. OpsFlow holds one
+    // currency, so C.M is the daily cost's own figure with nothing applied.
     const r = computeCosting({ ...BASE, firstDegreeQty: 2084 });
-    const egp = (130 / 38) * 1867;
-    assert.ok(Math.abs(r.cmCostUsd! - egp / 48.5) < 1e-9, 'converted, not added raw to a dollar total');
+    assert.ok(Math.abs(r.cmCostUsd! - (130 / 38) * 1867) < 1e-9);
   });
 
   test('2nd Degree is the recorded count, not cut minus first degree', () => {

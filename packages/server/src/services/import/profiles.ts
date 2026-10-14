@@ -181,7 +181,7 @@ export const AGE_ORDER_V1: ImportProfile = {
     sheet: 'Actual Costing_Coordinator',
     fields: [
       { field: 'dollarRate',      label: 'Dollar Rate',      sheet: 'Actual Costing_Coordinator', anchor: 'Dollar Rate',      offset: [0, 1], type: 'number' },
-      { field: 'dailyCostEgp',    label: 'Daily Cost',       sheet: 'Actual Costing_Coordinator', anchor: 'Daily Cost',       offset: [0, 1], type: 'number' },
+      { field: 'dailyCost',       label: 'Daily Cost',       sheet: 'Actual Costing_Coordinator', anchor: 'Daily Cost',       offset: [0, 1], type: 'number' },
       { field: 'machineCount',    label: 'All F. Machines',  sheet: 'Actual Costing_Coordinator', anchor: 'All F. Machines',  offset: [0, 1], type: 'number' },
       { field: 'machineDaysUsed', label: 'Machines Used',    sheet: 'Actual Costing_Coordinator', anchor: 'Machine Already Used', offset: [1, 0], type: 'number' },
       { field: 'daysInLine',      label: 'Days in Line',     sheet: 'Actual Costing_Coordinator', anchor: 'Days in line',     offset: [1, 0], type: 'number' },

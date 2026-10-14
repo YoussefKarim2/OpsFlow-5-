@@ -51,7 +51,6 @@ interface Draft {
   shipmentFrom: string;
   shipmentTo: string;
   consolidatingVendor: string;
-  currency: string;
   terms: string;
   lines: LineDraft[];
 }
@@ -59,7 +58,7 @@ interface Draft {
 const EMPTY_DRAFT: Draft = {
   number: '', date: '', consignee: '', billingAddress: '', email: '',
   vesselVoyage: '', containerSeal: '', shippingDate: '', shipmentFrom: '',
-  shipmentTo: '', consolidatingVendor: '', currency: 'USD', terms: '', lines: [],
+  shipmentTo: '', consolidatingVendor: '', terms: '', lines: [],
 };
 
 const day = (iso: string | null | undefined) => (iso ? iso.slice(0, 10) : '');
@@ -86,7 +85,6 @@ function seedFrom(order: OrderDetailDto): Draft {
     shipmentFrom: 'Cairo / Egypt',
     shipmentTo: '',
     consolidatingVendor: '',
-    currency: 'USD',
     terms: '',
     lines: [{
       description: [order.styleNumber, order.orderName].filter(Boolean).join(' — '),
@@ -110,7 +108,6 @@ function fromServer(inv: ProformaDto): Draft {
     shipmentFrom: inv.shipmentFrom ?? '',
     shipmentTo: inv.shipmentTo ?? '',
     consolidatingVendor: inv.consolidatingVendor ?? '',
-    currency: inv.currency,
     terms: inv.terms ?? '',
     lines: inv.lines.map((l) => ({
       description: l.description,
@@ -157,7 +154,6 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
         billingAddress: d.billingAddress ?? prev?.billingAddress ?? '',
         email: d.email ?? prev?.email ?? '',
         shipmentTo: d.shipmentTo ?? prev?.shipmentTo ?? '',
-        currency: d.currency || prev?.currency || 'USD',
         lines: d.lines.length > 0
           ? d.lines.map((l) => ({
               description: l.description,
@@ -207,7 +203,6 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
       shipmentFrom: d.shipmentFrom.trim() || null,
       shipmentTo: d.shipmentTo.trim() || null,
       consolidatingVendor: d.consolidatingVendor.trim() || null,
-      currency: d.currency.trim().toUpperCase() || 'USD',
       terms: d.terms.trim() || null,
       lines: d.lines
         .filter((l) => l.description.trim().length > 0)
@@ -268,7 +263,6 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
           containerSeal: draft.containerSeal || null,
           shippingDate: draft.shippingDate || null,
           consolidatingVendor: draft.consolidatingVendor || null,
-          currency: draft.currency || 'USD',
           terms: draft.terms || null,
           lines: draft.lines.map((l) => ({
             description: l.description,
@@ -387,9 +381,6 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
             <Field label="Date">
               <input type="date" className="input" value={draft.date} onChange={(e) => set('date', e.target.value)} />
             </Field>
-            <Field label="Currency">
-              <input className="input uppercase" maxLength={3} value={draft.currency} onChange={(e) => set('currency', e.target.value)} />
-            </Field>
           </div>
 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -504,7 +495,7 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
               </tbody>
               <tfoot className="border-t-2 border-ink-300 bg-ink-50">
                 <tr>
-                  <td className="td font-semibold" colSpan={4}>Grand total ({draft.currency})</td>
+                  <td className="td font-semibold" colSpan={4}>Grand total (USD)</td>
                   <td className="td tnum text-right text-base font-semibold">
                     <Num value={grand} kind="money" places={2} />
                   </td>

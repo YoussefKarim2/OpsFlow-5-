@@ -636,14 +636,12 @@ const proformaSchema = z.object({
   shipmentFrom: z.string().trim().max(200).nullable().optional(),
   shipmentTo: z.string().trim().max(200).nullable().optional(),
   consolidatingVendor: z.string().trim().max(200).nullable().optional(),
-  currency: z.string().trim().length(3).default('USD'),
   terms: z.string().trim().max(5000).nullable().optional(),
   lines: z.array(proformaLineSchema).max(200).optional(),
 });
 
 /** The totals the sheet computes in H15:H31 — derived here, never stored. */
 function withTotals(inv: {
-  currency: string;
   lines: Array<{ id: string; description: string; quantity: unknown; unit: string; unitPrice: unknown; position: number }>;
 } & Record<string, unknown>) {
   const num = (v: unknown) => (v == null ? null : Number(v.toString()));
@@ -711,7 +709,6 @@ stepsRouter.put('/:id/proforma', requirePermission('order:edit'), asyncHandler(a
     shipmentFrom: body.shipmentFrom ?? null,
     shipmentTo: body.shipmentTo ?? null,
     consolidatingVendor: body.consolidatingVendor ?? null,
-    currency: body.currency,
     terms: body.terms ?? null,
   };
 
@@ -838,7 +835,6 @@ stepsRouter.get('/:id/proforma/export.xlsx', requirePermission('order:read'), as
     ['Vessel / voyage', inv.vesselVoyage],
     ['Container / seal', inv.containerSeal],
     ['Terms', inv.terms],
-    ['Currency', inv.currency],
   ];
   for (const [k, v] of header) {
     if (v == null || v === '') continue;   // an empty field is noise on a document
@@ -876,7 +872,7 @@ stepsRouter.get('/:id/proforma/export.xlsx', requirePermission('order:read'), as
 
   // Matches the printed proforma: a total quantity, no total at all when
   // nothing is priced, and a note whenever the total leaves a line out.
-  const totalRow = ws.addRow([`Total (${inv.currency})`, totalQty, '', '', priced > 0 ? total : null]);
+  const totalRow = ws.addRow(['Total (USD)', totalQty, '', '', priced > 0 ? total : null]);
   totalRow.font = { bold: true };
   totalRow.getCell(2).numFmt = qtyFormat;
   totalRow.getCell(5).numFmt = '#,##0.00';
@@ -990,9 +986,7 @@ stepsRouter.get('/:id/costing', requirePermission('costing:read'), asyncHandler(
   res.json({
     data: record && {
       costingDate: record.costingDate?.toISOString() ?? null,
-      // Null until somebody enters one, so the sheet can say it is waiting.
-      dollarRate: record.dollarRate == null ? null : Number(record.dollarRate.toString()),
-      dailyCostEgp: record.dailyCostEgp == null ? null : Number(record.dailyCostEgp.toString()),
+      dailyCostUsd: record.dailyCostUsd == null ? null : Number(record.dailyCostUsd.toString()),
       machineCount: record.machineCount,
       machineDaysUsed: record.machineDaysUsed,
       daysInLine: record.daysInLine,
@@ -1061,22 +1055,8 @@ const costLineSchema = z.object({
 });
 
 const costingSchema = z.object({
-  /**
-   * Optional, and zero is allowed.
-   *
-   * The screen sends `Number(rate) || 0`, so the very first save — before
-   * anyone has typed a rate — arrived as 0 and was refused outright: a
-   * coordinator could fill in a whole costing, press Save, and be told about a
-   * field they had not reached yet, losing the rest.
-   *
-   * Nothing downstream is endangered by allowing it. Every conversion goes
-   * through `safeDiv`, so an unset rate leaves those cells uncalculated rather
-   * than wrong — and the upsert below leaves any rate already stored alone
-   * rather than replacing it with the blank.
-   */
-  dollarRate: z.number().nonnegative().optional(),
   costingDate: z.string().optional().nullable(),
-  dailyCostEgp: z.number().nonnegative().max(99_999_999).optional().nullable(),
+  dailyCostUsd: z.number().nonnegative().max(99_999_999).optional().nullable(),
   machineCount: z.number().int().nonnegative().max(100_000).optional().nullable(),
   machineDaysUsed: z.number().int().nonnegative().max(1_000_000).optional().nullable(),
   daysInLine: z.number().int().nonnegative().max(10_000).optional().nullable(),
@@ -1116,16 +1096,11 @@ stepsRouter.put('/:id/costing', requirePermission('costing:read'), requirePermis
   const body = costingSchema.parse(req.body);
   const user = currentUser(req);
 
-  // A blank rate must not overwrite a good one: absent means "not answered",
-  // not "set it to nothing". Omitted from the update entirely, and left unset
-  // on create, so the sheet says it is waiting for one.
   const fields = stripLines(body);
-  const { dollarRate, costingDate, overrides, ...rest } =
-    fields as typeof fields & { dollarRate?: number };
+  const { costingDate, overrides, ...rest } = fields;
   const overrideField = overrides === undefined
     ? {}
     : { overrides: sanitiseOverrides(overrides) as Prisma.InputJsonValue };
-  const usableRate = typeof dollarRate === 'number' && dollarRate > 0 ? dollarRate : undefined;
   // Present-and-empty clears the date; absent leaves it alone. A field the
   // form did not send must not be wiped by the form not sending it.
   const dateField = costingDate === undefined
@@ -1134,14 +1109,8 @@ stepsRouter.put('/:id/costing', requirePermission('costing:read'), requirePermis
 
   await prisma.costingRecord.upsert({
     where: { orderId },
-    create: {
-      orderId, ...rest, ...dateField, ...overrideField,
-      ...(usableRate === undefined ? {} : { dollarRate: usableRate }),
-    },
-    update: {
-      ...rest, ...dateField, ...overrideField,
-      ...(usableRate === undefined ? {} : { dollarRate: usableRate }),
-    },
+    create: { orderId, ...rest, ...dateField, ...overrideField },
+    update: { ...rest, ...dateField, ...overrideField },
   });
 
   // A derived row the coordinator has edited or deleted must not come back. An

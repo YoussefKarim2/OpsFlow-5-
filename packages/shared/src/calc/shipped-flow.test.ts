@@ -78,7 +78,7 @@ describe('what a recorded consignment now moves', () => {
 
   test('the costing — unit cost, profit and the difference', () => {
     const costingInput = {
-      orderQty: 1000, cutQty: 1050, dollarRate: 48.5, dailyCostEgp: 1867,
+      orderQty: 1000, cutQty: 1050, dailyCostUsd: 1867,
       machineCount: 38, machineDaysUsed: 38, daysInLine: 11, sellPriceUsd: 10,
       lines: [{ group: 'FABRIC' as const, label: 'F', quantity: 100, unit: 'M', unitPriceUsd: 5 }],
     };
@@ -109,7 +109,7 @@ describe('what a recorded consignment now moves', () => {
     assert.equal(computeFunnel(PACKED, part).find((f) => f.ledger === QtyLedger.SHIPPED)!.qty, 600);
     const c = computeCosting({
       orderQty: 1000, cutQty: 1050, shippedQty: resolveShippedQty(PACKED, part),
-      dollarRate: 48.5, dailyCostEgp: null, machineCount: null, machineDaysUsed: null,
+      dailyCostUsd: null, machineCount: null, machineDaysUsed: null,
       daysInLine: null, sellPriceUsd: 10,
       lines: [{ group: 'FABRIC', label: 'F', quantity: 100, unit: 'M', unitPriceUsd: 5 }],
     });

@@ -33,11 +33,10 @@ const matrix = (rows: Array<{ color: string; cells: Record<string, number> }>, s
 describe('building a proforma from an extraction', () => {
   test('header fields come across whatever the document was', () => {
     const d = buildProformaDraft(base({
-      fields: { PO_NUMBER: 'PI-4471', CLIENT: 'Hummel', CURRENCY: 'eur', DESTINATION: 'Aarhus' },
+      fields: { PO_NUMBER: 'PI-4471', CLIENT: 'Hummel', DESTINATION: 'Aarhus' },
     }));
     assert.equal(d.number, 'PI-4471');
     assert.equal(d.consignee, 'Hummel');
-    assert.equal(d.currency, 'EUR');       // normalised
     assert.equal(d.shipmentTo, 'Aarhus');
   });
 
@@ -90,12 +89,12 @@ describe('building a proforma from an extraction', () => {
       fields: { UNIT_PRICE: 5.5 },
       matrices: [matrix([{ color: 'Red', cells: { S: 100, M: 50 } }], ['S', 'M'])],
     }));
-    assert.ok(d.issues.some((i) => /Every line was priced at 5.5/i.test(i.message)));
+    assert.ok(d.issues.some((i) => /Every line was priced at \$5.5/i.test(i.message)));
   });
 
   test('confidence is never HIGH, however clean the document', () => {
     const d = buildProformaDraft(base({
-      fields: { PO_NUMBER: 'PI-1', CLIENT: 'X', UNIT_PRICE: 2, CURRENCY: 'USD' },
+      fields: { PO_NUMBER: 'PI-1', CLIENT: 'X', UNIT_PRICE: 2 },
       matrices: [matrix([{ color: 'Red', cells: { S: 10 } }], ['S'])],
     }));
     assert.equal(d.confidence, 'MEDIUM');

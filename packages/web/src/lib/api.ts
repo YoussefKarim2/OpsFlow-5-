@@ -309,9 +309,8 @@ export interface CostLineDto {
 
 export interface CostingDto {
   costingDate: string | null;
-  /** Null until somebody enters one. */
-  dollarRate: number | null;
-  dailyCostEgp: number | null;
+  /** The factory's daily running cost, in dollars. */
+  dailyCostUsd: number | null;
   machineCount: number | null;
   machineDaysUsed: number | null;
   daysInLine: number | null;
@@ -376,7 +375,6 @@ export interface ProformaDto {
   shipmentFrom: string | null;
   shipmentTo: string | null;
   consolidatingVendor: string | null;
-  currency: string;
   terms: string | null;
   sentAt: string | null;
   lines: ProformaLineDto[];
@@ -911,7 +909,7 @@ export const api = {
         draft: {
           number: string | null; date: string | null; consignee: string | null;
           billingAddress: string | null; email: string | null; shipmentTo: string | null;
-          currency: string; terms: string | null;
+          terms: string | null;
           lines: Array<{ description: string; quantity: number | null; unit: string; unitPrice: number | null }>;
           confidence: 'HIGH' | 'MEDIUM' | 'LOW';
           issues: Array<{ level: string; message: string }>;

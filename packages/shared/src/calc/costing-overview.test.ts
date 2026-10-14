@@ -4,7 +4,7 @@ import { summariseCostingOverview, costingHeadlineReason, type CostingOverviewRo
 
 const row = (over: Partial<CostingOverviewRow>): CostingOverviewRow => ({
   orderId: 'o', poNumber: 'PO', orderName: 'n', clientName: 'c', status: 'IN_PRODUCTION', orderQty: 100, shippedQty: null,
-  hasRecord: false, costingDate: null, dollarRate: null, sellPriceUsd: null, fabricCostUsd: null, accessoryCostUsd: null,
+  hasRecord: false, costingDate: null, sellPriceUsd: null, fabricCostUsd: null, accessoryCostUsd: null,
   externalCostUsd: null, cmCostUsd: null, otherCostUsd: null, totalCostUsd: null, unitActualCostUsd: null,
   profitPerUnitUsd: null, profitPct: null, totalProfitUsd: null, isProfitable: null, waitingFor: null, ...over,
 });
