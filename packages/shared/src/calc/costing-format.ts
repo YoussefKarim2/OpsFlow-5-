@@ -8,7 +8,7 @@
  * nobody has supplied must say so rather than sit blank.
  */
 
-import { fmtMoney, fmtNumber, fmtPct } from './num.js';
+import { fmtMoney, fmtNumber, fmtPct, round } from './num.js';
 
 export type CellKind = 'money' | 'percent' | 'number' | 'text';
 
@@ -33,4 +33,26 @@ export function formatCell(
  */
 export function isTypeableNumber(text: string): boolean {
   return text === '' || /^-?\d*\.?\d*$/.test(text);
+}
+
+/**
+ * A calculated figure as it sits in a field while editing: plain digits a
+ * person can type over, rounded to what the sheet shows.
+ *
+ * The engine carries every figure at full precision, and an input showed it
+ * that way — "1.2093023255813" in a box captioned Machine Cost. What is read
+ * and what is typed over should be the same number, so the field holds the
+ * figure to the places the sheet prints (two, unless the field says
+ * otherwise); the engine's own figure is untouched underneath.
+ */
+export function editableText(
+  value: number | string | null | undefined,
+  kind: CellKind,
+  places?: number,
+): string {
+  if (value == null) return '';
+  if (kind === 'text') return typeof value === 'string' ? value : String(value);
+  const n = typeof value === 'number' ? value : Number(value);
+  const rounded = round(n, places ?? 2);
+  return rounded == null ? '' : String(rounded);
 }

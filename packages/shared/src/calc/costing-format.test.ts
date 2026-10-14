@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatCell, isTypeableNumber } from './costing-format.js';
+import { editableText, formatCell, isTypeableNumber } from './costing-format.js';
 
 describe('how a costing field reads at rest', () => {
   test('money, percentages and counts are formatted for reading', () => {
@@ -45,5 +45,24 @@ describe('what a numeric field lets through mid-typing', () => {
     for (const junk of ['abc', '1.2.3', '1-2', '$5', '1,000', '--1', 'e']) {
       assert.equal(isTypeableNumber(junk), false, `${JSON.stringify(junk)} should not be accepted`);
     }
+  });
+});
+
+describe('a calculated figure in a field being edited', () => {
+  test('is rounded to the places the sheet shows, as plain digits', () => {
+    assert.equal(editableText(1.2093023255813, 'money', 2), '1.21');
+    assert.equal(editableText(36.384615384615, 'number', 2), '36.38');
+    assert.equal(editableText(0.9069767441860, 'number', 2), '0.91');
+    assert.equal(editableText(-1.1248, 'percent'), '-1.12');
+  });
+
+  test('a count stays a count, and nothing is padded', () => {
+    assert.equal(editableText(1000, 'number'), '1000');
+    assert.equal(editableText(2.5, 'number', 2), '2.5');
+  });
+
+  test('nothing, and text, pass through', () => {
+    assert.equal(editableText(null, 'money'), '');
+    assert.equal(editableText('Kittrich', 'text'), 'Kittrich');
   });
 });

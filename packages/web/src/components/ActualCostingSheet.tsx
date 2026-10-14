@@ -29,7 +29,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Cloud, CloudOff, Download, Lock, Pencil, Plus, Printer, Trash2 } from 'lucide-react';
 import {
-  computeCosting, rowCost, applyRowEdit, sanitiseOverrides, visibleDerivedLines, outsideWorkKind,
+  computeCosting, rowCost, applyRowEdit, sanitiseOverrides, visibleDerivedLines, outsideWorkKind, editableText,
   fmtMoney, fmtNumber, fmtPct, NOT_CALCULATED,
   type CostLineInput, type CostingResult, type OrderDetailDto,
   type OverrideKey, type RowField,
@@ -119,13 +119,15 @@ const asWhole = (s: string): number | null | undefined => {
 function storedFrom(record: CostingDto | null): Stored {
   return {
     costingDate: record?.costingDate?.slice(0, 10) ?? '',
-    dailyCostUsd: numText(record?.dailyCostUsd),
+    // Money is held to two decimals, as the sheet shows it; a figure stored
+    // with more (a converted one, say) reads and saves as its rounded self.
+    dailyCostUsd: editableText(record?.dailyCostUsd, 'money'),
     machineCount: numText(record?.machineCount),
     lineMachineQty: numText(record?.lineMachineQty),
     daysInLine: numText(record?.daysInLine),
     machineDaysUsed: numText(record?.machineDaysUsed),
-    sublimationCostUsd: numText(record?.sublimationCostUsd),
-    embroideryCostUsd: numText(record?.embroideryCostUsd),
+    sublimationCostUsd: editableText(record?.sublimationCostUsd, 'money'),
+    embroideryCostUsd: editableText(record?.embroideryCostUsd, 'money'),
     notes: record?.notes ?? '',
   };
 }
@@ -1084,7 +1086,7 @@ function OutsideRow({
         <NumberCell
           editing={editing} value={value}
           display={cost == null ? '—' : fmtMoney(cost)}
-          placeholder={cost == null ? '' : String(cost)}
+          placeholder={cost == null ? '' : editableText(cost, 'money')}
           onChange={onChange}
         />
       </td>

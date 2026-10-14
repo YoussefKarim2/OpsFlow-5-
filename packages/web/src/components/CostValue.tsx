@@ -18,7 +18,7 @@
  */
 
 import { RotateCcw } from 'lucide-react';
-import { formatCell, isTypeableNumber, NOT_CALCULATED, type CellKind } from '@opsflow/shared';
+import { editableText, formatCell, isTypeableNumber, NOT_CALCULATED, type CellKind } from '@opsflow/shared';
 import { clsx } from './ui';
 
 /**
@@ -84,7 +84,7 @@ export function CostField({
                 // like a blank waiting to be filled in.
                 tone !== 'input' && !overridden && 'border-dashed border-ink-200 bg-ink-50/60',
                 overridden && 'border-violet-400 bg-violet-50 pr-8 text-violet-900')}
-              value={value !== '' ? value : calculated == null ? '' : String(calculated)}
+              value={value !== '' ? value : editableText(calculated, kind, places)}
               placeholder={unknown ? waiting ?? NOT_CALCULATED : ''}
               onChange={(e) => {
                 const next = e.target.value;
@@ -216,7 +216,7 @@ export function CostCell({
         className={clsx('input tnum px-1.5 py-1 text-right text-xs',
           // Room for the revert arrow only when there is one to make room for.
           overridden && 'border-violet-400 bg-violet-50 pr-6 text-violet-900', className)}
-        value={value !== '' ? value : calculated == null ? '' : String(calculated)}
+        value={value !== '' ? value : editableText(calculated, kind, places)}
         placeholder={shown === NOT_CALCULATED ? NOT_CALCULATED : ''}
         onChange={(e) => { if (isTypeableNumber(e.target.value)) onChange(e.target.value); }}
       />
@@ -289,7 +289,9 @@ export function NumberCell({
         derived && 'border-dashed bg-ink-50 text-ink-600')}
       type="text"
       inputMode="decimal"
-      value={value}
+      // A figure the row worked out is shown to two decimals, like everything
+      // else on the sheet; a figure the person typed is shown as they typed it.
+      value={derived && value !== '' ? editableText(value, 'number', 2) : value}
       placeholder={placeholder}
       title={derived ? 'Calculated from the other two figures on this row — type here to set it yourself' : undefined}
       onChange={(e) => { if (isTypeableNumber(e.target.value)) onChange(e.target.value); }}
