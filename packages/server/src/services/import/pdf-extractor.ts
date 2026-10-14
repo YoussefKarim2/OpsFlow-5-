@@ -981,7 +981,9 @@ export async function extractFromPdf(
     const measured = names.filter((n) => MEASUREMENT_ROW.test(n));
     if (measured.length > 0 && measured.length * 2 >= names.length) {
       issues.push({
-        level: 'WARNING', field: null, sheet: null, cell: null,
+        // `documentKind`: this file is not a purchase order. The attach-fill
+        // reads that field and leaves the order alone.
+        level: 'WARNING', field: 'documentKind', sheet: null, cell: null,
         message: `The rows read are named ${measured.slice(0, 4).join(', ')} — those are garment measurements, as on a size chart or tech pack, not the colours of an order. `
           + 'Check that this document is a purchase order before importing: the figures under the sizes would be measurements, not pieces.',
       });

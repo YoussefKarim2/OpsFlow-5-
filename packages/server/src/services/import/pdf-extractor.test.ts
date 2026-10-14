@@ -666,7 +666,7 @@ describe('one file, one order', () => {
         ],
       }],
     });
-    assert.ok(r.issues.some((i) => /garment measurements/.test(i.message) && /Chest, Sleeve/.test(i.message)));
+    assert.ok(r.issues.some((i) => /garment measurements/.test(i.message) && /Chest, Sleeve/.test(i.message) && i.field === 'documentKind'), 'and it is marked as not a purchase order');
   });
 
   test('"ORDER CONFIRMATION ref 77-06" yields the number 77-06', async () => {

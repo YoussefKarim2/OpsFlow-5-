@@ -600,3 +600,24 @@ describe('a sheet written one block per style', () => {
     assert.equal(m.computedTotal, 208);
   });
 });
+
+describe('a CSV saved with semicolons', () => {
+  test('is read like one saved with commas', async () => {
+    const r = await extractTabular(Buffer.from('PO Number;Colour;Size;Qty\nGEN-C1;Green;S;120\nGEN-C1;Green;M;240\n', 'utf8'));
+    const m = r.matrices.find((x) => x.ledger === 'ORDER')!;
+    assert.equal(m.computedTotal, 360);
+    assert.equal(r.fields.poNumber, 'GEN-C1');
+  });
+
+  test('a tab-separated one too', async () => {
+    const r = await extractTabular(Buffer.from('Colour\tSize\tQty\nRed\tS\t5\n', 'utf8'));
+    assert.equal(r.matrices.find((x) => x.ledger === 'ORDER')!.computedTotal, 5);
+  });
+
+  test('a waist column is the sizes of a trouser order', async () => {
+    const r = await extractTabular(await buildWorkbook([{ name: 'S', rows: [['PO', 'Colour', 'Waist', 'Pieces'], ['GEN-N1', 'Black', 32, 50], ['GEN-N1', 'Black', 28, 20], ['GEN-N1', 'Black', 30, 40]] }]));
+    const m = r.matrices.find((x) => x.ledger === 'ORDER')!;
+    assert.equal(m.computedTotal, 110);
+    assert.deepEqual(m.sizes, ['28', '30', '32']);
+  });
+});

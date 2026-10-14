@@ -84,6 +84,10 @@ export async function fillMainOrderFromDocuments(
     const matrix = extraction.matrices.find((m) => m.ledger === 'ORDER');
     const pieces = matrix ? matrix.rows.reduce((a, r) => a + Object.values(r.cells).reduce((b, q) => b + (q > 0 ? q : 0), 0), 0) : 0;
     if (!matrix || pieces === 0) continue;
+    // A tech pack or a laying sheet reads as a grid of numbers too. The
+    // readers say when a file is not a purchase order; filed as one by
+    // mistake, it must not become 370 "pieces" called Chest and Sleeve.
+    if (extraction.issues.some((i) => i.field === 'documentKind')) continue;
     const docPo = extraction.fields.poNumber == null ? null : String(extraction.fields.poNumber);
     if (!src.trusted && !samePo(docPo, order?.poNumber)) {
       otherPo = docPo ?? otherPo;

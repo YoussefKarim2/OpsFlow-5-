@@ -37,7 +37,7 @@ import type { ExtractionResult, ExtractedMatrix } from './extractor.js';
 import { detectFileKind } from './file-kind.js';
 import { cellText, toNumber, toDate, buildLineItems, parseFieldOverride } from './extractor.js';
 import { toIsoDayOrNull } from '@opsflow/shared';
-import { loadWorkbook } from './open-workbook.js';
+import { loadWorkbook, readCsvWorkbook } from './open-workbook.js';
 import { readAgeLayingSheet } from './age-laying-reader.js';
 import { orderSizes } from './po-lines.js';
 
@@ -592,9 +592,9 @@ export async function extractTabular(
   // here rather than converting it upstream means CSV support costs one branch
   // instead of a second pipeline.
   if (detectFileKind(buffer) === 'csv') {
-    const { Readable } = await import('node:stream');
-    await wb.csv.read(Readable.from(buffer.toString('utf8')));
-    if (wb.worksheets.length > 0 && !wb.worksheets[0]!.name) wb.worksheets[0]!.name = 'CSV';
+    // One reader for every CSV, which also decides the delimiter.
+    const csv = await readCsvWorkbook(buffer);
+    for (const ws of csv.worksheets) wb.addWorksheet(ws.name).addRows(ws.getSheetValues().slice(1).map((r) => (Array.isArray(r) ? r.slice(1) : [])));
   } else {
     // Same clear message as everywhere else a workbook is opened.
     await loadWorkbook(wb, buffer);
@@ -618,7 +618,7 @@ export async function extractTabular(
     try { laying = readAgeLayingSheet(sheet) != null; } catch { /* not one */ }
     if (!laying) continue;
     issues.push({
-      level: 'WARNING', field: null, sheet: sheet.name, cell: null,
+      level: 'WARNING', field: 'documentKind', sheet: sheet.name, cell: null,
       message: `"${sheet.name}" is a laying & marking sheet (lays, layers and panels), not a purchase order. `
         + "Import it from the order's Laying & Marker screen; importing it here would create an order whose colours are panel names.",
     });

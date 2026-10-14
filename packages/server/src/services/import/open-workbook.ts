@@ -40,11 +40,28 @@ export async function openWorkbook(buffer: Buffer): Promise<ExcelJS.Workbook> {
 export async function readCsvWorkbook(buffer: Buffer): Promise<ExcelJS.Workbook> {
   const wb = new ExcelJS.Workbook();
   const { Readable } = await import('node:stream');
+  const text = buffer.toString('utf8');
   try {
-    await wb.csv.read(Readable.from(buffer.toString('utf8')));
+    await wb.csv.read(Readable.from(text), { parserOptions: { delimiter: csvDelimiter(text) } });
   } catch {
     throw new BadRequestError('This CSV could not be read — check it is a plain comma-separated file.');
   }
   if (wb.worksheets.length > 0 && !wb.worksheets[0]!.name) wb.worksheets[0]!.name = 'CSV';
   return wb;
+}
+
+/**
+ * The character that separates a CSV's columns.
+ *
+ * Excel saves a CSV with semicolons wherever the decimal separator is a comma
+ * — most of Europe — and the file is still called a CSV. Read with commas it
+ * was one column wide, and "no table could be found". Decided from the header
+ * line: whichever of semicolon, tab and comma splits it into the most fields.
+ */
+export function csvDelimiter(text: string): ',' | ';' | '\t' {
+  const head = text.split(/\r?\n/).find((l) => l.trim() !== '') ?? '';
+  const count = (ch: string) => head.split(ch).length - 1;
+  const candidates: Array<[',' | ';' | '\t', number]> = [[',', count(',')], [';', count(';')], ['\t', count('\t')]];
+  candidates.sort((a, b) => b[1] - a[1]);
+  return candidates[0]![1] > 0 ? candidates[0]![0] : ',';
 }

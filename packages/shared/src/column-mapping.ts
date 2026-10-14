@@ -213,7 +213,7 @@ export const CONCEPT_SYNONYMS: Record<ImportConcept, readonly string[]> = {
     'color', 'colour', 'shade', 'colorway', 'colourway', 'color name', 'colour name',
     'color code', 'colour code', 'col', 'shade name',
   ],
-  SIZE: ['size', 'sizes', 'size name', 'size code', 'sz', 'size range', 'garment size'],
+  SIZE: ['size', 'sizes', 'size name', 'size code', 'sz', 'size range', 'garment size', 'waist', 'waist size', 'size/waist'],
   QUANTITY: [
     'qty', 'quantity', 'pcs', 'pieces', 'piece', 'order qty', 'order quantity',
     'total qty', 'total quantity', 'qty pcs', 'no of pcs', 'number of pieces',

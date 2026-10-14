@@ -48,7 +48,9 @@ export class DbStorageDriver implements StorageDriver {
   }
 
   async delete(key: string): Promise<void> {
-    await prisma.storedFile.delete({ where: { key } }).catch(() => undefined);
+    // Idempotent: a key already gone is not an error, and `delete` of a
+    // missing row logs one through Prisma even when the call is caught.
+    await prisma.storedFile.deleteMany({ where: { key } });
   }
 
   async exists(key: string): Promise<boolean> {

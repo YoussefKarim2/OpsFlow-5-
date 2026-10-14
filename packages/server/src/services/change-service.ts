@@ -108,7 +108,10 @@ async function recordChanges(folded: FoldedChange[], ctx: RequestContext): Promi
           subject,
           summary,
           priority: priority as never,
-          orderId: change.orderId,
+          // The order a deletion was about is gone by the time this is
+          // written; an event pointing at it failed the foreign key and was
+          // lost. It keeps its summary and stands alone.
+          orderId: order ? change.orderId : null,
           actorId: ctx.userId,
           actorName: ctx.userName,
           link,
@@ -141,7 +144,7 @@ async function recordChanges(folded: FoldedChange[], ctx: RequestContext): Promi
         await prisma.notification.createMany({
           data: inAppRecipients.map((r) => ({
             userId: r.id,
-            orderId: change.orderId,
+            orderId: order ? change.orderId : null,
             changeEventId: event.id,
             type: notificationType as never,
             priority: priority as never,
@@ -281,7 +284,10 @@ export async function announceChange(input: {
         subject: input.subject ?? null,
         summary: input.summary,
         priority: priority as never,
-        orderId: input.orderId ?? null,
+        // An order deleted between the change and its announcement has no row
+        // to point at; the event keeps its summary and link and stands alone,
+        // rather than failing the write on a foreign key.
+        orderId: order ? input.orderId ?? null : null,
         actorId: input.actorId,
         actorName: input.actorName,
         link: input.link ?? null,
@@ -301,7 +307,7 @@ export async function announceChange(input: {
       await prisma.notification.createMany({
         data: inAppRecipients.map((r) => ({
           userId: r.id,
-          orderId: input.orderId ?? null,
+          orderId: order ? input.orderId ?? null : null,
           changeEventId: event.id,
           type: notificationType as never,
           priority: priority as never,
