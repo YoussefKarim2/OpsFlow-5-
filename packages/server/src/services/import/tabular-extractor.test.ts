@@ -621,3 +621,56 @@ describe('a CSV saved with semicolons', () => {
     assert.deepEqual(m.sizes, ['28', '30', '32']);
   });
 });
+
+describe('workbooks from the third round of documents', () => {
+  test('group headings above the sizes make "Youth S" and "Adult S" two sizes', async () => {
+    const r = await extractTabular(await buildWorkbook([{ name: 'Order', rows: [
+      ['PO Number:', 'MG-1'], [], ['', 'Youth', '', '', 'Adult', '', ''],
+      ['Colour', 'S', 'M', 'L', 'S', 'M', 'L'], ['Navy', 10, 20, 30, 40, 50, 60],
+    ] }]));
+    const m = r.matrices.find((x) => x.ledger === 'ORDER')!;
+    assert.deepEqual(m.sizes, ['Youth S', 'Youth M', 'Youth L', 'Adult S', 'Adult M', 'Adult L']);
+    assert.equal(m.computedTotal, 210);
+  });
+
+  test('a bill of materials under the grid is not more colours', async () => {
+    const r = await extractTabular(await buildWorkbook([{ name: 'Order', rows: [
+      ['PO Number:', 'BB-6'], [], ['Colour', 'S', 'M', 'L'], ['Navy', 10, 20, 30], [], [],
+      ['Bill of materials'], ['Item', 'Unit', 'Required'], ['Jersey fabric', 'MET', 120],
+    ] }]));
+    const m = r.matrices.find((x) => x.ledger === 'ORDER')!;
+    assert.deepEqual(m.rows.map((row) => row.color), ['Navy']);
+    assert.equal(m.computedTotal, 60);
+  });
+
+  test('Arabic headings are read', async () => {
+    const r = await extractTabular(await buildWorkbook([{ name: 'طلب', rows: [
+      ['رقم الطلب', 'اللون', 'المقاس', 'الكمية'], ['AR-7', 'كحلي', 'S', 40], ['AR-7', 'أحمر', 'M', 60],
+    ] }]));
+    const m = r.matrices.find((x) => x.ledger === 'ORDER')!;
+    assert.equal(r.fields.poNumber, 'AR-7');
+    assert.deepEqual(m.rows.map((row) => row.color), ['كحلي', 'أحمر']);
+    assert.equal(m.computedTotal, 100);
+  });
+
+  test('a grid on its side in a workbook', async () => {
+    const r = await extractTabular(await buildWorkbook([{ name: 'Order', rows: [
+      ['PO Number:', 'TR-2'], [], ['Size', 'Navy', 'Red'], ['S', 100, 50], ['M', 150, 80], ['Total', 250, 130],
+    ] }]));
+    const m = r.matrices.find((x) => x.ledger === 'ORDER')!;
+    assert.deepEqual(m.rows.map((row) => row.color), ['Navy', 'Red']);
+    assert.equal(m.computedTotal, 380);
+  });
+
+  test('a sheet of 450 rows is read whole', async () => {
+    const rows: unknown[][] = [['PO Number', 'Colour', 'Size', 'Qty']];
+    for (let i = 1; i <= 450; i++) rows.push(['MR-5', `Colour ${i}`, 'M', 1]);
+    const r = await extractTabular(await buildWorkbook([{ name: 'Order', rows }]));
+    assert.equal(r.matrices.find((x) => x.ledger === 'ORDER')!.computedTotal, 450);
+  });
+
+  test('"275 pcs" in a cell is 275', async () => {
+    const r = await extractTabular(await buildWorkbook([{ name: 'Order', rows: [['PO Number', 'Colour', 'Size', 'Pcs'], ['U-1', 'Navy', 'M', '275 pcs']] }]));
+    assert.equal(r.matrices.find((x) => x.ledger === 'ORDER')!.computedTotal, 275);
+  });
+});

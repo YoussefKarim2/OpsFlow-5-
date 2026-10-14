@@ -714,3 +714,71 @@ describe('one file, one order', () => {
     assert.deepEqual(r.matrices.find((m) => m.ledger === 'ORDER')!.sizes, ['M', 'L', 'XL']);
   });
 });
+
+describe('layouts from the third round of documents', () => {
+  const page = (items: ReturnType<typeof at>[]) => ({ reader: async () => [{ pageNumber: 1, items }] });
+
+  test('a printed piece count under the grid ends it and is never a colour', async () => {
+    const r = await extractFromPdf(Buffer.alloc(0), page([
+      at('PO Number:', 40, 760), at('TP-1', 130, 760),
+      at('Colour', 40, 700), at('S', 200, 700), at('M', 260, 700), at('L', 320, 700), at('Quantity', 400, 700),
+      at('Navy', 40, 680), at('10', 200, 680), at('20', 260, 680), at('30', 320, 680), at('60', 400, 680),
+      at('Pieces', 40, 640), at('60', 200, 640),
+    ]));
+    const m = r.matrices.find((x) => x.ledger === 'ORDER')!;
+    assert.deepEqual(m.rows.map((row) => row.color), ['Navy']);
+    assert.equal(m.computedTotal, 60);
+  });
+
+  test('numbers written the European way are read as the document means them', async () => {
+    const r = await extractFromPdf(Buffer.alloc(0), page([
+      at('PO Number:', 40, 760), at('EU-1', 130, 760),
+      at('Colour', 40, 700), at('Size', 200, 700), at('Quantity', 300, 700), at('Unit price', 400, 700),
+      at('Navy', 40, 680), at('M', 200, 680), at('1.200', 300, 680), at('4,50', 400, 680),
+      at('Navy', 40, 660), at('L', 200, 660), at('800', 300, 660), at('4,50', 400, 660),
+      at('Pieces', 40, 620), at('2.000', 130, 620),
+    ]));
+    const m = r.matrices.find((x) => x.ledger === 'ORDER')!;
+    assert.equal(m.computedTotal, 2000);
+    assert.deepEqual(m.rows[0]!.cells, { M: 1200, L: 800 });
+    assert.equal(r.fields.pricePerPieceUsd, 4.5);
+  });
+
+  test('English numbers are left alone', async () => {
+    const r = await extractFromPdf(Buffer.alloc(0), page([
+      at('PO Number:', 40, 760), at('EN-1', 130, 760),
+      at('Colour', 40, 700), at('Size', 200, 700), at('Quantity', 300, 700), at('Unit price', 400, 700),
+      at('Navy', 40, 680), at('M', 200, 680), at('1,200', 300, 680), at('4.50', 400, 680),
+    ]));
+    assert.equal(r.matrices.find((x) => x.ledger === 'ORDER')!.computedTotal, 1200);
+    assert.equal(r.fields.pricePerPieceUsd, 4.5);
+  });
+
+  test('a grid on its side: sizes down the first column, a column per colour', async () => {
+    const r = await extractFromPdf(Buffer.alloc(0), page([
+      at('PO Number:', 40, 760), at('TR-1', 130, 760),
+      at('Size', 40, 700), at('Navy', 200, 700), at('Red', 300, 700), at('White', 400, 700),
+      at('S', 40, 680), at('100', 200, 680), at('50', 300, 680), at('20', 400, 680),
+      at('M', 40, 660), at('150', 200, 660), at('80', 300, 660), at('30', 400, 660),
+      at('L', 40, 640), at('120', 200, 640), at('60', 300, 640), at('10', 400, 640),
+      at('Total pieces', 40, 610), at('620', 200, 610),
+    ]));
+    const m = r.matrices.find((x) => x.ledger === 'ORDER')!;
+    assert.deepEqual(m.rows.map((row) => row.color), ['Navy', 'Red', 'White']);
+    assert.deepEqual(m.sizes, ['S', 'M', 'L']);
+    assert.equal(m.computedTotal, 620);
+    assert.ok(r.issues.some((i) => /turned on its side/.test(i.message)));
+    assert.equal(r.issues.filter((i) => /looks like (color|quantity)/.test(i.message)).length, 0, 'no missing-column warnings for a grid with no such columns');
+  });
+
+  test('"P.O. No.:" is the PO number, and "275 pcs" under Pcs is a quantity', async () => {
+    const r = await extractFromPdf(Buffer.alloc(0), page([
+      at('P.O. No.:', 40, 760), at('LV-303', 130, 760),
+      at('Shade', 40, 700), at('Sz', 200, 700), at('Pcs', 300, 700),
+      at('Scarlet', 40, 680), at('M', 200, 680), at('275 pcs', 300, 680),
+      at('Sky Blue', 40, 660), at('L', 200, 660), at('450 pcs', 300, 660),
+    ]));
+    assert.equal(r.fields.poNumber, 'LV-303');
+    assert.equal(r.matrices.find((x) => x.ledger === 'ORDER')!.computedTotal, 725);
+  });
+});

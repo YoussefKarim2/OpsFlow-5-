@@ -113,6 +113,12 @@ const QTY_WORDS = /^(quantity|qty|pcs|pieces|units|total\s*qty|total\s*pcs|order
 const PRICE_WORDS = /^(price|unit\s*price|fob|fob\s*price|rate|unit\s*cost|cost|price\/pc)$/i;
 const TOTAL_WORDS = /^(total|amount|value|line\s*total|total\s*amount|total\s*value|ext\.?\s*price|extended)$/i;
 const ROW_TOTAL = /^(total|totals|sub\s*total|subtotal|sum|grand\s*total)\b/i;
+/**
+ * The document's own piece count, printed under the grid — "Pieces 105",
+ * "Total pieces 620". It ends the grid like a Total line does; read as a colour
+ * it doubled the order and the grid lost to a reading that had read less.
+ */
+const PIECES_LINE = /^(pieces|total\s*pieces|total\s*pcs|total\s*qty|total\s*quantity|total\s*units|qty\s*total|quantity\s*total|grand\s*total\s*qty|total\s*no\.?\s*of\s*pcs)\s*:?$/i;
 
 /**
  * The cells of a line split into single words, each with the span it took.
@@ -239,7 +245,7 @@ export function readSizeGrids(lines: readonly GridLine[]): GridBlock[] {
       const line = lines[i]!;
       if (line.page !== page) break;
       const label = line.cells.find((c) => c.end <= firstSizeX + 2)?.text.trim() ?? '';
-      if (ROW_TOTAL.test(label)) { totalLine = line; break; }
+      if (ROW_TOTAL.test(label) || PIECES_LINE.test(label)) { totalLine = line; break; }
       // A new style title ends the grid.
       if (STYLE_TITLE.test(line.cells.map((c) => c.text).join(' ').trim()) && !line.cells.some((c) => pieces(c.text) != null && c.x >= firstSizeX)) break;
       body.push(line);

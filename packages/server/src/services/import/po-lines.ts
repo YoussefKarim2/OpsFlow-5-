@@ -318,7 +318,7 @@ function normaliseUnit(u: string): string {
 
 // ── Header ──────────────────────────────────────────────────────────────────
 
-const PO_LABELS = ['order number', 'po number', 'po no', 'po #', 'po', 'purchase order', 'purchase order number', 'order no', 'order #', 'p.o. number', 'p.o. no'];
+const PO_LABELS = ['order number', 'po number', 'po no', 'po no.', 'po #', 'po', 'purchase order', 'purchase order number', 'order no', 'order no.', 'order #', 'p.o. number', 'p.o. no', 'p.o. no.', 'p.o.', 'p.o. #', 'p.o number', 'p.o no'];
 const ORDER_DATE_LABELS = ['ordered', 'order date', 'po date', 'date ordered', 'issue date', 'date of order'];
 const DELIVERY_LABELS = ['requested', 'request date', 'requested delivery', 'delivery date', 'required date', 'due date', 'need by', 'deliver by', 'ship by', 'ex factory', 'ex-factory'];
 const SHIP_TO_LABELS = ['ship to', 'deliver to', 'delivery address', 'consignee', 'ship-to'];

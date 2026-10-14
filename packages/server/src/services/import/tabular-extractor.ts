@@ -64,7 +64,10 @@ function rawValue(cell: ExcelJS.Cell | undefined): unknown {
   return v;
 }
 
-const MAX_SCAN_ROWS = 400;
+// A customer order can run to hundreds of rows — 450 was cut to 399 colours at
+// the old limit of 400 with no word said. Five thousand covers any order, and
+// a sheet longer than that is reported rather than silently shortened.
+const MAX_SCAN_ROWS = 5000;
 const MAX_SCAN_COLS = 60;
 
 /**
@@ -193,6 +196,24 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
   headers.length = lastPopulated;
   columns.length = lastPopulated;
 
+  // Group headings above the sizes. A grid with "Youth" over S M L and
+  // "Adult" over the next S M L — merged cells, or the word in the first
+  // column of each group — has six sizes, not three repeated: the heading
+  // the row above gives each column is carried down into the size label.
+  if (headerRowIndex > 1) {
+    const sizeLabels = headers.filter((h) => h && looksLikeSize(h)).map((h) => h.toLowerCase());
+    const repeated = new Set(sizeLabels).size < sizeLabels.length;
+    if (repeated) {
+      const above = sheet.getRow(headerRowIndex - 1);
+      let group = '';
+      for (let i = 0; i < headers.length; i++) {
+        const g = String(cellText(rawValue(above.getCell(columns[i]!)))).trim();
+        if (g) group = g;
+        if (group && headers[i] && looksLikeSize(headers[i]!) && !/^\d+$/.test(g) && group.length <= 20) headers[i] = `${group} ${headers[i]}`;
+      }
+    }
+  }
+
   const rows: unknown[][] = [];
   let blankRun = 0;
   const last = Math.min(sheet.rowCount || MAX_SCAN_ROWS, MAX_SCAN_ROWS);
@@ -220,6 +241,11 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
     if (populated === 0) {
       // A gap is normal in a hand-maintained sheet; ten in a row is the end.
       if (++blankRun >= 10) break;
+      // A gap and then a title — one cell of words, "Bill of materials" — is
+      // the start of another table, not more of this one. Its rows were read
+      // as colours called "Jersey fabric" and "Thread".
+      const next = nextPopulated(sheet, r + 1, Math.min(r + 10, last), columns);
+      if (next && next.populated === 1 && next.firstText && toNumber(next.firstText) == null && !repeats.has(next.row)) break;
       continue;
     }
     blankRun = 0;
@@ -245,6 +271,16 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
     rows,
     score: scoreTable(headers, rows),
   };
+}
+
+/** The next row with anything in it, and what it holds. */
+function nextPopulated(sheet: ExcelJS.Worksheet, from: number, to: number, columns: number[]): { row: number; populated: number; firstText: string } | null {
+  for (let r = from; r <= to; r++) {
+    const row = sheet.getRow(r);
+    const texts = columns.map((c) => String(cellText(rawValue(row.getCell(c)))).trim()).filter((t) => t !== '');
+    if (texts.length > 0) return { row: r, populated: texts.length, firstText: texts[0]! };
+  }
+  return null;
 }
 
 /** "Total", "Grand total", "Subtotal", "Sum" — a row that restates the others. */
@@ -307,8 +343,9 @@ const SPELLED_SIZES = new Set([
   'onesize', 'freesize',
 ]);
 
-function looksLikeSize(header: string): boolean {
-  const h = normaliseHeader(header).replace(/\s+/g, '');
+export function looksLikeSize(header: string): boolean {
+  // "Youth S", "Adult XL": the group names who it is for; the size is the rest.
+  const h = normaliseHeader(header).replace(/^(youth|yth|adult|adt|kids?|children|junior|jr|mens?|womens?|ladies|boys|girls|infant|toddler)\s+/, '').replace(/\s+/g, '');
   if (!h) return false;
   if (SPELLED_SIZES.has(h.replace(/-/g, ''))) return true;
   if (h.length > 6) return false;
@@ -443,6 +480,11 @@ function buildWideMatrix(ctx: BuildContext, sizeColumns: Array<{ index: number; 
 
     const cells: Record<string, number> = {};
     let total = 0;
+    // Words under the sizes mean the grid has ended and another table begun
+    // — a bill of materials below the order, its units under S and M. Its
+    // rows were read as colours called "Jersey fabric" and "Thread".
+    const wordy = sizeColumns.some((s) => { const v = row[s.index]; return v != null && String(cellText(v)).trim() !== '' && toNumber(v) == null; });
+    if (wordy) continue;
     for (const s of sizeColumns) {
       const qty = toNumber(row[s.index]);
       if (qty != null && qty > 0) { cells[s.name] = qty; total += qty; }
@@ -669,14 +711,25 @@ export async function extractTabular(
 
   const sizeColumns = detectSizeColumns(chosen.headers, chosen.rows);
   const hasSizeColumn = columns.some((c) => c.concept === ImportConcept.SIZE);
-  const layout: TabularAnalysis['layout'] =
+  let layout: TabularAnalysis['layout'] =
     hasSizeColumn ? 'LONG' : sizeColumns.length >= 2 ? 'WIDE' : 'UNKNOWN';
 
   const ctx: BuildContext = { table: chosen, analyses: columns, issues };
-  const matrix =
+  let matrix =
     layout === 'LONG' ? buildLongMatrix(ctx)
     : layout === 'WIDE' ? buildWideMatrix(ctx, sizeColumns)
     : null;
+  // Sizes down the side and colours across: the grid turned on its side.
+  if (!matrix) {
+    matrix = buildTransposedMatrix(chosen.headers, chosen.rows);
+    if (matrix) {
+      layout = 'WIDE';
+      issues.push({
+        level: 'INFO', field: null, sheet: chosen.sheetName, cell: null,
+        message: `Read as a size grid turned on its side: one row per size (${matrix.sizes.join(', ')}) and one column per colour.`,
+      });
+    }
+  }
 
   if (layout === 'WIDE') {
     issues.push({
@@ -861,4 +914,33 @@ function emptyResult(
     issues,
     analysis,
   };
+}
+
+/**
+ * A grid turned on its side: sizes down the first column, one column per
+ * colour, numbers in the cells. Rare, but a real customer wrote one, and read
+ * the usual way it was one colour called "As ordered" with a size of "120".
+ *
+ * Taken only when it is unmistakable: at least two rows whose first cell is a
+ * size, at least two further columns headed by something that is not a size
+ * and holding numbers under those rows. A "Total" row is left out.
+ */
+export function buildTransposedMatrix(headers: readonly string[], rows: readonly unknown[][]): ExtractedMatrix | null {
+  const sizeRows = rows
+    .map((r, i) => ({ r, i, label: String(cellText(r[0])).trim() }))
+    .filter(({ label }) => label && looksLikeSize(label) && !isTotalsLabel(label));
+  if (sizeRows.length < 2) return null;
+  const colourCols = headers
+    .map((h, i) => ({ h: (h ?? '').trim(), i }))
+    .filter(({ h, i }) => i > 0 && h && !looksLikeSize(h) && toNumber(h) == null && !isTotalsLabel(h))
+    .filter(({ i }) => sizeRows.filter(({ r }) => toNumber(r[i]) != null).length >= Math.ceil(sizeRows.length * 0.8));
+  if (colourCols.length < 2) return null;
+  const sizes = sizeRows.map(({ label }) => label);
+  const out = colourCols.map(({ h, i }) => {
+    const cells: Record<string, number> = {};
+    for (const { r, label } of sizeRows) { const q = toNumber(r[i]); if (q != null && q > 0) cells[label] = (cells[label] ?? 0) + q; }
+    return { color: h, cells, total: Object.values(cells).reduce((a, b) => a + b, 0) };
+  }).filter((row) => row.total > 0);
+  if (out.length === 0) return null;
+  return { ledger: 'ORDER', sizes, rows: out, sheetTotal: null, computedTotal: out.reduce((a, r) => a + r.total, 0) };
 }

@@ -31,11 +31,31 @@ import type { ImportIssue, ImportSheetInfo } from '@opsflow/shared';
 import { BadRequestError } from '../../errors.js';
 import type { ExtractionResult } from './extractor.js';
 import { toDate, buildLineItems } from './extractor.js';
-import { detectSizeColumns } from './tabular-extractor.js';
+import { detectSizeColumns, buildTransposedMatrix } from './tabular-extractor.js';
 import { readPoLines, readPoHeader, poLinesToOrder, detectDayFirst, findBoilerplate, orderSizes, type PoTextLine } from './po-lines.js';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { readSizeGrids, gridsToOrder, readPrintedPieces, type GridLine } from './size-grid.js';
+
+/**
+ * Rewrite a document's numbers from "1.200,50" to "1200.50" when it writes
+ * them that way. Decided over the whole document: the style with more
+ * tokens wins, and nothing is touched when neither appears or they tie.
+ * Dates ("01.10.2026") and barcodes do not match either pattern.
+ */
+export function normaliseEuropeanNumbers(pages: Array<Array<{ cells: Array<{ text: string }> }>>): boolean {
+  const EURO = /^\d{1,3}(\.\d{3})+(,\d{1,2})?$|^\d+,\d{1,2}$/;
+  const ANGLO = /^\d{1,3}(,\d{3})+(\.\d{1,2})?$|^\d+\.\d{1,2}$/;
+  let euro = 0, anglo = 0;
+  for (const page of pages) for (const line of page) for (const cell of line.cells) {
+    for (const tok of cell.text.split(/\s+/)) { if (EURO.test(tok)) euro++; else if (ANGLO.test(tok)) anglo++; }
+  }
+  if (euro === 0 || euro <= anglo) return false;
+  for (const page of pages) for (const line of page) for (const cell of line.cells) {
+    cell.text = cell.text.replace(/\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?|\d+,\d{1,2}/g, (t) => t.replace(/\./g, '').replace(',', '.'));
+  }
+  return true;
+}
 
 /** Row names that are body or garment measurements rather than colours. */
 const MEASUREMENT_ROW = /^(chest|bust|sleeve|sleeve\s*length|length|body\s*length|front\s*length|back\s*length|waist|hip|hips|hem|sweep|shoulder|across\s*shoulder|neck|collar|inseam|outseam|cuff|armhole|bicep|rise|thigh|bottom|opening)\b/i;
@@ -71,10 +91,16 @@ export function toNum(v: string | undefined): number | null {
   if (t === '' || t === '-') return null;
   const lastComma = t.lastIndexOf(',');
   const lastDot = t.lastIndexOf('.');
-  if (lastComma > lastDot) {
-    t = t.replace(/\./g, '').replace(',', '.');       // 1.234,56
-  } else {
-    t = t.replace(/,/g, '');                          // 1,234.56
+  if (lastComma >= 0 && lastDot >= 0) {
+    // Both present: whichever comes last is the decimal mark.
+    t = lastComma > lastDot ? t.replace(/\./g, '').replace(',', '.') : t.replace(/,/g, '');
+  } else if (lastComma >= 0) {
+    // Only commas. One comma with other than three digits after it is a
+    // decimal ("4,50"); otherwise they are thousands ("1,200" — which read as
+    // 1.2 pieces before this).
+    const decimals = t.length - lastComma - 1;
+    const commas = (t.match(/,/g) ?? []).length;
+    t = commas === 1 && decimals !== 3 ? t.replace(',', '.') : t.replace(/,/g, '');
   }
   const n = Number(t);
   return Number.isFinite(n) ? n : null;
@@ -406,6 +432,14 @@ export async function extractFromPdf(
     return { page, lines };
   });
 
+  // ── Numbers the European way ───────────────────────────────────────────
+  //
+  // "1.200" pieces at "4,50" each, "5.400,00" in total: a point for thousands
+  // and a comma for decimals. Read as English they are 1.2 pieces at 450. The
+  // document decides, by which style it uses more, and every cell is rewritten
+  // once before any reader sees it.
+  normaliseEuropeanNumbers(byPage.map((p) => p.lines));
+
   // ── One file, one order ─────────────────────────────────────────────────
   //
   // An ERP prints a batch of purchase orders as one PDF: 72660 to 72679, 85
@@ -597,6 +631,20 @@ export async function extractFromPdf(
       matrices.push({
         ledger: 'ORDER', sizes, rows: matrixRows, sheetTotal: null,
         computedTotal: matrixRows.reduce((a, r) => a + r.total, 0),
+      });
+    }
+  }
+
+  // ── TRANSPOSED: sizes down the side, colours across ─────────────────────
+  let transposed = false;
+  if (matrices.length === 0 && header.index >= 0) {
+    const t = buildTransposedMatrix(rows[header.index] ?? [], dataAfterHeader);
+    if (t) {
+      matrices.push(t);
+      transposed = true;
+      issues.push({
+        level: 'INFO', field: null, sheet: null, cell: null,
+        message: `Read as a size grid turned on its side: one row per size (${t.sizes.join(', ')}) and one column per colour.`,
       });
     }
   }
@@ -990,8 +1038,10 @@ export async function extractFromPdf(
     }
   }
 
-  const isWide = matrices.length > 0 && sizeCols.length >= 2;
-  const gridIdx = new Set(sizeCols.map((c) => c.index));
+  const isWide = (matrices.length > 0 && sizeCols.length >= 2) || transposed;
+  // In a grid on its side every column but the first is a colour, so none of
+  // them is a mis-read concept column either.
+  const gridIdx = new Set(transposed ? header.analyses.map((_, i) => i).filter((i) => i > 0) : sizeCols.map((c) => c.index));
 
   const readiness = assessMapping(header.analyses);
   for (const concept of readiness.missing) {

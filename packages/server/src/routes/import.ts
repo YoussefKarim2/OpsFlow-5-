@@ -511,6 +511,27 @@ export function applyReviewedMatrix(
   ];
 }
 
+/**
+ * The grid, before it becomes an order: a cell of 20,000,000 pieces or a
+ * colour name two hundred characters long is a misread, not an order, and
+ * the review screen's own grid refuses both. The file path did not, and a
+ * workbook with a stray digit became an order of twenty million pieces.
+ */
+export const MAX_CELL_PIECES = 1_000_000;
+export function refuseUnbelievable(extraction: ExtractionResult): void {
+  const m = extraction.matrices.find((x) => x.ledger === 'ORDER');
+  if (!m) return;
+  for (const size of m.sizes) {
+    if (size.length > 40) throw new BadRequestError(`A size read from the file is ${size.length} characters long ("${size.slice(0, 30)}…"). That is not a size — check the file's columns before importing.`);
+  }
+  for (const row of m.rows) {
+    if (row.color.length > 120) throw new BadRequestError(`A colour read from the file is ${row.color.length} characters long ("${row.color.slice(0, 40)}…"). That is not a colour — check the file's columns before importing.`);
+    for (const [size, qty] of Object.entries(row.cells)) {
+      if (qty > MAX_CELL_PIECES) throw new BadRequestError(`${row.color} / ${size} reads as ${qty.toLocaleString('en-US')} pieces. No order has a million pieces of one size — check the file before importing.`);
+    }
+  }
+}
+
 /** Pieces in the Main Order grid an import is about to create. */
 export function orderPieces(extraction: ExtractionResult): number {
   const m = extraction.matrices.find((x) => x.ledger === 'ORDER');
@@ -582,6 +603,7 @@ importRouter.post('/:jobId/commit', requirePermission('import:run'), asyncHandle
       'No quantities were read from this file. Enter the colours, sizes and pieces in the Main Order grid on the review screen, then confirm again.',
     );
   }
+  refuseUnbelievable(extraction);
 
   // Claim the job before creating anything. The status check above is a read,
   // and two clicks — or two tabs — both pass it; each then created its own

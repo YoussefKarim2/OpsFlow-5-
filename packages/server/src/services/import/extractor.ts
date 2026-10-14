@@ -194,7 +194,8 @@ function cellValue(cell: ExcelJS.Cell | undefined): unknown {
 function toNumber(value: unknown): number | null {
   if (value == null || value === '') return null;
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
-  const cleaned = String(cellText(value)).replace(/[,\s$]/g, '');
+  // "275 pcs", "1,200 units", "$4.50": the unit and the currency are not the number.
+  const cleaned = String(cellText(value)).replace(/\s*(pcs|pieces|pc|units?|ea)\.?\s*$/i, '').replace(/[,\s$€£]/g, '');
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
 }

@@ -196,15 +196,20 @@ export const CONCEPT_SYNONYMS: Record<ImportConcept, readonly string[]> = {
   PO_NUMBER: [
     'po', 'po no', 'po number', 'po num', 'purchase order', 'purchase order no',
     'order no', 'order number', 'order ref', 'order id', 'po ref', 'ponumber', 'po#', 'order#',
+    'p o', 'p o no', 'p o number', 'p o num',
+    // Arabic, as the factory's own sheets and some customers write it.
+    'رقم الطلب', 'رقم امر الشراء', 'رقم أمر الشراء', 'امر شراء', 'أمر شراء', 'رقم الاوردر', 'اوردر', 'أوردر',
   ],
   CLIENT: [
     'client', 'customer', 'customer name', 'client name', 'buyer', 'buyer name',
     'account', 'company', 'sold to', 'bill to',
+    'العميل', 'اسم العميل', 'الزبون', 'المشتري',
   ],
   ORDER_NAME: ['order name', 'programme', 'program', 'project', 'order title', 'job name'],
   STYLE: [
     'style', 'style no', 'style number', 'style code', 'style ref', 'styleno',
     'model', 'model no', 'design', 'design no',
+    'الموديل', 'موديل', 'الستايل', 'ستايل',
   ],
   ARTICLE: ['article', 'article no', 'article number', 'article code', 'art no', 'art', 'sku', 'item code', 'item no'],
   PRODUCT_TYPE: ['product', 'product type', 'item type', 'garment', 'garment type', 'category', 'type'],
@@ -212,16 +217,22 @@ export const CONCEPT_SYNONYMS: Record<ImportConcept, readonly string[]> = {
   COLOR: [
     'color', 'colour', 'shade', 'colorway', 'colourway', 'color name', 'colour name',
     'color code', 'colour code', 'col', 'shade name',
+    'اللون', 'لون', 'الالوان', 'الألوان', 'الوان', 'ألوان',
   ],
-  SIZE: ['size', 'sizes', 'size name', 'size code', 'sz', 'size range', 'garment size', 'waist', 'waist size', 'size/waist'],
+  SIZE: [
+    'size', 'sizes', 'size name', 'size code', 'sz', 'size range', 'garment size', 'waist', 'waist size', 'size/waist',
+    'المقاس', 'مقاس', 'المقاسات', 'مقاسات',
+  ],
   QUANTITY: [
     'qty', 'quantity', 'pcs', 'pieces', 'piece', 'order qty', 'order quantity',
     'total qty', 'total quantity', 'qty pcs', 'no of pcs', 'number of pieces',
     'units', 'amount', 'qnty', 'quantite', 'menge',
+    'الكمية', 'كمية', 'العدد', 'عدد', 'عدد القطع', 'القطع',
   ],
   UNIT_PRICE: [
     'price', 'unit price', 'price per piece', 'price usd', 'unit cost', 'rate',
     'fob', 'fob price', 'cost', 'price per pc', 'usd',
+    'السعر', 'سعر', 'سعر الوحدة', 'سعر القطعة',
   ],
   CURRENCY: ['currency', 'ccy', 'curr'],
   MATERIAL: ['material', 'material name', 'raw material', 'main material'],
@@ -233,6 +244,7 @@ export const CONCEPT_SYNONYMS: Record<ImportConcept, readonly string[]> = {
   DELIVERY_DATE: [
     'delivery date', 'due date', 'required date', 'required delivery', 'deliver by',
     'delivery', 'due', 'exfactory', 'ex factory', 'ex factory date', 'xfd',
+    'تاريخ التسليم', 'موعد التسليم',
   ],
   SHIP_DATE: ['ship date', 'shipping date', 'shipment date', 'dispatch date', 'eta', 'etd', 'promised shipping date'],
   DESTINATION: ['destination', 'ship to', 'deliver to', 'delivery address', 'shipping address', 'country', 'port'],
@@ -395,8 +407,11 @@ function applyValueEvidence(guess: ConceptGuess, samples: readonly unknown[]): C
   const values = samples.filter((v) => v != null && String(v).trim() !== '');
   if (values.length === 0) return guess;
 
+  // "275 pcs", "1.200", "$4.50" are numbers with a unit or a currency on
+  // them; without allowing those, a Pcs column of "275 pcs" was "mostly not
+  // numbers" and lost to a typo-distance match on "po".
   const numericShare =
-    values.filter((v) => typeof v === 'number' || /^-?[\d,]+(\.\d+)?$/.test(String(v).trim())).length / values.length;
+    values.filter((v) => typeof v === 'number' || /^[$€£]?\s*-?\d[\d.,\s]*(\s*(pcs|pieces|pc|units?|ea)\.?)?$/i.test(String(v).trim())).length / values.length;
   const dateShare =
     values.filter((v) => v instanceof Date || !Number.isNaN(Date.parse(String(v)))).length / values.length;
 
