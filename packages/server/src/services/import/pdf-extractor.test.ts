@@ -623,3 +623,94 @@ describe('a size grid with a style column before the colour', () => {
     assert.equal(b.fields.poNumber, a.fields.poNumber);
   });
 });
+
+describe('one file, one order', () => {
+  // Two purchase orders printed as one PDF, each with its own grid.
+  const order = (po: string, pageNumber: number, colour: string, qty: number) => ({
+    pageNumber,
+    items: [
+      at('Order Number', 50, 760), at(po, 150, 760),
+      at('Colour', 50, 700), at('S', 200, 700), at('M', 260, 700), at('L', 320, 700),
+      at(colour, 50, 680), at(String(qty), 200, 680), at(String(qty), 260, 680), at(String(qty), 320, 680),
+    ],
+  });
+
+  test('a batch of purchase orders reads as the first one, and says so', async () => {
+    const r = await extractFromPdf(Buffer.alloc(0), {
+      reader: async () => [order('1001', 1, 'Red', 10), order('1002', 2, 'Navy', 50), order('1003', 3, 'White', 70)],
+    });
+    assert.equal(r.fields.poNumber, '1001');
+    const m = r.matrices.find((x) => x.ledger === 'ORDER')!;
+    assert.equal(m.computedTotal, 30, 'only the first order\'s grid');
+    assert.deepEqual(m.rows.map((row) => row.color), ['Red']);
+    const warning = r.issues.find((i) => /holds 3 purchase orders/.test(i.message));
+    assert.ok(warning, 'the batch is named');
+    assert.match(warning!.message, /1001, 1002, 1003/);
+    assert.match(warning!.message, /Only the first, 1001/);
+  });
+
+  test('a second page with no order number of its own belongs to the first', async () => {
+    const continuation = { pageNumber: 2, items: [at('Navy', 50, 680), at('5', 200, 680), at('5', 260, 680), at('5', 320, 680)] };
+    const r = await extractFromPdf(Buffer.alloc(0), { reader: async () => [order('1001', 1, 'Red', 10), continuation] });
+    assert.equal(r.issues.filter((i) => /purchase orders/.test(i.message)).length, 0);
+  });
+
+  test('a size chart is named for what it is', async () => {
+    const r = await extractFromPdf(Buffer.alloc(0), {
+      reader: async () => [{
+        pageNumber: 1,
+        items: [
+          at('Measurement', 50, 700), at('XS', 200, 700), at('S', 260, 700), at('M', 320, 700),
+          at('Chest', 50, 680), at('48', 200, 680), at('50', 260, 680), at('52', 320, 680),
+          at('Sleeve', 50, 660), at('20', 200, 660), at('21', 260, 660), at('22', 320, 660),
+        ],
+      }],
+    });
+    assert.ok(r.issues.some((i) => /garment measurements/.test(i.message) && /Chest, Sleeve/.test(i.message)));
+  });
+
+  test('"ORDER CONFIRMATION ref 77-06" yields the number 77-06', async () => {
+    const r = await extractFromPdf(Buffer.alloc(0), {
+      reader: async () => [{
+        pageNumber: 1,
+        items: [
+          at('ORDER CONFIRMATION ref 77-06', 50, 760),
+          at('Colour', 50, 700), at('Size', 200, 700), at('Quantity', 320, 700),
+          at('Sky Blue', 50, 680), at('L', 200, 680), at('450', 320, 680),
+        ],
+      }],
+    });
+    assert.equal(r.fields.poNumber, '77-06');
+  });
+
+  test('an address above the table is not the order name', async () => {
+    const r = await extractFromPdf(Buffer.alloc(0), {
+      reader: async () => [{
+        pageNumber: 1,
+        items: [
+          at('Balticagade 20, 8000 Aarhus C, Denmark', 50, 780),
+          at('PO Number:', 50, 760), at('HM-1', 150, 760),
+          at('Colour', 50, 700), at('Size', 200, 700), at('Quantity', 320, 700),
+          at('Red', 50, 680), at('S', 200, 680), at('420', 320, 680),
+        ],
+      }],
+    });
+    assert.notEqual(r.fields.orderName, 'Balticagade 20, 8000 Aarhus C, Denmark');
+  });
+
+  test('sizes come out in wearing order whatever order the rows were in', async () => {
+    const r = await extractFromPdf(Buffer.alloc(0), {
+      reader: async () => [{
+        pageNumber: 1,
+        items: [
+          at('PO Number:', 50, 760), at('OT-1', 150, 760),
+          at('Colour', 50, 700), at('Size', 200, 700), at('Quantity', 320, 700),
+          at('Sky Blue', 50, 680), at('XL', 200, 680), at('300', 320, 680),
+          at('Sky Blue', 50, 660), at('L', 200, 660), at('450', 320, 660),
+          at('Scarlet', 50, 640), at('M', 200, 640), at('275', 320, 640),
+        ],
+      }],
+    });
+    assert.deepEqual(r.matrices.find((m) => m.ledger === 'ORDER')!.sizes, ['M', 'L', 'XL']);
+  });
+});

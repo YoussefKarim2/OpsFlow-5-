@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 
 import {
   detectDayFirst, splitColourSize, findPricedNumbers, findBoilerplate, boilerplateKey,
-  splitAtLabels, readPoHeader, readPoLines, poLinesToOrder,
+  splitAtLabels, readPoHeader, readPoLines, poLinesToOrder, orderSizes,
 } from './po-lines.js';
 import { extractFromPdf } from './pdf-extractor.js';
 
@@ -183,5 +183,17 @@ describe('a two-page ERP purchase order, end to end', () => {
   test('a read total that differs from the printed one is reported', async () => {
     const r = await read('426.04');
     assert.ok(r.issues.some((i) => /document's total is \$426\.04/.test(i.message)));
+  });
+});
+
+describe('sizes in wearing order', () => {
+  test('known sizes are sorted, raw labels and all', () => {
+    assert.deepEqual(orderSizes(['XL', 'L', 'M']), ['M', 'L', 'XL']);
+    assert.deepEqual(orderSizes(['Adult Small', 'Youth LG', 'Youth S']), ['Youth S', 'Youth LG', 'Adult Small']);
+    assert.deepEqual(orderSizes(['32', '28', '30']), ['28', '30', '32']);
+  });
+
+  test("a label the key cannot place keeps the document's order for the whole grid", () => {
+    assert.deepEqual(orderSizes(['YOUTH 2X-SMALL', 'L', 'M']), ['YOUTH 2X-SMALL', 'L', 'M']);
   });
 });

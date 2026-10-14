@@ -32,8 +32,13 @@ import { BadRequestError } from '../../errors.js';
 import type { ExtractionResult } from './extractor.js';
 import { toDate, buildLineItems } from './extractor.js';
 import { detectSizeColumns } from './tabular-extractor.js';
-import { readPoLines, readPoHeader, poLinesToOrder, detectDayFirst, findBoilerplate, type PoTextLine } from './po-lines.js';
+import { readPoLines, readPoHeader, poLinesToOrder, detectDayFirst, findBoilerplate, orderSizes, type PoTextLine } from './po-lines.js';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { readSizeGrids, gridsToOrder, readPrintedPieces, type GridLine } from './size-grid.js';
+
+/** Row names that are body or garment measurements rather than colours. */
+const MEASUREMENT_ROW = /^(chest|bust|sleeve|sleeve\s*length|length|body\s*length|front\s*length|back\s*length|waist|hip|hips|hem|sweep|shoulder|across\s*shoulder|neck|collar|inseam|outseam|cuff|armhole|bicep|rise|thigh|bottom|opening)\b/i;
 
 /** One positioned run of text, as pdf.js reports it. */
 interface TextItem {
@@ -113,6 +118,8 @@ export interface PdfPage {
  * perfectly ordinary thing for someone to attach, and it deserves a sentence,
  * not a crash.
  */
+const STANDARD_FONTS_DIR = join(dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json')), 'standard_fonts') + '/';
+
 async function readPdf(buffer: Buffer): Promise<PdfPage[]> {
   // Imported lazily and by its legacy build: the default entry point expects a
   // browser, and the server has no DOM to give it.
@@ -125,6 +132,9 @@ async function readPdf(buffer: Buffer): Promise<PdfPage[]> {
       // file rather than a feature.
       isEvalSupported: false,
       useSystemFonts: false,
+      // pdf.js's own copies of the fourteen standard fonts. Without the path it
+      // warns on every document that uses one, which is most of them.
+      standardFontDataUrl: STANDARD_FONTS_DIR,
     }).promise;
   } catch {
     // Deliberately not re-thrown: pdf.js's own exception types are unknown to
@@ -387,18 +397,51 @@ export async function extractFromPdf(
 
   // Every line of every page, then one column model for the lot, so a row with
   // an extra leading cell still lines up with the header above it.
+  const byPage = pages.map((page) => {
+    const lines: Array<{ cells: PositionedCell[]; y: number }> = [];
+    for (const line of groupIntoRows(page.items)) {
+      const cells = rowToPositionedCells(line);
+      if (cells.length > 0) lines.push({ cells, y: line[0]!.y });
+    }
+    return { page, lines };
+  });
+
+  // ── One file, one order ─────────────────────────────────────────────────
+  //
+  // An ERP prints a batch of purchase orders as one PDF: 72660 to 72679, 85
+  // pages. Read as one document it became one order of 61,370 pieces under the
+  // first number, because every reader below merges whatever it finds. The
+  // order number is read page by page instead; a page that states none belongs
+  // to the order before it. Where more than one appears, only the first
+  // order's pages are read, and the others are named so they can be uploaded
+  // one at a time — an import creates one order.
+  const poOf = (lines: Array<{ cells: PositionedCell[] }>) =>
+    readPoHeader(lines.map((l) => l.cells.map((c) => ({ text: c.text, x: c.x, end: c.end }))), false).poNumber;
+  const pagePo: Array<string | null> = [];
+  let current: string | null = null;
+  for (const { lines } of byPage) { current = poOf(lines) ?? current; pagePo.push(current); }
+  const distinctPos = [...new Set(pagePo.filter((p): p is string => p != null))];
+  const firstPo = distinctPos[0] ?? null;
+  const kept = byPage.filter((_, i) => firstPo == null || pagePo[i] == null || pagePo[i] === firstPo);
+  if (distinctPos.length > 1) {
+    const others = distinctPos.slice(1);
+    issues.push({
+      level: 'WARNING', field: 'poNumber', sheet: null, cell: null,
+      message: `This file holds ${distinctPos.length} purchase orders (${distinctPos.join(', ')}). `
+        + `Only the first, ${firstPo}, was read for this import — its ${kept.length} page${kept.length === 1 ? '' : 's'} of ${pages.length}. `
+        + `Upload the file again for each of the others (${others.join(', ')}); an import creates one order.`,
+    });
+  }
+
   const positioned: PositionedCell[][] = [];
   const gridLines: GridLine[] = [];
   const pageTexts: Array<Array<{ text: string; y: number }>> = [];
-  for (const page of pages) {
+  for (const { page, lines } of kept) {
     const texts: Array<{ text: string; y: number }> = [];
-    for (const line of groupIntoRows(page.items)) {
-      const cells = rowToPositionedCells(line);
-      if (cells.length > 0) {
-        positioned.push(cells);
-        gridLines.push({ cells, y: line[0]!.y, page: page.pageNumber });
-        texts.push({ text: cells.map((c) => c.text).join(' ').trim(), y: line[0]!.y });
-      }
+    for (const { cells, y } of lines) {
+      positioned.push(cells);
+      gridLines.push({ cells, y, page: page.pageNumber });
+      texts.push({ text: cells.map((c) => c.text).join(' ').trim(), y });
     }
     pageTexts.push(texts);
   }
@@ -702,6 +745,10 @@ export async function extractFromPdf(
     // name puts a paragraph in a field meant for "UFEC 2026 S/S Jersey".
     if (/[.!?]\s*$/.test(line)) continue;
     if (line.split(/\s+/).length > 8) continue;
+    // An address, not a heading: "Balticagade 20, 8000 Aarhus C, Denmark"
+    // sits above the table on every letterhead. A garment's name does not
+    // carry a street number and a comma together.
+    if (/,/.test(line) && /\d/.test(line)) continue;
     if (alreadyRead.has(line)) continue;
     if (everySynonym.has(normaliseHeader(line).replace(/:\s*$/, '').trim())) continue;
     const bracketed = /\(([^)]{3,30})\)\s*$/.exec(line);
@@ -898,9 +945,15 @@ export async function extractFromPdf(
   // deriving it quietly — the review screen shows the value and it can be typed
   // over before anything is saved.
   if (named.poNumber == null || String(named.poNumber).trim() === '') {
-    const candidate = [named.externalReference, named.orderName, named.styleNumber]
+    const identifying = [named.externalReference, named.orderName, named.styleNumber]
       .map((v) => (v == null ? '' : String(v).trim()))
       .find((v) => v.length >= 3 && v.length <= 60);
+    // "ORDER CONFIRMATION ref 77-06" identifies the document; "77-06" is the
+    // number in it. The token after ref / no / number / # is the order's.
+    const token = identifying
+      ? /\b(?:ref(?:erence)?|no\.?|number|#)\s*[:.]?\s*([A-Za-z0-9][A-Za-z0-9/-]{1,29})\b/i.exec(identifying)?.[1]
+      : undefined;
+    const candidate = token ?? identifying;
 
     const derived = candidate
       ?? options.placeholderPoNumber
@@ -913,6 +966,26 @@ export async function extractFromPdf(
         ? `No PO number was labelled in this document, so "${derived}" was taken from it instead. Change it on the review screen if that is not the order's number.`
         : `This document states no PO number, so "${derived}" was generated as a placeholder. Replace it with the real number before importing.`,
     });
+  }
+
+  // ── What was read, read back ────────────────────────────────────────────
+  for (const m of matrices) {
+    if (m.ledger !== 'ORDER') continue;
+    // Youth Small before Adult Large, whichever order the document printed them.
+    m.sizes = orderSizes(m.sizes);
+    // A size chart reads exactly like a size grid — a row per "colour", a
+    // number per size — except that its rows are called Chest and Sleeve and
+    // its numbers are centimetres. A tech pack imported as an order of 370
+    // pieces is wrong in a way no total can catch, so the row names are checked.
+    const names = m.rows.map((r) => (r.color.split(' — ').pop() ?? r.color).trim());
+    const measured = names.filter((n) => MEASUREMENT_ROW.test(n));
+    if (measured.length > 0 && measured.length * 2 >= names.length) {
+      issues.push({
+        level: 'WARNING', field: null, sheet: null, cell: null,
+        message: `The rows read are named ${measured.slice(0, 4).join(', ')} — those are garment measurements, as on a size chart or tech pack, not the colours of an order. `
+          + 'Check that this document is a purchase order before importing: the figures under the sizes would be measurements, not pieces.',
+      });
+    }
   }
 
   const isWide = matrices.length > 0 && sizeCols.length >= 2;

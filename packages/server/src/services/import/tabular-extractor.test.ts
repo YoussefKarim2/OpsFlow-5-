@@ -567,3 +567,36 @@ describe('totals rows away from column A', () => {
     assert.match(r.mappings[0]!.cell ?? '', /header row 1\)/);
   });
 });
+
+describe('a sheet written one block per style', () => {
+  // Each block repeats the header and ends with its own total — one table in
+  // three pieces. Read to the first total, it was one style of three.
+  const BLOCKS = [
+    ['Product Name', 'Color', 'Size', 'Qty'],
+    ['Jersey - Strikers', 'SKY BLUE', 'YOUTH SMALL', 138],
+    ['Jersey - Strikers', 'SKY BLUE', 'ADULT SMALL', 70],
+    [null, null, 'TOTAL', 208],
+    [],
+    ['Product Name', 'Color', 'Size', 'Qty'],
+    ['Jersey - Breakers', 'ATHLETIC GOLD', 'YOUTH SMALL', 114],
+    [null, null, 'TOTAL', 114],
+    [],
+    ['Product Name', 'Color', 'Size', 'Qty'],
+    ['Jersey - Wolves', 'SCARLET', 'YOUTH SMALL', 80],
+    ['Jersey - Wolves', 'SCARLET', 'ADULT SMALL', 30],
+    [null, null, 'TOTAL', 110],
+  ];
+
+  test('every block is read and no total is', async () => {
+    const r = await extractTabular(await buildWorkbook([{ name: 'Sheet1', rows: BLOCKS }]));
+    const m = r.matrices.find((x) => x.ledger === 'ORDER')!;
+    assert.deepEqual(m.rows.map((row) => row.color), ['SKY BLUE', 'ATHLETIC GOLD', 'SCARLET']);
+    assert.equal(m.computedTotal, 432);
+  });
+
+  test('a total that ends the only block still ends it', async () => {
+    const r = await extractTabular(await buildWorkbook([{ name: 'Sheet1', rows: [...BLOCKS.slice(0, 4), [], ['Notes'], ['Deliver by sea']] }]));
+    const m = r.matrices.find((x) => x.ledger === 'ORDER')!;
+    assert.equal(m.computedTotal, 208);
+  });
+});

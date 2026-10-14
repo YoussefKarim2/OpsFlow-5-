@@ -93,7 +93,7 @@ export async function runExtraction(
     orderBy: { useCount: 'desc' },
   });
 
-  if (!saved) return firstPass;
+  if (!saved) return placeholderIfUnnumbered(firstPass, options.job);
 
   await prisma.savedColumnMapping.update({
     where: { id: saved.id },
@@ -111,7 +111,25 @@ export async function runExtraction(
     level: 'INFO', field: null, sheet: null, cell: null,
     message: `Applied the saved column mapping “${saved.label}”, used ${saved.useCount + 1} time${saved.useCount === 0 ? '' : 's'}.`,
   });
-  return replayed;
+  return placeholderIfUnnumbered(replayed, options.job);
+}
+
+/**
+ * A workbook or CSV that states no PO number gets the same stand-in a PDF
+ * does — derived from the job, so the review and the commit name the order
+ * alike — and the warning names it. Before this the review showed "—", told
+ * the coordinator to type a number the screen no longer takes, and the order
+ * arrived under a number nobody had seen.
+ */
+function placeholderIfUnnumbered<T extends ExtractionResult>(result: T, job?: { id: string; createdAt: Date }): T {
+  if (!job || (result.fields.poNumber != null && String(result.fields.poNumber).trim() !== '')) return result;
+  const placeholder = placeholderPoFor(job);
+  result.fields.poNumber = placeholder;
+  const warning = result.issues.find((i) => i.level === 'WARNING' && i.field === 'poNumber');
+  const message = `No PO number was found in the file, so the order will be created as "${placeholder}". Rename it on Order Details once the customer's number is known.`;
+  if (warning) warning.message = message;
+  else result.issues.push({ level: 'WARNING', field: 'poNumber', sheet: null, cell: null, message });
+  return result;
 }
 
 /**

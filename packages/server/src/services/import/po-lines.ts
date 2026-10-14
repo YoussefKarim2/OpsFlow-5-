@@ -120,6 +120,28 @@ export function sizeSortKey(label: string): number {
 }
 
 /**
+ * Sizes in wearing order — Youth Small before Adult Large — when every one of
+ * them is a size the key knows. A grid read in document order can come out
+ * "XL L M" because that is the order the lines were printed in; a label the
+ * key cannot place (a customer's own "2X-SMALL") keeps the document's order
+ * for the whole grid, since a half-sorted grid is worse than an unsorted one.
+ */
+export function orderSizes(sizes: readonly string[]): string[] {
+  // Raw labels — "L", "Youth LG", "28" — rather than the canonical ones the
+  // sort key expects, so each is looked up by its word and group directly.
+  const key = (label: string): number | null => {
+    const parts = label.trim().toUpperCase().split(/\s+/);
+    const word = parts[parts.length - 1]!;
+    const group = parts.length > 1 ? GROUP_RANK[SIZE_GROUPS[parts[0]!] ?? ''] ?? 4 : 4;
+    const rank = SIZE_WORDS[word]?.rank ?? (/^\d+$/.test(word) ? 20 + Number(word) / 1000 : null);
+    return rank == null ? null : group * 100 + rank;
+  };
+  const keys = sizes.map(key);
+  if (keys.some((k) => k == null)) return [...sizes];
+  return sizes.map((s, i) => ({ s, k: keys[i]! })).sort((a, b) => a.k - b.k).map((x) => x.s);
+}
+
+/**
  * Split "ROY/WHT YOUTH SMALL" into colour "ROY/WHT" and size "Youth Small".
  *
  * The size is read from the end of the text: an optional group (Youth, Adult,

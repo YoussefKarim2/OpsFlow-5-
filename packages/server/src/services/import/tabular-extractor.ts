@@ -38,6 +38,8 @@ import { detectFileKind } from './file-kind.js';
 import { cellText, toNumber, toDate, buildLineItems, parseFieldOverride } from './extractor.js';
 import { toIsoDayOrNull } from '@opsflow/shared';
 import { loadWorkbook } from './open-workbook.js';
+import { readAgeLayingSheet } from './age-laying-reader.js';
+import { orderSizes } from './po-lines.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sheet reading
@@ -193,8 +195,24 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
 
   const rows: unknown[][] = [];
   let blankRun = 0;
+  const last = Math.min(sheet.rowCount || MAX_SCAN_ROWS, MAX_SCAN_ROWS);
 
-  for (let r = headerRowIndex + 1; r <= Math.min(sheet.rowCount || MAX_SCAN_ROWS, MAX_SCAN_ROWS); r++) {
+  // A sheet written one block per style — the header row again, the rows,
+  // a total — is one table in four pieces. Read to the first total, it was
+  // one style of four: 579 pieces of a 1,972-piece order. Every repeat of the
+  // header row is found first, so a total followed by another block is a
+  // divider rather than the end.
+  const headerKey = headers.map((h) => h.toLowerCase()).join('\u0001');
+  const repeats = new Set<number>();
+  for (let r = headerRowIndex + 1; r <= last; r++) {
+    const row = sheet.getRow(r);
+    const key = columns.map((c) => String(cellText(rawValue(row.getCell(c)))).trim().toLowerCase()).join('\u0001');
+    if (key === headerKey) repeats.add(r);
+  }
+  const lastRepeat = repeats.size > 0 ? Math.max(...repeats) : 0;
+
+  for (let r = headerRowIndex + 1; r <= last; r++) {
+    if (repeats.has(r)) { blankRun = 0; continue; }
     const row = sheet.getRow(r);
     const values = columns.map((c) => rawValue(row.getCell(c)));
     const populated = values.filter((v) => v != null && String(cellText(v)).trim() !== '').length;
@@ -210,8 +228,10 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
     // doubles the order. Judged by the row's first *filled* cell, not column
     // A: a table that starts in column B has its "Total" label there, and
     // reading the blank A cell let the totals through as one more colour.
+    // With another block of the same table still to come, it is skipped
+    // rather than ending the read.
     const firstFilled = values.find((v) => v != null && String(cellText(v)).trim() !== '');
-    if (isTotalsLabel(firstFilled)) break;
+    if (isTotalsLabel(firstFilled)) { if (r < lastRepeat) continue; break; }
 
     rows.push(values);
   }
@@ -394,7 +414,7 @@ function buildLongMatrix(ctx: BuildContext): ExtractedMatrix | null {
 
   return {
     ledger: 'ORDER',
-    sizes: sizeOrder,
+    sizes: orderSizes(sizeOrder),
     rows,
     sheetTotal: null,
     computedTotal: rows.reduce((a, r) => a + r.total, 0),
@@ -590,6 +610,21 @@ export async function extractTabular(
   }
   tables.sort((a, b) => b.score - a.score);
 
+  // A factory laying sheet reads as a table too — panels as colours, lays as
+  // sizes — and imported here it became an order of 84 "pieces" called front,
+  // back and sl. It has a screen of its own.
+  for (const sheet of wb.worksheets) {
+    let laying = false;
+    try { laying = readAgeLayingSheet(sheet) != null; } catch { /* not one */ }
+    if (!laying) continue;
+    issues.push({
+      level: 'WARNING', field: null, sheet: sheet.name, cell: null,
+      message: `"${sheet.name}" is a laying & marking sheet (lays, layers and panels), not a purchase order. `
+        + "Import it from the order's Laying & Marker screen; importing it here would create an order whose colours are panel names.",
+    });
+    break;
+  }
+
   const sheets: ImportSheetInfo[] = wb.worksheets.map((w) => {
     const t = tables.find((x) => x.sheetName === w.name);
     return {
@@ -695,13 +730,13 @@ export async function extractTabular(
   if (!fields.poNumber) {
     issues.push({
       level: 'WARNING', field: 'poNumber', sheet: chosen.sheetName, cell: null,
-      message: 'No PO number was found in the file. Enter one on the review screen before importing.',
+      message: 'No PO number was found in the file. The order will be created under a placeholder number — rename it on Order Details once the customer\'s number is known.',
     });
   }
   if (!fields.clientName) {
     issues.push({
       level: 'WARNING', field: 'clientName', sheet: chosen.sheetName, cell: null,
-      message: 'No customer was found in the file. Choose one on the review screen before importing.',
+      message: 'No customer was found in the file. The order will be filed under "Unknown client" — set the customer on Order Details.',
     });
   }
 

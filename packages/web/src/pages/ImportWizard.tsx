@@ -711,6 +711,11 @@ function ReviewStep({
   const p = result.preview;
   const total = p.matrixTotal;
   const errors = result.issues.filter((i) => i.level === 'ERROR');
+  // What the readers want checked before anything is created: a file that
+  // holds twenty orders, rows that are measurements rather than colours, a
+  // laying sheet in the order importer. They were shown on the analysis step
+  // only, and the confirm button is on this one.
+  const warnings = result.issues.filter((i) => i.level === 'WARNING');
   // Only what the file stated. Nothing on this screen is typed: a field the
   // document did not carry is not shown here, and can be filled on the order.
   const value = (field: string) => fieldOverrides[field] ?? String(p.order[field] ?? '');
@@ -729,6 +734,15 @@ function ReviewStep({
           <Summary label="Rows read" value={String(result.analysis?.rowsDetected ?? p.matrixRows.length)} />
         </div>
       </Card>
+
+      {warnings.length > 0 && (
+        <Card className="border-amber-300">
+          <CardHeader title="Check before confirming" subtitle="What the reader noticed about this file. Nothing here stops the import." />
+          <ul className="space-y-1.5 px-4 py-3 text-sm text-amber-900">
+            {warnings.map((w, i) => <li key={i} className="flex gap-2"><span aria-hidden>•</span><span>{w.message}</span></li>)}
+          </ul>
+        </Card>
+      )}
 
       <DetectedPanel result={result} onField={onField} />
 
