@@ -359,7 +359,7 @@ is imported.
 SIDEBAR                        THE COMPANY
   Overview     Dashboard · Orders · My Tasks · Follow-Up
   Inventory    Materials · Reservations · Movements
-  Business     Costing · Clients · Factories · Reports · Excel Import
+  Business     Costing · Proforma / Invoice · Clients · Factories · Reports · Excel Import
   Administration  Users · Audit Log · Settings
 
 OPEN AN ORDER                  THE WORKFLOW
@@ -370,6 +370,16 @@ OPEN AN ORDER                  THE WORKFLOW
    5 External Order       11 Packing              17 Database
    6 Progress Status      12 Stock                18 Invoice
 ```
+
+**Proforma / Invoice** (sidebar, Business) builds the customer's documents from the
+order instead of having them typed: pick an order and the draft takes the client, the
+PO, the unit price, the packed cartons (manifest), the shipped-versus-ordered
+reconciliation and the company letterhead. Numbers are allocated per kind and year
+(`PI-2026-0001`, `INV-2026-0001`); issuing freezes the document as the customer's copy,
+voiding keeps its number. Print / PDF uses the browser's print dialog, which is what
+keeps Arabic order names and references rendering correctly. The letterhead (address,
+tax ID, bank details, default terms) is edited on the same page by a super administrator
+and is printed only as entered — a blank there is a blank on the page.
 
 The eighteen are the workbook's own hyperlink menu, cells A4:A21 of every sheet.
 They are sections **inside an order**, never sidebar pages: Materials,

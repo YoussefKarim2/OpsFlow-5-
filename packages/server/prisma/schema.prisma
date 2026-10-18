@@ -76,6 +76,9 @@ model User {
   productionRecords       ProductionRecord[]
   productionDayLogs       ProductionDayLog[]
   proformaInvoices        ProformaInvoice[]        @relation("ProformaPreparedBy")
+  preparedInvoices        Invoice[]                @relation("InvoicePreparedBy")
+  issuedInvoices          Invoice[]                @relation("InvoiceIssuedBy")
+  companyProfileEdits     CompanyProfile[]         @relation("CompanyProfileUpdatedBy")
   qualityAudits           QualityAudit[]
   savedColumnMappings     SavedColumnMapping[]
   taskComments            TaskComment[]
@@ -272,6 +275,7 @@ model Order {
   packingLists             PackingList[]
   productionRecords        ProductionRecord[]
   proformaInvoices         ProformaInvoice[]
+  invoices                 Invoice[]
   qualityAudits            QualityAudit[]
   shipments                Shipment[]
   quantities               StageQuantity[]
@@ -1060,6 +1064,7 @@ model PackingList {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
   cartons        Carton[]
+  invoices       Invoice[]
   order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([orderId])
@@ -1109,6 +1114,7 @@ model Shipment {
   createdAt            DateTime       @default(now())
   updatedAt            DateTime       @updatedAt
   attachments          Attachment[]
+  invoices             Invoice[]
   order                Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([orderId])
@@ -1257,6 +1263,143 @@ model ProformaInvoiceLine {
 
   @@index([invoiceId])
   @@map("proforma_invoice_lines")
+}
+
+
+/// ─────────────────────────────────────────────────────────────────────────
+/// Proforma / Invoice
+///
+/// The documents the factory sends with a quotation and with a shipment. Each
+/// one is built from the order — the client, the price, the packing list — and
+/// then *stored whole*: the seller block, the manifest and the reconciliation
+/// are snapshotted as JSON when the draft is built or rebuilt, so an issued
+/// invoice reads forever as it was sent, whatever the order does afterwards.
+/// Totals are never stored; they are the sum of the lines (calc/invoice.ts).
+/// ─────────────────────────────────────────────────────────────────────────
+
+/// The factory's own letterhead and payment details. One row.
+///
+/// Kept in the database rather than in code because a bank account, a tax
+/// number and an address are facts somebody in the office owns, not something a
+/// deploy should change — and because printing a plausible one that nobody
+/// entered would be putting a fabricated legal detail on a customer document.
+model CompanyProfile {
+  id           String   @id @default("default")
+  name         String   @default("Soccertex")
+  tagline      String?
+  address      String?
+  taxId        String?
+  email        String?
+  phone        String?
+  website      String?
+  /// One bank detail per line, printed as written.
+  bankDetails  String?
+  /// Default terms and conditions, one per line, copied onto each new document.
+  invoiceTerms String?
+  /// Default payment terms: "COD", "50% in advance, balance before shipping".
+  paymentTerms String?
+  updatedById  String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  updatedBy    User?    @relation("CompanyProfileUpdatedBy", fields: [updatedById], references: [id])
+
+  @@map("company_profile")
+}
+
+model Invoice {
+  id                String        @id @default(cuid())
+  kind              InvoiceKind
+  status            InvoiceStatus @default(DRAFT)
+  /// INV-2026-0379 / PI-2026-0012. Allocated when the draft is created, from
+  /// the highest sequence of the same kind and year, under the unique index below.
+  number            String        @unique
+  year              Int
+  sequence          Int
+  orderId           String
+  /// The consignment an invoice covers. Null for a proforma, or when the order
+  /// has no shipment recorded yet.
+  shipmentId        String?
+  /// The packing list the manifest and the goods lines were read from.
+  packingListId     String?
+  date              DateTime
+  dueDate           DateTime?
+  paymentTerms      String?
+  /// The consignee block, snapshotted from the client for the same reason as
+  /// Order.shippingAddress: a document that has gone out keeps its details.
+  billTo            String
+  billToAddress     String?
+  billToEmail       String?
+  /// The customer's own reference, printed as "Your reference".
+  customerReference String?
+  /// What the shipment is called on the document: an AWB, a container, a number.
+  shipmentRef       String?
+  shippedOn         DateTime?
+  coverNote         String?
+  terms             String?
+  bankDetails       String?
+  notes             String?
+  /// CompanyProfile as it was when the document was last built.
+  seller            Json
+  /// The cartons, as InvoiceCartonDto[].
+  manifest          Json
+  /// Shipped against ordered, as InvoiceReconciliationGroupDto[].
+  reconciliation    Json
+  /// What the builder could not do, in plain words. Shown on a draft, never printed.
+  warnings          Json
+  builtAt           DateTime      @default(now())
+  issuedAt          DateTime?
+  issuedById        String?
+  sentAt            DateTime?
+  voidedAt          DateTime?
+  voidReason        String?
+  preparedById      String?
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  lines             InvoiceLine[]
+  order             Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  shipment          Shipment?     @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+  packingList       PackingList?  @relation(fields: [packingListId], references: [id], onDelete: SetNull)
+  preparedBy        User?         @relation("InvoicePreparedBy", fields: [preparedById], references: [id])
+  issuedBy          User?         @relation("InvoiceIssuedBy", fields: [issuedById], references: [id])
+
+  @@unique([kind, year, sequence])
+  @@index([orderId])
+  @@index([status])
+  @@map("invoices")
+}
+
+model InvoiceLine {
+  id          String          @id @default(cuid())
+  invoiceId   String
+  kind        InvoiceLineKind @default(ITEM)
+  description String
+  /// The "Size" column: the sizes this line covers, written compactly.
+  size        String?
+  quantity    Decimal?        @db.Decimal(14, 4)
+  unitPrice   Decimal?        @db.Decimal(14, 6)
+  /// Extras only: the amount on its own, negative for a discount.
+  amount      Decimal?        @db.Decimal(14, 2)
+  position    Int             @default(0)
+  invoice     Invoice         @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@index([invoiceId])
+  @@map("invoice_lines")
+}
+
+enum InvoiceKind {
+  PROFORMA
+  INVOICE
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  VOID
+}
+
+enum InvoiceLineKind {
+  ITEM
+  EXTRA
 }
 
 model Attachment {

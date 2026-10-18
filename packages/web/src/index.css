@@ -154,6 +154,19 @@
   }
 
   @page { margin: 14mm; }
+
+  /* The invoice sheet: on paper it is the page, not a card on a page. */
+  .invoice-sheet {
+    box-shadow: none !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: none !important;
+    width: auto !important;
+  }
+  .invoice-sheet section { break-inside: auto; }
+  .invoice-sheet .avoid-break { break-inside: avoid; }
 }
 
 /* On screen the print-only document stays out of the way entirely. */

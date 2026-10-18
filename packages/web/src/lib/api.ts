@@ -13,6 +13,7 @@ import type {
   OrderStepsResult, Blocker, StageKey, StageStatus,
   NotificationPriority, ChangeCategory, ShipmentDto, ProductivityDto, ProductivityDayLogDto, ProductionOperation,
   CostingOverviewDto,
+  InvoiceDto, InvoiceListRowDto, InvoiceCandidateDto, CompanyProfileDto, InvoiceKind, InvoiceStatus, InvoiceLineKind,
 } from '@opsflow/shared';
 
 const BASE = import.meta.env.VITE_API_URL ?? '/api';
@@ -149,6 +150,31 @@ const qs = (params: Record<string, unknown>): string => {
   const s = sp.toString();
   return s ? `?${s}` : '';
 };
+
+/** What a draft invoice's editor sends back. Every field optional; lines replace the set. */
+export interface InvoiceEditBody {
+  date?: string;
+  dueDate?: string | null;
+  paymentTerms?: string | null;
+  billTo?: string;
+  billToAddress?: string | null;
+  billToEmail?: string | null;
+  customerReference?: string | null;
+  shipmentRef?: string | null;
+  shippedOn?: string | null;
+  coverNote?: string | null;
+  terms?: string | null;
+  bankDetails?: string | null;
+  notes?: string | null;
+  lines?: Array<{
+    kind: InvoiceLineKind;
+    description: string;
+    size?: string | null;
+    quantity?: number | null;
+    unitPrice?: number | null;
+    amount?: number | null;
+  }>;
+}
 
 /** One thing that changed, as the feed and the order timeline show it. */
 export interface ChangeEventDto {
@@ -996,6 +1022,26 @@ export const api = {
     record: (orderId: string, body: unknown) => post<{ id: string; result: string }>(`/quality/${orderId}`, body),
     closeCorrectiveAction: (auditId: string, note?: string) =>
       post<{ ok: true }>(`/quality/audit/${auditId}/close-corrective-action`, { note }),
+  },
+
+  /** Proforma / Invoice — documents built from an order and kept as the record. */
+  invoices: {
+    list: (filters: { kind?: InvoiceKind | ''; status?: InvoiceStatus | ''; q?: string } = {}) =>
+      get<{ data: InvoiceListRowDto[] }>(`/invoices${qs(filters)}`),
+    candidates: () => get<{ data: InvoiceCandidateDto[] }>('/invoices/candidates'),
+    sources: (orderId: string) =>
+      get<{ data: Pick<InvoiceCandidateDto, 'orderId' | 'poNumber' | 'orderName' | 'clientName' | 'pricePerPieceUsd' | 'packingLists' | 'shipments'> }>(`/invoices/order/${orderId}/sources`),
+    get: (id: string) => get<{ data: InvoiceDto }>(`/invoices/${id}`),
+    create: (body: { orderId: string; kind: InvoiceKind; shipmentId?: string | null; packingListId?: string | null }) =>
+      post<{ data: InvoiceDto }>('/invoices', body),
+    update: (id: string, body: InvoiceEditBody) => put<{ data: InvoiceDto }>(`/invoices/${id}`, body),
+    rebuild: (id: string) => post<{ data: InvoiceDto }>(`/invoices/${id}/rebuild`),
+    issue: (id: string) => post<{ data: InvoiceDto }>(`/invoices/${id}/issue`),
+    markSent: (id: string) => post<{ data: InvoiceDto }>(`/invoices/${id}/sent`),
+    void: (id: string, reason: string) => post<{ data: InvoiceDto }>(`/invoices/${id}/void`, { reason }),
+    remove: (id: string) => del(`/invoices/${id}`),
+    company: () => get<{ data: CompanyProfileDto }>('/invoices/company'),
+    saveCompany: (body: Omit<CompanyProfileDto, 'updatedAt'>) => put<{ data: CompanyProfileDto }>('/invoices/company', body),
   },
 
   packing: {

@@ -31,6 +31,7 @@ import { notificationPreferencesRouter } from './routes/notification-preferences
 import { referenceRouter } from './routes/reference.js';
 import { stepsRouter } from './routes/steps.js';
 import { changesRouter } from './routes/changes.js';
+import { invoicesRouter } from './routes/invoices.js';
 import { flushChanges } from './services/change-service.js';
 
 /**
@@ -176,6 +177,7 @@ export function createApp() {
   app.use('/api/orders/:orderId/laying-import', layingImportRouter);
   app.use('/api/notification-preferences', notificationPreferencesRouter);
   app.use('/api/changes', changesRouter);
+  app.use('/api/invoices', invoicesRouter);
   app.use('/api', referenceRouter);
 
   if (hasWebBuild) {

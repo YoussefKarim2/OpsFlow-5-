@@ -6,7 +6,7 @@ import {
   LayoutDashboard, Package, Boxes, ShieldCheck,
   DollarSign, BarChart3, Settings, Search,
   LogOut, Menu, X, ListChecks, Upload, UserCog, ScrollText,
-  BookLock, ArrowLeftRight, Activity,
+  BookLock, ArrowLeftRight, Activity, Receipt,
 } from 'lucide-react';
 import type { Permission } from '@opsflow/shared';
 import { api } from '../lib/api';
@@ -46,6 +46,7 @@ const NAV: Array<{
   // order's own eighteen steps.
 
   { to: '/costing',     label: 'Costing',        icon: DollarSign,      group: 'Business', requires: 'costing:read' },
+  { to: '/invoices',    label: 'Proforma / Invoice', icon: Receipt,     group: 'Business', requires: 'invoice:read' },
   { to: '/reports',     label: 'Reports',        icon: BarChart3,       group: 'Business', requires: 'report:read' },
   { to: '/import',      label: 'Import Document', icon: Upload,          group: 'Business', requires: 'import:run' },
 
@@ -136,7 +137,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
       {/* Main */}
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-ink-200 bg-white px-4">
+        <header className="no-print sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-ink-200 bg-white px-4">
           <button className="text-ink-500 lg:hidden" onClick={() => setOpen(true)}>
             <Menu className="h-5 w-5" />
           </button>

@@ -513,3 +513,57 @@ export const UnitOfMeasure = {
   L: 'L',
 } as const;
 export type UnitOfMeasure = (typeof UnitOfMeasure)[keyof typeof UnitOfMeasure];
+
+// ── Invoicing ────────────────────────────────────────────────────────────────
+
+/**
+ * The two documents the Proforma / Invoice section issues. A proforma is the
+ * quotation for an order before it ships, priced on the ordered quantities; an
+ * invoice is the bill for a shipment, priced on what was packed and sent.
+ */
+export const InvoiceKind = {
+  PROFORMA: 'PROFORMA',
+  INVOICE: 'INVOICE',
+} as const;
+export type InvoiceKind = (typeof InvoiceKind)[keyof typeof InvoiceKind];
+
+export const INVOICE_KIND_LABEL: Record<InvoiceKind, string> = {
+  PROFORMA: 'Proforma invoice',
+  INVOICE: 'Invoice',
+};
+
+/** The number prefix each kind carries: PI-2026-0001, INV-2026-0001. */
+export const INVOICE_NUMBER_PREFIX: Record<InvoiceKind, string> = {
+  PROFORMA: 'PI',
+  INVOICE: 'INV',
+};
+
+/**
+ * A draft is built from the order and may be edited and rebuilt freely. Issuing
+ * it freezes it: the customer's copy is the document from then on. A voided
+ * invoice keeps its number and its contents, so the numbering has no gaps and
+ * the record says what was cancelled.
+ */
+export const InvoiceStatus = {
+  DRAFT: 'DRAFT',
+  ISSUED: 'ISSUED',
+  VOID: 'VOID',
+} as const;
+export type InvoiceStatus = (typeof InvoiceStatus)[keyof typeof InvoiceStatus];
+
+export const INVOICE_STATUS_LABEL: Record<InvoiceStatus, string> = {
+  DRAFT: 'Draft',
+  ISSUED: 'Issued',
+  VOID: 'Void',
+};
+
+/**
+ * An ITEM line is goods: a quantity at a rate. An EXTRA line is an amount on its
+ * own — an extra piece, freight, a discount entered as a negative — listed
+ * under the subtotal rather than among the goods.
+ */
+export const InvoiceLineKind = {
+  ITEM: 'ITEM',
+  EXTRA: 'EXTRA',
+} as const;
+export type InvoiceLineKind = (typeof InvoiceLineKind)[keyof typeof InvoiceLineKind];

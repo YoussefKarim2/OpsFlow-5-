@@ -29,6 +29,10 @@ export const PERMISSIONS = [
   // or regenerate a cut order, and gating the import on the cutting permission
   // meant granting all four to get one.
   'import:laying',
+  // The Proforma / Invoice section. Reading lists and opens the documents;
+  // writing builds and edits drafts; issuing freezes one as the customer's copy
+  // (and voids one), which is the act with financial consequence.
+  'invoice:read', 'invoice:write', 'invoice:issue',
 ] as const;
 
 export type Permission = (typeof PERMISSIONS)[number];
@@ -118,6 +122,9 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
     'shipment:write',
     'costing:read', 'costing:write',
     'import:run', 'import:laying',
+    // Builds and edits the proforma and the invoice for the orders they own;
+    // issuing stays with finance and the administrators.
+    'invoice:read', 'invoice:write',
   ],
 
   FACTORY_MANAGER: [
@@ -146,7 +153,7 @@ export const ROLE_PERMISSIONS: Record<RoleKey, Permission[]> = {
 
   FOLLOW_UP: [...READ_ONLY, 'production:write', 'task:complete'],
 
-  FINANCE: [...READ_ONLY, 'costing:read', 'costing:write'],
+  FINANCE: [...READ_ONLY, 'costing:read', 'costing:write', 'invoice:read', 'invoice:write', 'invoice:issue'],
 };
 
 export const ROLE_LABEL: Record<RoleKey, string> = {

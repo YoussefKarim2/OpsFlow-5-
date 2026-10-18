@@ -51,6 +51,8 @@ const MaterialDetailPage = named(() => import('./pages/inventory/MaterialDetailP
 const ReservationsPage = named(() => import('./pages/inventory/MaterialDetailPage'), 'ReservationsPage');
 const MovementsPage = named(() => import('./pages/inventory/MaterialDetailPage'), 'MovementsPage');
 const ImportWizardPage = named(() => import('./pages/ImportWizard'), 'ImportWizardPage');
+const InvoicesPage = named(() => import('./pages/invoices/InvoicesPage'), 'InvoicesPage');
+const InvoicePage = named(() => import('./pages/invoices/InvoicePage'), 'InvoicePage');
 import {
   LoginPage, MyTasksPage, NotificationsPage, ReportsPage,
   ClientsPage, FactoriesPage, SettingsPage,
@@ -175,6 +177,10 @@ export default function App() {
             <Route path="/shipping"   element={<Navigate to="/orders?status=READY_TO_SHIP" replace />} />
 
             <Route path="/costing" element={<Protected requires="costing:read"><CostingOverviewPage /></Protected>} />
+
+            {/* Proforma / Invoice — documents built from an order, kept as the record. */}
+            <Route path="/invoices" element={<Protected requires="invoice:read"><InvoicesPage /></Protected>} />
+            <Route path="/invoices/:id" element={<Protected requires="invoice:read"><InvoicePage /></Protected>} />
 
             {/* Inventory — the factory's own stock, as opposed to one order's BOM. */}
             <Route path="/inventory" element={<Navigate to="/inventory/materials" replace />} />

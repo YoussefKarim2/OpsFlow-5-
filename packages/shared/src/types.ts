@@ -5,6 +5,7 @@
  */
 
 import type {
+  InvoiceKind, InvoiceStatus, InvoiceLineKind,
   OrderStatus, Health, Priority, TaskStatus, StageKey, StageStatus, QtyLedger,
   ApprovalStatus, ApprovalType, ExternalOpStatus, ProductionOperation, ShipmentStatus,
   BomCategory, Department, NotificationPriority,
@@ -644,4 +645,147 @@ export interface ApiError {
   error: string;
   code: string;
   details?: unknown;
+}
+
+// ── Proforma / Invoice ───────────────────────────────────────────────────────
+
+/** The factory's own letterhead: what goes at the top of every document and in its payment block. */
+export interface CompanyProfileDto {
+  name: string;
+  tagline: string | null;
+  address: string | null;
+  taxId: string | null;
+  email: string | null;
+  phone: string | null;
+  website: string | null;
+  /** One line per bank detail, printed as written. */
+  bankDetails: string | null;
+  /** Default terms and conditions, one per line; copied onto each new document. */
+  invoiceTerms: string | null;
+  /** Default payment terms ("COD", "50% in advance, balance before shipping"). */
+  paymentTerms: string | null;
+  updatedAt: string | null;
+}
+
+export interface InvoiceLineDto {
+  id: string;
+  kind: InvoiceLineKind;
+  description: string;
+  size: string | null;
+  quantity: number | null;
+  unitPrice: number | null;
+  /** Extras only. */
+  amount: number | null;
+  /** Derived: quantity × unit price, or the extra's amount. Null until both are known. */
+  lineTotal: number | null;
+  position: number;
+}
+
+/** One carton on the manifest, as it was when the document was built. */
+export interface InvoiceCartonDto {
+  n: number;
+  cartonNumber: string;
+  cartonSize: string | null;
+  product: string;
+  contents: Array<{ label: string; qty: number }>;
+  pieces: number;
+  netKg: number | null;
+  grossKg: number | null;
+}
+
+export interface InvoiceReconciliationRowDto { label: string; ordered: number; shipped: number; short: number }
+export interface InvoiceReconciliationGroupDto {
+  product: string;
+  rows: InvoiceReconciliationRowDto[];
+  ordered: number; shipped: number; short: number;
+}
+
+export interface InvoiceDto {
+  id: string;
+  kind: InvoiceKind;
+  status: InvoiceStatus;
+  number: string;
+  date: string;
+  dueDate: string | null;
+  paymentTerms: string | null;
+
+  order: { id: string; poNumber: string; orderName: string; styleNumber: string | null; clientName: string };
+  shipmentId: string | null;
+  packingListId: string | null;
+
+  billTo: string;
+  billToAddress: string | null;
+  billToEmail: string | null;
+  /** The customer's own reference, printed as "Your reference". */
+  customerReference: string | null;
+  /** The consignment the invoice covers: an AWB, a container, or the factory's own shipment number. */
+  shipmentRef: string | null;
+  shippedOn: string | null;
+  coverNote: string | null;
+  terms: string | null;
+  bankDetails: string | null;
+  notes: string | null;
+
+  seller: CompanyProfileDto;
+  lines: InvoiceLineDto[];
+  manifest: InvoiceCartonDto[];
+  reconciliation: InvoiceReconciliationGroupDto[];
+  /** What the builder could not do, in plain words — shown on the draft, never printed. */
+  warnings: string[];
+
+  totals: {
+    totalQty: number;
+    subtotal: number;
+    extras: number;
+    total: number;
+    incomplete: boolean;
+  };
+  totalInWords: string;
+
+  preparedByName: string | null;
+  issuedByName: string | null;
+  issuedAt: string | null;
+  sentAt: string | null;
+  voidedAt: string | null;
+  voidReason: string | null;
+  /** True on a draft whose cartons no longer match the packing list — rebuild it before issuing. */
+  stale: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface InvoiceListRowDto {
+  id: string;
+  kind: InvoiceKind;
+  status: InvoiceStatus;
+  number: string;
+  date: string;
+  dueDate: string | null;
+  orderId: string;
+  poNumber: string;
+  orderName: string;
+  clientName: string;
+  billTo: string;
+  totalQty: number;
+  total: number;
+  incomplete: boolean;
+  issuedAt: string | null;
+  sentAt: string | null;
+  createdAt: string;
+}
+
+/** An order that could be invoiced now, with what it has done so far. */
+export interface InvoiceCandidateDto {
+  orderId: string;
+  poNumber: string;
+  orderName: string;
+  clientName: string;
+  orderQty: number;
+  packedQty: number;
+  shippedQty: number;
+  pricePerPieceUsd: number | null;
+  /** Documents already raised on this order, newest first. */
+  invoices: Array<{ id: string; kind: InvoiceKind; status: InvoiceStatus; number: string }>;
+  packingLists: Array<{ id: string; reference: string | null; approved: boolean; cartonCount: number; totalQty: number; createdAt: string }>;
+  shipments: Array<{ id: string; status: ShipmentStatus; qty: number; actualShippingDate: string | null; awbNumber: string | null; trackingNumber: string | null }>;
 }
