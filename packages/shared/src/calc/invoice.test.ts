@@ -27,6 +27,14 @@ describe('invoice totals', () => {
     assert.equal(lineTotal(item(1972, 7.25)), 14297);
   });
 
+  test('a four-decimal rate is not rounded before it is multiplied', () => {
+    assert.equal(lineTotal(item(122, 7.2535)), 884.93);
+    assert.equal(lineTotal(item(1, 0.005)), 0.01);
+    assert.equal(lineTotal(item(3, 1.005)), 3.02);
+    assert.equal(lineTotal(item(0.5, 10)), 5);
+    assert.equal(lineTotal(item(100000, 999.999999)), 99999999.9);
+  });
+
   test('a goods line without a price has no total and marks the invoice incomplete', () => {
     const t = computeInvoiceTotals([item(100, null), item(50, 2)]);
     assert.equal(lineTotal(item(100, null)), null);
@@ -115,6 +123,8 @@ describe('the size cell', () => {
     const order = ['XS', 'S', 'M', 'L', 'XL', '2XL'];
     assert.equal(summariseSizes(['M', 'S', 'S'], order), 'S, M');
     assert.equal(summariseSizes(['XS', 'S', 'M', 'L', 'XL', '2XL'], order), 'XS – 2XL');
+    assert.equal(summariseSizes(['XS', 'S', 'M', 'L', 'XL', '2XL', 'Spare'], order), 'XS – 2XL, Spare');
+    assert.equal(summariseSizes(['M', 'Spare', 'S'], order), 'S, M, Spare');
     assert.equal(summariseSizes([], order), null);
     assert.equal(summariseSizes(['Sample'], order), 'Sample');
   });

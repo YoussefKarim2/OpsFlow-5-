@@ -46,13 +46,28 @@ export interface InvoiceTotals {
 export const toCents = (v: number): number => Math.round(v * 100);
 export const fromCents = (c: number): number => c / 100;
 
+/**
+ * quantity × unit price, to the cent, without floating-point residue and
+ * without rounding the price first: a rate of 7.2535 on 122 pieces is 884.93,
+ * not 884.50. Quantities carry up to four decimals and prices up to six (the
+ * database columns), so both are scaled to integers and multiplied as BigInts.
+ */
+function goodsCents(quantity: number, unitPrice: number): number {
+  const q = BigInt(Math.round(quantity * 1e4));
+  const p = BigInt(Math.round(unitPrice * 1e6));
+  const product = q * p; // dollars × 1e10
+  const scale = 100_000_000n; // → cents
+  const half = product < 0n ? -(scale / 2n) : scale / 2n;
+  return Number((product + half) / scale);
+}
+
 export function lineTotal(line: InvoiceLineInput): number | null {
   if (line.kind === InvoiceLineKind.EXTRA) {
     return line.amount == null || !Number.isFinite(line.amount) ? null : fromCents(toCents(line.amount));
   }
   if (line.quantity == null || line.unitPrice == null) return null;
   if (!Number.isFinite(line.quantity) || !Number.isFinite(line.unitPrice)) return null;
-  return fromCents(Math.round(line.quantity * toCents(line.unitPrice)));
+  return fromCents(goodsCents(line.quantity, line.unitPrice));
 }
 
 export function computeInvoiceTotals(lines: readonly InvoiceLineInput[]): InvoiceTotals {
@@ -224,13 +239,12 @@ export function reconcileShippedAgainstOrdered(
 export function summariseSizes(labels: readonly string[], sizeOrder: readonly string[] = []): string | null {
   const unique = [...new Set(labels.filter((l) => l.trim().length > 0))];
   if (unique.length === 0) return null;
-  const rank = (label: string) => {
-    const i = sizeOrder.indexOf(label);
-    return i === -1 ? Number.MAX_SAFE_INTEGER : i;
-  };
-  unique.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
-  if (unique.length <= 4) return unique.join(', ');
-  return `${unique[0]} – ${unique[unique.length - 1]}`;
+  const rank = (label: string) => sizeOrder.indexOf(label);
+  // Sold sizes run as a range; anything else (a spare, a sample) is named after it.
+  const sold = unique.filter((l) => rank(l) !== -1).sort((a, b) => rank(a) - rank(b));
+  const other = unique.filter((l) => rank(l) === -1).sort((a, b) => a.localeCompare(b));
+  const soldText = sold.length === 0 ? [] : sold.length <= 4 ? sold : [`${sold[0]} – ${sold[sold.length - 1]}`];
+  return [...soldText, ...other].join(', ');
 }
 
 // ── Issuing ──────────────────────────────────────────────────────────────────

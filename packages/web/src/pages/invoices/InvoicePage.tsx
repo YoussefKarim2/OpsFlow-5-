@@ -10,14 +10,15 @@
  * order and can be refreshed with Rebuild. What a person types stays.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Ban, FileCheck, Lock, Plus, Printer, RefreshCw, Send, Trash2, AlertTriangle } from 'lucide-react';
 import {
-  computeInvoiceTotals, fmtDate, INVOICE_KIND_LABEL, INVOICE_STATUS_LABEL, InvoiceStatus, issueBlockers, lineTotal,
+  computeInvoiceTotals, fmtDate, INVOICE_KIND_LABEL, InvoiceStatus, issueBlockers, lineTotal,
   type InvoiceDto, type InvoiceLineKind as LineKind,
 } from '@opsflow/shared';
+import { InvoiceStatusChip } from '../../components/InvoiceStatusChip';
 import { api, type InvoiceEditBody } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Card, ConfirmDialog, ErrorNote, Field, Num, Spinner, clsx, useToast } from '../../components/ui';
@@ -55,14 +56,19 @@ function fromServer(inv: InvoiceDto): Draft {
   };
 }
 
+/**
+ * Exactly what is on screen. A blank name or a line without a description is
+ * sent as it is and refused by the server with its own sentence, rather than
+ * quietly dropped so that the saved document differs from the preview.
+ */
 function toBody(d: Draft): InvoiceEditBody {
   const nn = (s: string) => (s.trim() === '' ? null : s.trim());
   return {
     date: d.date || undefined, dueDate: d.dueDate || null, paymentTerms: nn(d.paymentTerms),
-    billTo: d.billTo.trim() || undefined, billToAddress: nn(d.billToAddress), billToEmail: nn(d.billToEmail),
+    billTo: d.billTo.trim(), billToAddress: nn(d.billToAddress), billToEmail: nn(d.billToEmail),
     customerReference: nn(d.customerReference), shipmentRef: nn(d.shipmentRef), shippedOn: d.shippedOn || null,
     coverNote: nn(d.coverNote), terms: nn(d.terms), bankDetails: nn(d.bankDetails), notes: nn(d.notes),
-    lines: d.lines.filter((l) => l.description.trim()).map((l) => ({
+    lines: d.lines.map((l) => ({
       kind: l.kind, description: l.description.trim(), size: nn(l.size),
       quantity: l.kind === 'ITEM' ? numOrNull(l.quantity) : null,
       unitPrice: l.kind === 'ITEM' ? numOrNull(l.unitPrice) : null,
@@ -105,11 +111,20 @@ export function InvoicePage() {
   const [draft, setDraft] = useState<Draft | null>(null);
   const [confirm, setConfirm] = useState<'issue' | 'rebuild' | 'delete' | 'void' | null>(null);
   const [voidReason, setVoidReason] = useState('');
+  // The record changed on the server while there were unsaved edits here.
+  const [serverChanged, setServerChanged] = useState(false);
 
   const { data, isLoading, error, refetch } = useQuery({ queryKey: ['invoice', id], queryFn: () => api.invoices.get(id), enabled: !!id });
   const inv = data?.data ?? null;
 
-  useEffect(() => { if (inv) setDraft(fromServer(inv)); }, [inv]);
+  // A refetch (window focus, another user's save) must not wipe what is being
+  // typed: the form resets from the server only while it has no unsaved edits.
+  const dirtyRef = useRef(false);
+  useEffect(() => {
+    if (!inv) return;
+    if (!dirtyRef.current) { setDraft(fromServer(inv)); setServerChanged(false); return; }
+    setServerChanged(true);
+  }, [inv]);
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: ['invoice', id] });
@@ -118,7 +133,12 @@ export function InvoicePage() {
   };
   const after = (msg: string) => () => { refresh(); setConfirm(null); toast.success(msg); };
 
-  const save = useMutation({ mutationFn: (d: Draft) => api.invoices.update(id, toBody(d)), onSuccess: after('Draft saved'), onError: (e) => toast.error(e) });
+  const save = useMutation({
+    mutationFn: (d: Draft) => api.invoices.update(id, toBody(d)),
+    // The saved copy is the new baseline, so the next refetch is not "a change".
+    onSuccess: (res) => { dirtyRef.current = false; setDraft(fromServer(res.data)); after('Draft saved')(); },
+    onError: (e) => toast.error(e),
+  });
   const rebuild = useMutation({ mutationFn: () => api.invoices.rebuild(id), onSuccess: after('Rebuilt from the order'), onError: (e) => toast.error(e) });
   const issue = useMutation({ mutationFn: () => api.invoices.issue(id), onSuccess: after('Issued. The document is now the record.'), onError: (e) => toast.error(e) });
   const markSent = useMutation({ mutationFn: () => api.invoices.markSent(id), onSuccess: after('Marked as sent'), onError: (e) => toast.error(e) });
@@ -131,6 +151,7 @@ export function InvoicePage() {
 
   const shown = useMemo(() => (inv && draft ? preview(inv, draft) : inv), [inv, draft]);
   const dirty = useMemo(() => !!(inv && draft) && JSON.stringify(draft) !== JSON.stringify(fromServer(inv)), [inv, draft]);
+  dirtyRef.current = dirty;
 
   if (isLoading) return <Spinner label="Opening the document…" />;
   if (error) return <div className="p-6"><ErrorNote error={error} onRetry={refetch} /></div>;
@@ -219,9 +240,19 @@ export function InvoicePage() {
       {inv.status === InvoiceStatus.VOID && (
         <div className="no-print mb-4"><Notice tone="red" title={`Voided ${fmtDate(inv.voidedAt)}.`}>{inv.voidReason}</Notice></div>
       )}
+      {serverChanged && (
+        <div className="no-print mb-4">
+          <Notice tone="amber" title="This document changed on the server while you were editing.">
+            Your unsaved edits are still here. Save them to keep them, or{' '}
+            <button type="button" className="font-semibold underline" onClick={() => { dirtyRef.current = false; setDraft(fromServer(inv)); setServerChanged(false); }}>discard them and load the latest</button>.
+          </Notice>
+        </div>
+      )}
 
       {/* ── Editor + document ──────────────────────────────────────────── */}
-      <div className={clsx('grid gap-5', editable && 'xl:grid-cols-[minmax(22rem,30rem)_1fr]')}>
+      {/* The editor takes a fixed column so the document keeps the width it
+          prints at; on a laptop screen the sheet still gets about 640px. */}
+      <div className={clsx('grid gap-5', editable && 'xl:grid-cols-[21rem_minmax(0,1fr)] 2xl:grid-cols-[26rem_minmax(0,1fr)]')}>
         {editable && (
           <div className="no-print space-y-4">
             <Card>
@@ -277,7 +308,7 @@ export function InvoicePage() {
             <Card>
               <div className="card-header"><h3 className="card-title">Dates &amp; references</h3></div>
               <div className="grid grid-cols-2 gap-3 p-4">
-                <Field label={inv.kind === 'INVOICE' ? 'Invoice date' : 'Date'} hint={`Stays in ${inv.date.slice(0, 4)}: the number is of that year.`}>
+                <Field label={inv.kind === 'INVOICE' ? 'Invoice date' : 'Date'} hint={inv.kind === 'INVOICE' ? 'The day the goods left, unless agreed otherwise.' : undefined}>
                   <input type="date" className="input" value={draft.date} onChange={(e) => set('date', e.target.value)} />
                 </Field>
                 <Field label={inv.kind === 'INVOICE' ? 'Due date' : 'Valid until'}><input type="date" className="input" value={draft.dueDate} onChange={(e) => set('dueDate', e.target.value)} /></Field>
@@ -332,13 +363,13 @@ export function InvoicePage() {
         tone="primary" title="Rebuild from the order?" confirmLabel="Rebuild"
         body={<>
           <p>The goods lines, the manifest, the reconciliation and the letterhead are read again from the order and replace what is here.</p>
-          <p className="mt-2">Your extra lines, cover note, terms, bill-to block, dates and notes are kept. Unsaved edits to the goods lines are lost.</p>
+          <p className="mt-2">Kept: your extra lines, cover note, terms, bill-to block, dates and notes; a shipment number or date the order still cannot supply; and a rate you typed on a goods line the order still has no price for. Unsaved edits are lost — save first if you want them.</p>
         </>}
       />
       <ConfirmDialog
         open={confirm === 'delete'} onCancel={() => setConfirm(null)} onConfirm={() => remove.mutate()} busy={remove.isPending}
         title={`Delete draft ${inv.number}?`} confirmLabel="Delete"
-        body={<p>A draft has not been sent to anyone, so deleting it leaves no record. Its number is reused by the next draft of this kind.</p>}
+        body={<p>A draft has not been sent to anyone, so deleting it leaves no record. Its number is handed back and taken by the next draft of this kind.</p>}
       />
       <ConfirmDialog
         open={confirm === 'void'} onCancel={() => setConfirm(null)} busy={voidIt.isPending}
@@ -356,13 +387,9 @@ export function InvoicePage() {
 }
 
 function StatusLine({ inv }: { inv: InvoiceDto }) {
-  const tone = inv.status === 'ISSUED'
-    ? (inv.sentAt ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' : 'bg-blue-50 text-blue-700 ring-blue-600/20')
-    : inv.status === 'VOID' ? 'bg-red-50 text-red-700 ring-red-600/20'
-    : 'bg-amber-50 text-amber-800 ring-amber-600/20';
   return (
     <span className="ml-2 inline-flex items-center gap-2">
-      <span className={clsx('chip', tone)}>{INVOICE_STATUS_LABEL[inv.status]}{inv.status === 'ISSUED' && inv.sentAt ? ' · sent' : ''}</span>
+      <InvoiceStatusChip status={inv.status} sentAt={inv.sentAt} />
       {inv.status === 'ISSUED' && inv.sentAt && <span className="text-2xs text-ink-500">Sent {fmtDate(inv.sentAt)}</span>}
     </span>
   );

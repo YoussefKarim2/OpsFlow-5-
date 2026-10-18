@@ -7,7 +7,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeInvoiceTotals, issueBlockers, type CompanyProfileDto } from '@opsflow/shared';
 import {
-  buildInvoiceDocument, cartonsFingerprint, defaultCoverNote, manifestFingerprint,
+  PROFORMA_VALID_DAYS, buildInvoiceDocument, defaultCoverNote, manifestFingerprint,
   type BuildOrder, type BuildPackingList, type BuildShipment,
 } from './invoice-service.js';
 
@@ -152,10 +152,13 @@ describe('a proforma', () => {
 
 describe('the cover note and the blockers', () => {
   test('the note names the number, the shipment and the order', () => {
-    const note = defaultCoverNote({ kind: 'INVOICE', number: 'INV-2026-0379', billTo: 'Champs Land', shipmentRef: 'EXP-0110', poNumber: 'SO-2026-0138', orderName: 'Car stand printed cover', qty: 122 });
+    const note = defaultCoverNote({ kind: 'INVOICE', number: 'INV-2026-0379', billTo: 'Champs Land', shipmentRef: 'EXP-0110', poNumber: 'SO-2026-0138', orderName: 'Car stand printed cover', qty: 122, hasManifest: true });
     assert.ok(note.startsWith('Dear Champs Land,'));
-    assert.ok(note.includes('invoice INV-2026-0379 for shipment EXP-0110'));
+    assert.ok(note.includes('invoice INV-2026-0379 for shipment EXP-0110, with the shipped-quantity reconciliation and the packing list'));
     assert.ok(note.includes('PO SO-2026-0138 · Car stand printed cover — 122 pcs'));
+    const bare = defaultCoverNote({ kind: 'INVOICE', number: 'INV-2026-0380', billTo: 'Champs Land', shipmentRef: null, poNumber: 'P', orderName: 'N', qty: 1, hasManifest: false });
+    assert.ok(!bare.includes('packing list'), 'a document without a manifest does not promise one');
+    assert.ok(bare.includes('invoice INV-2026-0380.'));
   });
 
   test('a draft with no rate, no quantity or stale cartons cannot be issued', () => {
@@ -177,11 +180,68 @@ describe('the cover note and the blockers', () => {
     assert.ok(issueBlockers({ ...base, lines: [line(10, 2)], stale: true })[0]!.includes('Rebuild'));
   });
 
-  test('a manifest matches the cartons it was built from and nothing else', () => {
-    const doc = buildInvoiceDocument({ kind: 'INVOICE', order: order(), packingList: packingList(), shipment: shipment(), profile });
-    const cartons = packingList().cartons.map((c) => ({ cartonNumber: c.cartonNumber, qty: c.qty }));
-    assert.equal(manifestFingerprint(doc.manifest), cartonsFingerprint(cartons));
-    cartons[1]!.qty = 41;
-    assert.notEqual(manifestFingerprint(doc.manifest), cartonsFingerprint(cartons));
+  test('the manifest fingerprint changes with a quantity, a weight or a size breakdown', () => {
+    const base = buildInvoiceDocument({ kind: 'INVOICE', order: order(), packingList: packingList(), shipment: shipment(), profile }).manifest;
+    const again = buildInvoiceDocument({ kind: 'INVOICE', order: order(), packingList: packingList(), shipment: shipment(), profile }).manifest;
+    assert.equal(manifestFingerprint(base), manifestFingerprint(again));
+    const heavier = packingList(); heavier.cartons[0]!.netKg = 26;
+    assert.notEqual(manifestFingerprint(base), manifestFingerprint(buildInvoiceDocument({ kind: 'INVOICE', order: order(), packingList: heavier, shipment: shipment(), profile }).manifest));
+    const resized = packingList(); resized.cartons[1]!.lines = [{ orderSizeId: 's1', sizeLabel: null, qty: 42 }];
+    assert.notEqual(manifestFingerprint(base), manifestFingerprint(buildInvoiceDocument({ kind: 'INVOICE', order: order(), packingList: resized, shipment: shipment(), profile }).manifest));
+  });
+});
+
+describe('shipped against ordered never mislabels the goods', () => {
+  test('a shipment with no cartons is compared as the order as a whole, on one row', () => {
+    const doc = buildInvoiceDocument({ kind: 'INVOICE', order: order(), packingList: null, shipment: shipment({ qty: 120 }), profile });
+    assert.equal(doc.reconciliation.length, 1);
+    const g = doc.reconciliation[0]!;
+    assert.equal(g.ordered, 122);
+    assert.equal(g.shipped, 120);
+    assert.equal(g.short, 2);
+    assert.deepEqual(g.rows.map((r) => r.label), ['All sizes']);
+  });
+
+  test('an uncoloured carton on a one-colour order is that colour', () => {
+    const pl = packingList();
+    for (const c of pl.cartons) c.orderColorId = null;
+    const doc = buildInvoiceDocument({ kind: 'INVOICE', order: order(), packingList: pl, shipment: shipment(), profile });
+    assert.equal(doc.lines[0]!.description, 'Car stand printed cover — Black');
+    assert.equal(doc.reconciliation.length, 1);
+    assert.equal(doc.reconciliation[0]!.shipped, 122);
+    assert.ok(!doc.warnings.some((w) => w.includes('no colour')));
+  });
+
+  test('an uncoloured carton on a multi-colour order drops the comparison to size level and says so', () => {
+    const o = order({
+      colors: [{ id: 'c1', name: 'Black', productName: null, position: 0 }, { id: 'c2', name: 'White', productName: null, position: 1 }],
+      orderCells: [{ orderColorId: 'c1', orderSizeId: 's1', qty: 80 }, { orderColorId: 'c2', orderSizeId: 's1', qty: 42 }],
+    });
+    const pl = packingList();
+    pl.cartons[2]!.orderColorId = null;
+    const doc = buildInvoiceDocument({ kind: 'INVOICE', order: o, packingList: pl, shipment: shipment(), profile });
+    assert.equal(doc.reconciliation.length, 1, 'one group for the whole order');
+    assert.equal(doc.reconciliation[0]!.product, 'Car stand printed cover');
+    assert.equal(doc.reconciliation[0]!.ordered, 122);
+    assert.equal(doc.reconciliation[0]!.shipped, 122);
+    assert.ok(doc.warnings.some((w) => w.includes('no colour')));
+  });
+
+  test('other packing lists on the order are named in a note under the invoice', () => {
+    const other: BuildPackingList = { id: 'pl2', reference: 'EXP-0111', approved: true, cartons: [
+      { id: 'k9', cartonNumber: 'CTN-9', cartonSize: null, orderColorId: 'c1', orderSizeId: 's1', qty: 30, netKg: null, grossKg: null, lines: [] },
+    ] };
+    const doc = buildInvoiceDocument({ kind: 'INVOICE', order: order(), packingList: packingList(), shipment: shipment(), otherPackingLists: [other], profile });
+    assert.ok(doc.notes?.includes('30 pcs') && doc.notes.includes('EXP-0111'));
+    assert.ok(doc.warnings.some((w) => w.includes('other packing list')));
+    const alone = buildInvoiceDocument({ kind: 'INVOICE', order: order(), packingList: packingList(), shipment: shipment(), otherPackingLists: [], profile });
+    assert.equal(alone.notes, null);
+  });
+
+  test('a proforma stands for a fortnight', () => {
+    const doc = buildInvoiceDocument({ kind: 'PROFORMA', order: order(), packingList: null, shipment: null, profile, now: new Date('2026-10-18T15:00:00Z') });
+    assert.equal(doc.date.toISOString(), '2026-10-18T00:00:00.000Z');
+    assert.equal(doc.dueDate!.toISOString(), `2026-11-0${1}T00:00:00.000Z`);
+    assert.equal(PROFORMA_VALID_DAYS, 14);
   });
 });

@@ -15,8 +15,9 @@
  * the draft and are shown on screen; they are never printed.
  *
  * Numbering is allocated inside a transaction under the (kind, year, sequence)
- * unique index, and retried once on a collision, so two people pressing "New"
- * together get consecutive numbers rather than an error or a duplicate.
+ * unique index, and retried on a collision, so two people pressing "New"
+ * together get consecutive numbers rather than an error or a duplicate. The
+ * lowest free sequence is taken, so a deleted draft hands its number back.
  */
 
 import { Prisma } from '@prisma/client';
@@ -35,7 +36,7 @@ const dec = (v: { toString(): string } | null | undefined): number | null =>
 
 // ── Company profile ──────────────────────────────────────────────────────────
 
-const PROFILE_ID = 'default';
+export const PROFILE_ID = 'default';
 
 export function profileToDto(p: {
   name: string; tagline: string | null; address: string | null; taxId: string | null; email: string | null;
@@ -49,13 +50,10 @@ export function profileToDto(p: {
   };
 }
 
-/** The one row, created with the factory's name and nothing else the first time it is asked for. */
+/** The one row. Created with the factory's name and nothing else the first time it is asked for; a read is otherwise a read. */
 export async function getCompanyProfile(): Promise<CompanyProfileDto> {
-  const row = await prisma.companyProfile.upsert({
-    where: { id: PROFILE_ID },
-    create: { id: PROFILE_ID },
-    update: {},
-  });
+  const row = await prisma.companyProfile.findUnique({ where: { id: PROFILE_ID } })
+    ?? await prisma.companyProfile.upsert({ where: { id: PROFILE_ID }, create: { id: PROFILE_ID }, update: {} });
   return profileToDto(row);
 }
 
@@ -116,6 +114,15 @@ export interface BuiltLine {
   amount: number | null;
 }
 
+/** The order's identity as printed: snapshotted so a rename later does not change an issued document. */
+export interface OrderRef {
+  id: string;
+  poNumber: string;
+  orderName: string;
+  styleNumber: string | null;
+  clientName: string;
+}
+
 export interface BuiltDocument {
   date: Date;
   dueDate: Date | null;
@@ -128,7 +135,10 @@ export interface BuiltDocument {
   shippedOn: Date | null;
   terms: string | null;
   bankDetails: string | null;
+  /** Pre-filled only when there is something the reader must be told — other shipments of the same order. */
+  notes: string | null;
   seller: CompanyProfileDto;
+  orderRef: OrderRef;
   lines: BuiltLine[];
   manifest: InvoiceCartonDto[];
   reconciliation: InvoiceReconciliationGroupDto[];
@@ -152,40 +162,51 @@ function cartonContents(order: BuildOrder, carton: BuildCarton): Array<{ label: 
   return [{ label: sizeName(carton.orderSizeId) ?? 'Unsized', qty: carton.qty }];
 }
 
-const today = (now: Date) => new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+const dayOf = (d: Date) => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+const addDays = (d: Date, n: number) => new Date(d.getTime() + n * 86_400_000);
+
+/** How long a quotation stands by default; the terms line "Prices are valid for 14 days" says the same. */
+export const PROFORMA_VALID_DAYS = 14;
 
 export function buildInvoiceDocument(input: {
   kind: InvoiceKind;
   order: BuildOrder;
   packingList: BuildPackingList | null;
   shipment: BuildShipment | null;
+  /** The order's other packing lists with cartons — earlier or later shipments this document does not cover. */
+  otherPackingLists?: BuildPackingList[];
   profile: CompanyProfileDto;
   now?: Date;
 }): BuiltDocument {
   const { kind, order, packingList, shipment, profile } = input;
   const now = input.now ?? new Date();
+  const others = (input.otherPackingLists ?? []).filter((l) => l.cartons.length > 0);
   const warnings: string[] = [];
   const price = order.pricePerPieceUsd;
   const sizeOrder = [...order.sizes].sort((a, b) => a.position - b.position).map((s) => s.name);
   const colourRank = (id: string | null) => (id ? order.colors.find((c) => c.id === id)?.position ?? 9999 : 9999);
+  const soleColour = order.colors.length === 1 ? order.colors[0]!.id : null;
 
   if (price == null) {
     warnings.push('The order has no unit price, so the goods lines have no amount. Set the price on Order Details, or type a rate on each line.');
   }
 
   // Ordered, per colour and size, from the ORDER ledger.
-  const ordered = order.orderCells
-    .filter((c) => c.qty > 0)
-    .map((c) => ({
-      colorId: c.orderColorId,
-      product: productLabel(order, c.orderColorId),
-      label: order.sizes.find((s) => s.id === c.orderSizeId)?.name ?? 'Unsized',
-      qty: c.qty,
-    }));
+  const orderedCells = order.orderCells.filter((c) => c.qty > 0).map((c) => ({
+    colorId: c.orderColorId,
+    label: order.sizes.find((s) => s.id === c.orderSizeId)?.name ?? 'Unsized',
+    qty: c.qty,
+  }));
+  const orderedQty = orderedCells.reduce((a, c) => a + c.qty, 0);
+  const byColour = (cells: Array<{ colorId: string | null; label: string; qty: number }>) =>
+    cells.map((c) => ({ product: productLabel(order, c.colorId), label: c.label, qty: c.qty }));
+  const byOrder = (cells: Array<{ label: string; qty: number }>) =>
+    cells.map((c) => ({ product: order.orderName, label: c.label, qty: c.qty }));
 
   let lines: BuiltLine[] = [];
   let manifest: InvoiceCartonDto[] = [];
   let reconciliation: InvoiceReconciliationGroupDto[] = [];
+  let notes: string | null = null;
 
   /** One goods line per colour from a list of (colour, size, qty) pieces. */
   const linesFromPieces = (pieces: Array<{ colorId: string | null; label: string; qty: number }>): BuiltLine[] => {
@@ -211,30 +232,40 @@ export function buildInvoiceDocument(input: {
   if (kind === InvoiceKind.PROFORMA) {
     // A quotation is priced on what was ordered. Nothing has shipped, so there
     // is no manifest and nothing to reconcile.
-    lines = linesFromPieces(ordered);
+    lines = linesFromPieces(orderedCells);
     if (lines.length === 0) {
       warnings.push('The order has no quantities yet, so there are no goods lines. Fill the main order, or add the lines by hand.');
     }
   } else {
     const cartons = packingList?.cartons ?? [];
     if (cartons.length > 0) {
-      const shipped = cartons.flatMap((c) =>
-        cartonContents(order, c).map((x) => ({ colorId: c.orderColorId, product: productLabel(order, c.orderColorId), label: x.label, qty: x.qty })));
-      lines = linesFromPieces(shipped);
+      // A carton with no colour on a one-colour order can only hold that colour.
+      // On a multi-colour order it cannot be placed, so the comparison drops to
+      // size level for the whole document rather than inventing a colour.
+      const colourOf = (c: BuildCarton) => c.orderColorId ?? soleColour;
+      const uncoloured = cartons.filter((c) => colourOf(c) == null).length;
+      const shippedCells = cartons.flatMap((c) =>
+        cartonContents(order, c).map((x) => ({ colorId: colourOf(c), label: x.label, qty: x.qty })));
+      lines = linesFromPieces(shippedCells);
       manifest = cartons.map((c, i) => {
         const contents = cartonContents(order, c);
         return {
           n: i + 1,
           cartonNumber: c.cartonNumber,
           cartonSize: c.cartonSize,
-          product: productLabel(order, c.orderColorId),
+          product: productLabel(order, colourOf(c)),
           contents,
           pieces: contents.reduce((a, x) => a + x.qty, 0),
           netKg: c.netKg,
           grossKg: c.grossKg,
         };
       });
-      reconciliation = reconcileShippedAgainstOrdered(ordered, shipped, sizeOrder).groups;
+      reconciliation = uncoloured === 0
+        ? reconcileShippedAgainstOrdered(byColour(orderedCells), byColour(shippedCells), sizeOrder).groups
+        : reconcileShippedAgainstOrdered(byOrder(orderedCells), byOrder(shippedCells), sizeOrder).groups;
+      if (uncoloured > 0) {
+        warnings.push(`${uncoloured} carton${uncoloured === 1 ? ' has' : 's have'} no colour, so shipped-vs-ordered is compared by size for the whole order rather than per colour. Set the colour on the cartons and rebuild for a colour-level comparison.`);
+      }
       if (packingList && !packingList.approved) {
         warnings.push('The packing list has not been approved yet. The cartons may still change; rebuild the draft before issuing if they do.');
       }
@@ -242,24 +273,39 @@ export function buildInvoiceDocument(input: {
       if (shipment && shipment.qty > 0 && shipment.qty !== packed) {
         warnings.push(`The cartons hold ${packed.toLocaleString()} pieces but the shipment records ${shipment.qty.toLocaleString()}. The invoice follows the cartons; check which is right.`);
       }
+      if (others.length > 0) {
+        // The comparison is this shipment against the whole order, so the
+        // reader must be told that the rest of the order travelled separately.
+        const otherQty = others.reduce((a, l) => a + l.cartons.reduce((b, c) => b + c.qty, 0), 0);
+        const names = others.map((l) => l.reference?.trim() || 'another packing list').join(', ');
+        notes = `Shipped-vs-ordered above compares this shipment${packingList?.reference ? ` (${packingList.reference})` : ''} with the whole order. A further ${otherQty.toLocaleString()} pcs of this order travel on ${names} and are invoiced separately.`;
+        warnings.push(`This order has ${others.length} other packing list${others.length === 1 ? '' : 's'} with cartons (${otherQty.toLocaleString()} pcs). This document covers ${packingList?.reference?.trim() || 'the chosen list'} only; a note under the invoice says so.`);
+      }
     } else if (shipment && shipment.qty > 0) {
+      // No breakdown exists, so the comparison is the order as a whole: one
+      // row, same label on both sides. Labelling the shipped side differently
+      // from the ordered side would print the whole order as short.
       lines = [{
         kind: InvoiceLineKind.ITEM, description: order.orderName, size: null,
         quantity: shipment.qty, unitPrice: price, amount: null,
       }];
-      reconciliation = reconcileShippedAgainstOrdered(ordered, [{ product: order.orderName, label: 'All sizes', qty: shipment.qty }], sizeOrder).groups;
+      reconciliation = reconcileShippedAgainstOrdered(
+        [{ product: order.orderName, label: 'All sizes', qty: orderedQty }],
+        [{ product: order.orderName, label: 'All sizes', qty: shipment.qty }],
+      ).groups;
       warnings.push('No packing list with cartons was found, so the goods are one line at the shipment\'s quantity and there is no manifest. Pack the cartons and rebuild to get the full document.');
     } else {
-      lines = linesFromPieces(ordered);
+      lines = linesFromPieces(orderedCells);
       warnings.push('Nothing has been packed or shipped on this order yet. The goods lines are the ordered quantities; rebuild the draft once the cartons are packed.');
     }
   }
 
   // The dates. An invoice is dated the day the goods left when that is known;
-  // a quotation is dated today. Due on the same day until somebody says otherwise.
+  // a quotation is dated today and stands for a fortnight.
   const date = kind === InvoiceKind.INVOICE && shipment?.actualShippingDate
-    ? today(shipment.actualShippingDate)
-    : today(now);
+    ? dayOf(shipment.actualShippingDate)
+    : dayOf(now);
+  const dueDate = kind === InvoiceKind.PROFORMA ? addDays(date, PROFORMA_VALID_DAYS) : date;
   const shippedOn = kind === InvoiceKind.INVOICE
     ? shipment?.actualShippingDate ?? null
     : order.promisedShippingDate;
@@ -272,7 +318,7 @@ export function buildInvoiceDocument(input: {
 
   return {
     date,
-    dueDate: date,
+    dueDate,
     paymentTerms: profile.paymentTerms,
     billTo: order.client.name,
     billToAddress: order.billingAddress?.trim() || order.client.billingAddress?.trim() || null,
@@ -282,7 +328,9 @@ export function buildInvoiceDocument(input: {
     shippedOn,
     terms: profile.invoiceTerms,
     bankDetails: profile.bankDetails,
+    notes,
     seller: profile,
+    orderRef: { id: order.id, poNumber: order.poNumber, orderName: order.orderName, styleNumber: order.styleNumber, clientName: order.client.name },
     lines,
     manifest,
     reconciliation,
@@ -290,12 +338,12 @@ export function buildInvoiceDocument(input: {
   };
 }
 
-/** The paragraph above the document, written the way the sample reads. */
+/** The paragraph above the document, written the way the sample reads — and promising only what is actually below. */
 export function defaultCoverNote(input: {
   kind: InvoiceKind; number: string; billTo: string; shipmentRef: string | null;
-  poNumber: string; orderName: string; qty: number;
+  poNumber: string; orderName: string; qty: number; hasManifest: boolean;
 }): string {
-  const { kind, number, billTo, shipmentRef, poNumber, orderName, qty } = input;
+  const { kind, number, billTo, shipmentRef, poNumber, orderName, qty, hasManifest } = input;
   const orderLine = `PO ${poNumber} · ${orderName} — ${qty.toLocaleString()} pcs`;
   if (kind === InvoiceKind.PROFORMA) {
     return [
@@ -305,11 +353,16 @@ export function defaultCoverNote(input: {
       'Kindly confirm the quantities and prices so production can be scheduled. We remain at your disposal for any query.',
     ].join('\n');
   }
+  const forShipment = shipmentRef ? ` for shipment ${shipmentRef}` : '';
   return [
     `Dear ${billTo},`,
-    `Please find below invoice ${number}${shipmentRef ? ` for shipment ${shipmentRef}` : ''}, with the shipped-quantity reconciliation and the packing list.`,
+    hasManifest
+      ? `Please find below invoice ${number}${forShipment}, with the shipped-quantity reconciliation and the packing list.`
+      : `Please find below invoice ${number}${forShipment}.`,
     `This invoice covers: ${orderLine}.`,
-    'Kindly arrange settlement as per the agreed terms. The shipped-versus-ordered reconciliation and the full packing list are included below. We remain at your disposal for any query.',
+    hasManifest
+      ? 'Kindly arrange settlement as per the agreed terms. The shipped-versus-ordered reconciliation and the full packing list are included below. We remain at your disposal for any query.'
+      : 'Kindly arrange settlement as per the agreed terms. We remain at your disposal for any query.',
   ].join('\n');
 }
 
@@ -330,6 +383,8 @@ const BUILD_INCLUDE = {
     },
     orderBy: { createdAt: 'desc' as const },
   },
+  // Which lists are already on an issued invoice, so "choose for me" prefers one that is not.
+  invoices: { where: { kind: 'INVOICE' as const, status: 'ISSUED' as const }, select: { packingListId: true } },
 } satisfies Prisma.OrderInclude;
 
 type LoadedOrder = Prisma.OrderGetPayload<{ include: typeof BUILD_INCLUDE }>;
@@ -376,15 +431,18 @@ export function toBuildShipment(s: LoadedOrder['shipments'][number]): BuildShipm
 
 /**
  * Which packing list and which shipment an invoice is for, when the caller did
- * not say: the approved list with cartons if there is one, else the newest
- * with cartons; the consignment furthest along, else the newest.
+ * not say: among lists with cartons, one not already on an issued invoice,
+ * approved first, newest first; the consignment furthest along.
  */
 export function pickDefaults(o: LoadedOrder, chosen: { packingListId?: string | null; shipmentId?: string | null }) {
   let packingList = chosen.packingListId ? o.packingLists.find((l) => l.id === chosen.packingListId) : undefined;
   if (chosen.packingListId && !packingList) throw new NotFoundError('Packing list');
   if (!packingList) {
+    const invoiced = new Set(o.invoices.map((i) => i.packingListId).filter((id): id is string => id != null));
     const withCartons = o.packingLists.filter((l) => l.cartons.length > 0);
-    packingList = withCartons.find((l) => l.approved) ?? withCartons[0] ?? o.packingLists[0];
+    const fresh = withCartons.filter((l) => !invoiced.has(l.id));
+    const pool = fresh.length > 0 ? fresh : withCartons;
+    packingList = pool.find((l) => l.approved) ?? pool[0] ?? o.packingLists[0];
   }
 
   let shipment = chosen.shipmentId ? o.shipments.find((s) => s.id === chosen.shipmentId) : undefined;
@@ -396,12 +454,34 @@ export function pickDefaults(o: LoadedOrder, chosen: { packingListId?: string | 
   return { packingList: packingList ?? null, shipment: shipment ?? null };
 }
 
+/** The packing lists and consignments of an order, as the New-document dialog lists them. */
+export function sourcesOf(o: {
+  packingLists: Array<{ id: string; reference: string | null; approved: boolean; createdAt: Date; cartons: Array<{ qty: number }> }>;
+  shipments: Array<{ id: string; status: ShipmentStatus; qty: number; actualShippingDate: Date | null; awbNumber: string | null; trackingNumber: string | null }>;
+}) {
+  return {
+    packingLists: o.packingLists.map((l) => ({
+      id: l.id, reference: l.reference, approved: l.approved, cartonCount: l.cartons.length,
+      totalQty: l.cartons.reduce((a, c) => a + c.qty, 0), createdAt: l.createdAt.toISOString(),
+    })),
+    shipments: o.shipments.map((s) => ({
+      id: s.id, status: s.status, qty: s.qty, actualShippingDate: s.actualShippingDate?.toISOString() ?? null,
+      awbNumber: s.awbNumber, trackingNumber: s.trackingNumber,
+    })),
+  };
+}
+
 // ── Numbering ────────────────────────────────────────────────────────────────
 
-/** The next sequence of this kind and year. Must run inside the creating transaction. */
+/** The lowest free sequence of this kind and year, so a deleted draft hands its number back. Runs inside the creating transaction. */
 export async function nextSequence(tx: Prisma.TransactionClient, kind: InvoiceKind, year: number): Promise<number> {
-  const last = await tx.invoice.aggregate({ where: { kind, year }, _max: { sequence: true } });
-  return (last._max.sequence ?? 0) + 1;
+  const taken = await tx.invoice.findMany({ where: { kind, year }, select: { sequence: true }, orderBy: { sequence: 'asc' } });
+  let next = 1;
+  for (const { sequence } of taken) {
+    if (sequence > next) break;
+    if (sequence === next) next += 1;
+  }
+  return next;
 }
 
 export const numberFor = (kind: InvoiceKind, year: number, sequence: number) =>
@@ -411,9 +491,9 @@ const isUniqueViolation = (e: unknown) =>
   e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002';
 
 /**
- * Run `work` with a freshly allocated number, once more if another draft took
- * the same number in the meantime. The unique index is what makes the second
- * attempt safe: it cannot produce a duplicate, only a retry.
+ * Run `work` with a freshly allocated number, again if another draft took the
+ * same number in the meantime. The unique index is what makes the retry safe:
+ * it cannot produce a duplicate, only another attempt.
  */
 export async function withAllocatedNumber<T>(
   kind: InvoiceKind, year: number,
@@ -426,7 +506,7 @@ export async function withAllocatedNumber<T>(
         return work(tx, numberFor(kind, year, sequence), sequence);
       });
     } catch (e) {
-      if (isUniqueViolation(e) && attempt < 2) continue;
+      if (isUniqueViolation(e) && attempt < 4) continue;
       throw e;
     }
   }
@@ -454,18 +534,48 @@ export function lineToDto(l: LoadedInvoice['lines'][number]): InvoiceLineDto {
   };
 }
 
-/** The cartons as the manifest remembers them, against the cartons as they are now. */
+/** Everything about a carton the manifest prints, so any change to it makes the draft stale. */
 export function manifestFingerprint(manifest: InvoiceCartonDto[]): string {
-  return manifest.map((c) => `${c.cartonNumber}=${c.pieces}`).join('|');
+  return manifest
+    .map((c) => `${c.cartonNumber}=${c.pieces}|${c.cartonSize ?? ''}|${c.netKg ?? ''}|${c.grossKg ?? ''}|${c.contents.map((x) => `${x.label}:${x.qty}`).join(',')}`)
+    .join('\n');
 }
-export function cartonsFingerprint(cartons: Array<{ cartonNumber: string; qty: number }>): string {
-  return cartons.map((c) => `${c.cartonNumber}=${c.qty}`).join('|');
+
+/** A draft whose cartons changed underneath it. Issued documents are never stale: they are the record. */
+export async function isStale(inv: LoadedInvoice): Promise<boolean> {
+  if (inv.status !== InvoiceStatus.DRAFT || inv.kind !== InvoiceKind.INVOICE) return false;
+  if (!inv.packingListId) {
+    // Built before anything was packed: the moment a carton exists, the
+    // ordered quantities it carries are no longer what shipped.
+    const packed = await prisma.carton.count({ where: { packingList: { orderId: inv.orderId } } });
+    return packed > 0;
+  }
+  const list = await prisma.packingList.findUnique({
+    where: { id: inv.packingListId },
+    include: {
+      order: { include: { sizes: { include: { size: { select: { name: true } } } } } },
+      cartons: { include: { lines: { orderBy: { position: 'asc' } } }, orderBy: { position: 'asc' } },
+    },
+  });
+  if (!list) return true;
+  const sizes = list.order.sizes.map((s) => ({ id: s.id, name: s.size.name, position: s.position }));
+  const order = { sizes } as BuildOrder;
+  const now = toBuildPackingList(list).cartons.map((c, i): InvoiceCartonDto => {
+    const contents = cartonContents(order, c);
+    return { n: i + 1, cartonNumber: c.cartonNumber, cartonSize: c.cartonSize, product: '', contents, pieces: contents.reduce((a, x) => a + x.qty, 0), netKg: c.netKg, grossKg: c.grossKg };
+  });
+  return manifestFingerprint(now) !== manifestFingerprint(inv.manifest as unknown as InvoiceCartonDto[]);
 }
 
 export function invoiceToDto(inv: LoadedInvoice, stale = false): InvoiceDto {
   const lines = inv.lines.map(lineToDto);
   const totals = computeInvoiceTotals(lines);
   const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);
+  // The snapshot, when there is one; the live order only for a row built before snapshots existed.
+  const ref = (inv.orderRef as unknown as OrderRef | null) ?? {
+    id: inv.order.id, poNumber: inv.order.poNumber, orderName: inv.order.orderName,
+    styleNumber: inv.order.styleNumber, clientName: inv.order.client.name,
+  };
   return {
     id: inv.id,
     kind: inv.kind,
@@ -474,10 +584,7 @@ export function invoiceToDto(inv: LoadedInvoice, stale = false): InvoiceDto {
     date: inv.date.toISOString(),
     dueDate: iso(inv.dueDate),
     paymentTerms: inv.paymentTerms,
-    order: {
-      id: inv.order.id, poNumber: inv.order.poNumber, orderName: inv.order.orderName,
-      styleNumber: inv.order.styleNumber, clientName: inv.order.client.name,
-    },
+    order: { ...ref, id: inv.order.id },
     shipmentId: inv.shipmentId,
     packingListId: inv.packingListId,
     billTo: inv.billTo,
@@ -511,26 +618,16 @@ export function invoiceToDto(inv: LoadedInvoice, stale = false): InvoiceDto {
 
 export function invoiceToListRow(inv: LoadedInvoice): InvoiceListRowDto {
   const totals = computeInvoiceTotals(inv.lines.map(lineToDto));
+  const ref = (inv.orderRef as unknown as OrderRef | null);
   return {
     id: inv.id, kind: inv.kind, status: inv.status, number: inv.number,
     date: inv.date.toISOString(), dueDate: inv.dueDate?.toISOString() ?? null,
-    orderId: inv.order.id, poNumber: inv.order.poNumber, orderName: inv.order.orderName,
-    clientName: inv.order.client.name, billTo: inv.billTo,
+    orderId: inv.order.id, poNumber: ref?.poNumber ?? inv.order.poNumber, orderName: ref?.orderName ?? inv.order.orderName,
+    clientName: ref?.clientName ?? inv.order.client.name, billTo: inv.billTo,
     totalQty: totals.totalQty, total: totals.total, incomplete: totals.incomplete,
     issuedAt: inv.issuedAt?.toISOString() ?? null, sentAt: inv.sentAt?.toISOString() ?? null,
     createdAt: inv.createdAt.toISOString(),
   };
-}
-
-/** A draft whose packing list has changed underneath it. Issued documents are never stale: they are the record. */
-export async function isStale(inv: LoadedInvoice): Promise<boolean> {
-  if (inv.status !== InvoiceStatus.DRAFT || inv.kind !== InvoiceKind.INVOICE || !inv.packingListId) return false;
-  const cartons = await prisma.carton.findMany({
-    where: { packingListId: inv.packingListId },
-    select: { cartonNumber: true, qty: true },
-    orderBy: { position: 'asc' },
-  });
-  return cartonsFingerprint(cartons) !== manifestFingerprint(inv.manifest as unknown as InvoiceCartonDto[]);
 }
 
 export async function loadInvoice(id: string): Promise<LoadedInvoice> {
@@ -546,6 +643,16 @@ export function assertDraft(inv: { status: InvoiceStatus; number: string }): voi
   }
   if (inv.status === InvoiceStatus.VOID) {
     throw new ConflictError(`${inv.number} is void and cannot be changed.`);
+  }
+}
+
+/**
+ * Thrown when a status-guarded write touched nothing: the document moved on
+ * between the read and the write — somebody issued, voided or deleted it.
+ */
+export function assertStillDraft(count: number, number: string): void {
+  if (count === 0) {
+    throw new ConflictError(`${number} changed while you were working on it — it was issued, voided or deleted by somebody else. Reload it.`);
   }
 }
 

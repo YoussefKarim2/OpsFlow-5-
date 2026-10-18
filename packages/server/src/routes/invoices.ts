@@ -7,6 +7,11 @@
  * stored record, so what prints is what is stored, and an issued invoice
  * cannot read differently on two days.
  *
+ * Every write that depends on the status carries that status in its WHERE
+ * clause, so two people acting on one document at the same moment cannot
+ * edit, delete or issue past each other: the second write touches nothing and
+ * is told to reload.
+ *
  * Permissions: `invoice:read` opens the section, `invoice:write` builds and
  * edits drafts, `invoice:issue` freezes and voids. The company letterhead is
  * edited under `settings:manage`, by a super administrator, because a bank
@@ -14,28 +19,35 @@
  * to change.
  */
 
-import { Router } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { InvoiceKind, InvoiceLineKind, InvoiceStatus, computeInvoiceTotals, resolveShippedQty, type InvoiceCandidateDto } from '@opsflow/shared';
 import { prisma } from '../db.js';
-import { authenticate, currentUser, requirePermission, requireSuperAdmin } from '../middleware/auth.js';
+import { authenticate, currentUser, requirePermission } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
-import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
+import { dateInput } from '../util/date-input.js';
+import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError } from '../errors.js';
 import { logActivity } from '../services/activity-service.js';
 import {
-  INVOICE_INCLUDE, assertDraft, assertIssuable, buildInvoiceDocument, defaultCoverNote, getCompanyProfile,
-  invoiceToDto, invoiceToListRow, isStale, lineToDto, loadInvoice, loadOrderForBuild, pickDefaults, profileToDto,
-  toBuildOrder, toBuildPackingList, toBuildShipment, withAllocatedNumber,
+  INVOICE_INCLUDE, PROFILE_ID, assertDraft, assertIssuable, assertStillDraft, buildInvoiceDocument, defaultCoverNote,
+  getCompanyProfile, invoiceToDto, invoiceToListRow, isStale, lineToDto, loadInvoice, loadOrderForBuild, pickDefaults,
+  profileToDto, sourcesOf, toBuildOrder, toBuildPackingList, toBuildShipment, withAllocatedNumber,
 } from '../services/invoice-service.js';
 
 export const invoicesRouter = Router();
 invoicesRouter.use(authenticate);
 
-const PROFILE_ID = 'default';
-
-/** A real calendar date, or a 400 — never an Invalid Date handed to Prisma. */
-const dateInput = z.string().refine((v) => !Number.isNaN(new Date(v).getTime()), 'Not a valid date.');
 const text = (max: number) => z.string().trim().max(max).nullable().optional();
+const email = z.string().trim().email('That is not an email address').max(200).nullable().optional().or(z.literal('').transform(() => null));
+
+/** The letterhead gate: the super-admin flag, with a refusal that is about the letterhead. */
+function requireLetterheadEditor(req: Request, _res: Response, next: NextFunction): void {
+  if (!req.user) return next(new UnauthorizedError());
+  if (!req.user.isSuperAdmin) {
+    return next(new ForbiddenError('Only a super administrator can change the company letterhead and payment details.'));
+  }
+  next();
+}
 
 // ── Company profile ──────────────────────────────────────────────────────────
 
@@ -48,7 +60,7 @@ const profileSchema = z.object({
   tagline: text(200),
   address: text(600),
   taxId: text(100),
-  email: z.string().trim().email('That is not an email address').max(200).nullable().optional().or(z.literal('').transform(() => null)),
+  email,
   phone: text(60),
   website: text(200),
   bankDetails: text(2000),
@@ -56,7 +68,7 @@ const profileSchema = z.object({
   paymentTerms: text(200),
 });
 
-invoicesRouter.put('/company', requirePermission('settings:manage'), requireSuperAdmin, asyncHandler(async (req, res) => {
+invoicesRouter.put('/company', requirePermission('settings:manage'), requireLetterheadEditor, asyncHandler(async (req, res) => {
   const body = profileSchema.parse(req.body);
   const user = currentUser(req);
   const data = {
@@ -81,6 +93,11 @@ invoicesRouter.put('/company', requirePermission('settings:manage'), requireSupe
 
 // ── Candidates: orders that could be invoiced now ────────────────────────────
 
+const SOURCE_SELECT = {
+  packingLists: { select: { id: true, reference: true, approved: true, createdAt: true, cartons: { select: { qty: true } } }, orderBy: { createdAt: 'desc' as const } },
+  shipments: { select: { id: true, status: true, qty: true, actualShippingDate: true, awbNumber: true, trackingNumber: true }, orderBy: { createdAt: 'desc' as const } },
+};
+
 invoicesRouter.get('/candidates', requirePermission('invoice:read'), asyncHandler(async (_req, res) => {
   const orders = await prisma.order.findMany({
     where: {
@@ -90,12 +107,15 @@ invoicesRouter.get('/candidates', requirePermission('invoice:read'), asyncHandle
         { packingLists: { some: { cartons: { some: {} } } } },
       ],
     },
-    include: {
+    select: {
+      id: true, poNumber: true, orderName: true, pricePerPieceUsd: true,
       client: { select: { name: true } },
-      shipments: { orderBy: { createdAt: 'desc' } },
-      packingLists: { include: { cartons: { select: { qty: true } } }, orderBy: { createdAt: 'desc' } },
+      ...SOURCE_SELECT,
       quantities: { where: { ledger: { in: ['ORDER', 'SHIPPED'] } }, select: { orderColorId: true, orderSizeId: true, ledger: true, qty: true } },
-      invoices: { select: { id: true, kind: true, status: true, number: true }, orderBy: { createdAt: 'desc' } },
+      invoices: {
+        select: { id: true, kind: true, status: true, number: true, lines: { select: { kind: true, quantity: true } } },
+        orderBy: { createdAt: 'desc' },
+      },
     },
     orderBy: { updatedAt: 'desc' },
     take: 200,
@@ -109,15 +129,11 @@ invoicesRouter.get('/candidates', requirePermission('invoice:read'), asyncHandle
       packedQty: o.packingLists.reduce((a, l) => a + l.cartons.reduce((b, c) => b + c.qty, 0), 0),
       shippedQty: resolveShippedQty(cells, o.shipments),
       pricePerPieceUsd: o.pricePerPieceUsd == null ? null : Number(o.pricePerPieceUsd.toString()),
-      invoices: o.invoices,
-      packingLists: o.packingLists.map((l) => ({
-        id: l.id, reference: l.reference, approved: l.approved, cartonCount: l.cartons.length,
-        totalQty: l.cartons.reduce((a, c) => a + c.qty, 0), createdAt: l.createdAt.toISOString(),
+      invoices: o.invoices.map((i) => ({
+        id: i.id, kind: i.kind, status: i.status, number: i.number,
+        totalQty: i.lines.filter((l) => l.kind === InvoiceLineKind.ITEM).reduce((a, l) => a + (l.quantity == null ? 0 : Number(l.quantity.toString())), 0),
       })),
-      shipments: o.shipments.map((s) => ({
-        id: s.id, status: s.status, qty: s.qty, actualShippingDate: s.actualShippingDate?.toISOString() ?? null,
-        awbNumber: s.awbNumber, trackingNumber: s.trackingNumber,
-      })),
+      ...sourcesOf(o),
     };
   });
 
@@ -126,19 +142,16 @@ invoicesRouter.get('/candidates', requirePermission('invoice:read'), asyncHandle
 
 /** The lists and consignments of one order, for the "New" dialog when it is opened on an order the candidates did not list. */
 invoicesRouter.get('/order/:orderId/sources', requirePermission('invoice:read'), asyncHandler(async (req, res) => {
-  const o = await loadOrderForBuild(req.params.orderId);
+  const o = await prisma.order.findFirst({
+    where: { OR: [{ id: req.params.orderId }, { poNumber: req.params.orderId }] },
+    select: { id: true, poNumber: true, orderName: true, pricePerPieceUsd: true, client: { select: { name: true } }, ...SOURCE_SELECT },
+  });
+  if (!o) throw new NotFoundError('Order');
   res.json({
     data: {
       orderId: o.id, poNumber: o.poNumber, orderName: o.orderName, clientName: o.client.name,
       pricePerPieceUsd: o.pricePerPieceUsd == null ? null : Number(o.pricePerPieceUsd.toString()),
-      packingLists: o.packingLists.map((l) => ({
-        id: l.id, reference: l.reference, approved: l.approved, cartonCount: l.cartons.length,
-        totalQty: l.cartons.reduce((a, c) => a + c.qty, 0), createdAt: l.createdAt.toISOString(),
-      })),
-      shipments: o.shipments.map((s) => ({
-        id: s.id, status: s.status, qty: s.qty, actualShippingDate: s.actualShippingDate?.toISOString() ?? null,
-        awbNumber: s.awbNumber, trackingNumber: s.trackingNumber,
-      })),
+      ...sourcesOf(o),
     },
   });
 }));
@@ -179,40 +192,52 @@ const createSchema = z.object({
   packingListId: z.string().nullable().optional(),
 });
 
+/** The builder's inputs for an order, honouring a chosen list and consignment. */
+async function buildFor(orderId: string, kind: InvoiceKind, chosen: { packingListId?: string | null; shipmentId?: string | null }) {
+  const loaded = await loadOrderForBuild(orderId);
+  if (loaded.cancelled) throw new ConflictError('This order is cancelled. A cancelled order is not invoiced.');
+  const { packingList, shipment } = pickDefaults(loaded, chosen);
+  const profile = await getCompanyProfile();
+  const forInvoice = kind === InvoiceKind.INVOICE;
+  const doc = buildInvoiceDocument({
+    kind,
+    order: toBuildOrder(loaded),
+    packingList: forInvoice && packingList ? toBuildPackingList(packingList) : null,
+    shipment: forInvoice && shipment ? toBuildShipment(shipment) : null,
+    otherPackingLists: forInvoice ? loaded.packingLists.filter((l) => l.id !== packingList?.id).map(toBuildPackingList) : [],
+    profile,
+  });
+  return {
+    loaded, doc,
+    shipmentId: forInvoice ? shipment?.id ?? null : null,
+    packingListId: forInvoice ? packingList?.id ?? null : null,
+  };
+}
+
 invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async (req, res) => {
   const body = createSchema.parse(req.body);
   const user = currentUser(req);
-  const loaded = await loadOrderForBuild(body.orderId);
-  if (loaded.cancelled) throw new ConflictError('This order is cancelled. A cancelled order is not invoiced.');
-  const { packingList, shipment } = pickDefaults(loaded, body);
-  const profile = await getCompanyProfile();
-
-  const doc = buildInvoiceDocument({
-    kind: body.kind,
-    order: toBuildOrder(loaded),
-    packingList: body.kind === InvoiceKind.INVOICE && packingList ? toBuildPackingList(packingList) : null,
-    shipment: body.kind === InvoiceKind.INVOICE && shipment ? toBuildShipment(shipment) : null,
-    profile,
-  });
-  const year = doc.date.getUTCFullYear();
+  const { loaded, doc, shipmentId, packingListId } = await buildFor(body.orderId, body.kind, body);
+  // Numbered in the year it is raised, whatever date the goods left: a run of
+  // numbers belongs to the year the office is working in.
+  const year = new Date().getUTCFullYear();
   const qty = computeInvoiceTotals(doc.lines).totalQty;
 
-  const created = await withAllocatedNumber(body.kind, year, async (tx, number, sequence) => {
-    const inv = await tx.invoice.create({
+  const created = await withAllocatedNumber(body.kind, year, async (tx, number, sequence) =>
+    tx.invoice.create({
       data: {
         kind: body.kind, number, year, sequence,
-        orderId: loaded.id,
-        shipmentId: body.kind === InvoiceKind.INVOICE ? shipment?.id ?? null : null,
-        packingListId: body.kind === InvoiceKind.INVOICE ? packingList?.id ?? null : null,
+        orderId: loaded.id, shipmentId, packingListId,
         date: doc.date, dueDate: doc.dueDate, paymentTerms: doc.paymentTerms,
         billTo: doc.billTo, billToAddress: doc.billToAddress, billToEmail: doc.billToEmail,
         customerReference: doc.customerReference, shipmentRef: doc.shipmentRef, shippedOn: doc.shippedOn,
         coverNote: defaultCoverNote({
           kind: body.kind, number, billTo: doc.billTo, shipmentRef: doc.shipmentRef,
-          poNumber: loaded.poNumber, orderName: loaded.orderName, qty,
+          poNumber: loaded.poNumber, orderName: loaded.orderName, qty, hasManifest: doc.manifest.length > 0,
         }),
-        terms: doc.terms, bankDetails: doc.bankDetails,
-        seller: doc.seller as object, manifest: doc.manifest as object[], reconciliation: doc.reconciliation as object[],
+        terms: doc.terms, bankDetails: doc.bankDetails, notes: doc.notes,
+        seller: doc.seller as object, orderRef: doc.orderRef as object,
+        manifest: doc.manifest as object[], reconciliation: doc.reconciliation as object[],
         warnings: doc.warnings,
         preparedById: user.id,
         lines: {
@@ -223,9 +248,7 @@ invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async 
         },
       },
       include: INVOICE_INCLUDE,
-    });
-    return inv;
-  });
+    }));
 
   await logActivity({
     orderId: loaded.id, actorId: user.id, actorName: user.name,
@@ -248,7 +271,7 @@ invoicesRouter.get('/:id', requirePermission('invoice:read'), asyncHandler(async
 
 const lineSchema = z.object({
   kind: z.nativeEnum(InvoiceLineKind).default('ITEM'),
-  description: z.string().trim().min(1, 'Every line needs a description').max(400),
+  description: z.string().trim().min(1, 'Every line needs a description.').max(400),
   size: text(120),
   quantity: z.number().min(0).max(1e9).nullable().optional(),
   unitPrice: z.number().min(0).max(1e9).nullable().optional(),
@@ -261,7 +284,7 @@ const editSchema = z.object({
   paymentTerms: text(200),
   billTo: z.string().trim().min(1, 'The bill-to name is needed.').max(300).optional(),
   billToAddress: text(600),
-  billToEmail: z.string().trim().email('That is not an email address').max(200).nullable().optional().or(z.literal('').transform(() => null)),
+  billToEmail: email,
   customerReference: text(200),
   shipmentRef: text(200),
   shippedOn: dateInput.nullable().optional(),
@@ -278,18 +301,12 @@ invoicesRouter.put('/:id', requirePermission('invoice:write'), asyncHandler(asyn
   const existing = await loadInvoice(req.params.id);
   assertDraft(existing);
 
-  const date = body.date ? new Date(body.date) : existing.date;
-  const year = date.getUTCFullYear();
-  if (year !== existing.year) {
-    throw new ValidationError(`${existing.number} is numbered in ${existing.year}; its date must stay in that year. Delete the draft and build a new one if the year is wrong.`);
-  }
-
   const scalar = <T>(v: T | undefined, current: T): T => (v === undefined ? current : v);
   const updated = await prisma.$transaction(async (tx) => {
-    const inv = await tx.invoice.update({
-      where: { id: existing.id },
+    const { count } = await tx.invoice.updateMany({
+      where: { id: existing.id, status: InvoiceStatus.DRAFT },
       data: {
-        date,
+        date: body.date ? new Date(body.date) : existing.date,
         dueDate: body.dueDate === undefined ? existing.dueDate : body.dueDate === null ? null : new Date(body.dueDate),
         paymentTerms: scalar(body.paymentTerms, existing.paymentTerms),
         billTo: scalar(body.billTo, existing.billTo),
@@ -304,14 +321,15 @@ invoicesRouter.put('/:id', requirePermission('invoice:write'), asyncHandler(asyn
         notes: scalar(body.notes, existing.notes),
       },
     });
+    assertStillDraft(count, existing.number);
     if (body.lines) {
       // Replaced wholesale: the draft is one document, and a half-written set
       // of lines is worse than the previous one.
-      await tx.invoiceLine.deleteMany({ where: { invoiceId: inv.id } });
+      await tx.invoiceLine.deleteMany({ where: { invoiceId: existing.id } });
       if (body.lines.length > 0) {
         await tx.invoiceLine.createMany({
           data: body.lines.map((l, i) => ({
-            invoiceId: inv.id, kind: l.kind, description: l.description, size: l.size ?? null,
+            invoiceId: existing.id, kind: l.kind, description: l.description, size: l.size ?? null,
             quantity: l.kind === InvoiceLineKind.ITEM ? l.quantity ?? null : null,
             unitPrice: l.kind === InvoiceLineKind.ITEM ? l.unitPrice ?? null : null,
             amount: l.kind === InvoiceLineKind.EXTRA ? l.amount ?? null : null,
@@ -320,7 +338,7 @@ invoicesRouter.put('/:id', requirePermission('invoice:write'), asyncHandler(asyn
         });
       }
     }
-    return tx.invoice.findUniqueOrThrow({ where: { id: inv.id }, include: INVOICE_INCLUDE });
+    return tx.invoice.findUniqueOrThrow({ where: { id: existing.id }, include: INVOICE_INCLUDE });
   });
 
   await logActivity({
@@ -336,52 +354,55 @@ invoicesRouter.put('/:id', requirePermission('invoice:write'), asyncHandler(asyn
 
 /**
  * Read the order again and replace the facts: the goods lines, the manifest,
- * the reconciliation, the letterhead, the shipment reference and date, and the
- * warnings. What a person typed — the cover note, the terms, the bill-to
- * block, the dates, the notes and any extra lines — is kept.
+ * the reconciliation, the letterhead, the order's identity and the warnings.
+ * What a person typed is kept: the cover note, the terms, the bill-to block,
+ * the dates, the notes, the extra lines, a shipment reference or date the
+ * order still cannot supply, and a rate typed on a goods line the order still
+ * has no price for.
  */
 invoicesRouter.post('/:id/rebuild', requirePermission('invoice:write'), asyncHandler(async (req, res) => {
   const user = currentUser(req);
   const existing = await loadInvoice(req.params.id);
   assertDraft(existing);
 
-  const loaded = await loadOrderForBuild(existing.orderId);
-  const { packingList, shipment } = pickDefaults(loaded, {
+  const { doc, shipmentId, packingListId } = await buildFor(existing.orderId, existing.kind, {
     packingListId: existing.packingListId, shipmentId: existing.shipmentId,
   });
-  const profile = await getCompanyProfile();
-  const doc = buildInvoiceDocument({
-    kind: existing.kind,
-    order: toBuildOrder(loaded),
-    packingList: existing.kind === InvoiceKind.INVOICE && packingList ? toBuildPackingList(packingList) : null,
-    shipment: existing.kind === InvoiceKind.INVOICE && shipment ? toBuildShipment(shipment) : null,
-    profile,
-  });
+  const typedRate = new Map(
+    existing.lines
+      .filter((l) => l.kind === InvoiceLineKind.ITEM && l.unitPrice != null)
+      .map((l) => [l.description, Number(l.unitPrice!.toString())] as const),
+  );
   const extras = existing.lines.filter((l) => l.kind === InvoiceLineKind.EXTRA);
+  const lines = [
+    ...doc.lines.map((l) => ({ ...l, unitPrice: l.unitPrice ?? typedRate.get(l.description) ?? null })),
+    ...extras.map((l) => ({ kind: l.kind, description: l.description, size: l.size, quantity: null, unitPrice: null, amount: l.amount == null ? null : Number(l.amount.toString()) })),
+  ];
 
   const updated = await prisma.$transaction(async (tx) => {
-    await tx.invoiceLine.deleteMany({ where: { invoiceId: existing.id } });
-    const lines = [
-      ...doc.lines,
-      ...extras.map((l) => ({ kind: l.kind, description: l.description, size: l.size, quantity: null, unitPrice: null, amount: l.amount == null ? null : Number(l.amount.toString()) })),
-    ];
-    return tx.invoice.update({
-      where: { id: existing.id },
+    const { count } = await tx.invoice.updateMany({
+      where: { id: existing.id, status: InvoiceStatus.DRAFT },
       data: {
-        shipmentId: existing.kind === InvoiceKind.INVOICE ? shipment?.id ?? null : null,
-        packingListId: existing.kind === InvoiceKind.INVOICE ? packingList?.id ?? null : null,
-        shipmentRef: doc.shipmentRef, shippedOn: doc.shippedOn,
-        seller: doc.seller as object, manifest: doc.manifest as object[], reconciliation: doc.reconciliation as object[],
+        shipmentId, packingListId,
+        shipmentRef: doc.shipmentRef ?? existing.shipmentRef,
+        shippedOn: doc.shippedOn ?? existing.shippedOn,
+        notes: existing.notes ?? doc.notes,
+        seller: doc.seller as object, orderRef: doc.orderRef as object,
+        manifest: doc.manifest as object[], reconciliation: doc.reconciliation as object[],
         warnings: doc.warnings, builtAt: new Date(),
-        lines: {
-          create: lines.map((l, i) => ({
-            kind: l.kind, description: l.description, size: l.size,
-            quantity: l.quantity, unitPrice: l.unitPrice, amount: l.amount, position: i,
-          })),
-        },
       },
-      include: INVOICE_INCLUDE,
     });
+    assertStillDraft(count, existing.number);
+    await tx.invoiceLine.deleteMany({ where: { invoiceId: existing.id } });
+    if (lines.length > 0) {
+      await tx.invoiceLine.createMany({
+        data: lines.map((l, i) => ({
+          invoiceId: existing.id, kind: l.kind, description: l.description, size: l.size,
+          quantity: l.quantity, unitPrice: l.unitPrice, amount: l.amount, position: i,
+        })),
+      });
+    }
+    return tx.invoice.findUniqueOrThrow({ where: { id: existing.id }, include: INVOICE_INCLUDE });
   });
 
   await logActivity({
@@ -401,11 +422,14 @@ invoicesRouter.post('/:id/issue', requirePermission('invoice:issue'), asyncHandl
   assertDraft(existing);
   assertIssuable(invoiceToDto(existing, await isStale(existing)));
 
-  const updated = await prisma.invoice.update({
-    where: { id: existing.id },
+  const { count } = await prisma.invoice.updateMany({
+    where: { id: existing.id, status: InvoiceStatus.DRAFT, updatedAt: existing.updatedAt },
     data: { status: InvoiceStatus.ISSUED, issuedAt: new Date(), issuedById: user.id },
-    include: INVOICE_INCLUDE,
   });
+  // The updatedAt guard means what was validated is what gets issued: an edit
+  // landing between the check and the write bumps updatedAt and this touches nothing.
+  assertStillDraft(count, existing.number);
+  const updated = await loadInvoice(existing.id);
   const totals = computeInvoiceTotals(updated.lines.map(lineToDto));
   await logActivity({
     orderId: existing.orderId, actorId: user.id, actorName: user.name,
@@ -423,17 +447,17 @@ invoicesRouter.post('/:id/sent', requirePermission('invoice:write'), asyncHandle
   if (existing.status !== InvoiceStatus.ISSUED) {
     throw new ConflictError('Only an issued document can be marked as sent. Issue it first.');
   }
-  const updated = await prisma.invoice.update({
-    where: { id: existing.id },
+  const { count } = await prisma.invoice.updateMany({
+    where: { id: existing.id, status: InvoiceStatus.ISSUED },
     data: { sentAt: existing.sentAt ?? new Date() },
-    include: INVOICE_INCLUDE,
   });
+  if (count === 0) throw new ConflictError(`${existing.number} is no longer issued. Reload it.`);
   await logActivity({
     orderId: existing.orderId, actorId: user.id, actorName: user.name,
     action: 'invoice.sent', summary: `Marked ${existing.number} as sent to the customer`,
     entityType: 'Invoice', entityId: existing.id,
   });
-  res.json({ data: invoiceToDto(updated) });
+  res.json({ data: invoiceToDto(await loadInvoice(existing.id)) });
 }));
 
 invoicesRouter.post('/:id/void', requirePermission('invoice:issue'), asyncHandler(async (req, res) => {
@@ -444,17 +468,17 @@ invoicesRouter.post('/:id/void', requirePermission('invoice:issue'), asyncHandle
   if (existing.status === InvoiceStatus.DRAFT) {
     throw new ConflictError('A draft is deleted, not voided. Voiding is for an issued document that must keep its number.');
   }
-  const updated = await prisma.invoice.update({
-    where: { id: existing.id },
+  const { count } = await prisma.invoice.updateMany({
+    where: { id: existing.id, status: InvoiceStatus.ISSUED },
     data: { status: InvoiceStatus.VOID, voidedAt: new Date(), voidReason: reason },
-    include: INVOICE_INCLUDE,
   });
+  if (count === 0) throw new ConflictError(`${existing.number} is no longer issued. Reload it.`);
   await logActivity({
     orderId: existing.orderId, actorId: user.id, actorName: user.name,
     action: 'invoice.void', summary: `Voided ${existing.number}: ${reason}`,
     entityType: 'Invoice', entityId: existing.id,
   });
-  res.json({ data: invoiceToDto(updated) });
+  res.json({ data: invoiceToDto(await loadInvoice(existing.id)) });
 }));
 
 invoicesRouter.delete('/:id', requirePermission('invoice:write'), asyncHandler(async (req, res) => {
@@ -462,7 +486,8 @@ invoicesRouter.delete('/:id', requirePermission('invoice:write'), asyncHandler(a
   const existing = await prisma.invoice.findUnique({ where: { id: req.params.id } });
   if (!existing) throw new NotFoundError('Invoice');
   assertDraft(existing);
-  await prisma.invoice.delete({ where: { id: existing.id } });
+  const { count } = await prisma.invoice.deleteMany({ where: { id: existing.id, status: InvoiceStatus.DRAFT } });
+  assertStillDraft(count, existing.number);
   await logActivity({
     orderId: existing.orderId, actorId: user.id, actorName: user.name,
     action: 'invoice.delete', summary: `Deleted draft ${existing.number}`,

@@ -785,7 +785,7 @@ export interface InvoiceCandidateDto {
   shippedQty: number;
   pricePerPieceUsd: number | null;
   /** Documents already raised on this order, newest first. */
-  invoices: Array<{ id: string; kind: InvoiceKind; status: InvoiceStatus; number: string }>;
+  invoices: Array<{ id: string; kind: InvoiceKind; status: InvoiceStatus; number: string; totalQty: number }>;
   packingLists: Array<{ id: string; reference: string | null; approved: boolean; cartonCount: number; totalQty: number; createdAt: string }>;
   shipments: Array<{ id: string; status: ShipmentStatus; qty: number; actualShippingDate: string | null; awbNumber: string | null; trackingNumber: string | null }>;
 }

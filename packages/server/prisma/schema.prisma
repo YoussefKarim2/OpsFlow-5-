@@ -1338,6 +1338,9 @@ model Invoice {
   terms             String?
   bankDetails       String?
   notes             String?
+  /// The order's PO, name, style and client as they were when the document
+  /// was last built — the header of an issued invoice does not follow a rename.
+  orderRef          Json?
   /// CompanyProfile as it was when the document was last built.
   seller            Json
   /// The cartons, as InvoiceCartonDto[].

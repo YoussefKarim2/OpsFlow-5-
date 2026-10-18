@@ -16,11 +16,13 @@
  * that is the document the office already knows how to read.
  */
 
-import { amountInWords, computeInvoiceTotals, fmtDate, InvoiceKind, InvoiceLineKind, InvoiceStatus, type InvoiceDto } from '@opsflow/shared';
+import { amountInWords, computeInvoiceTotals, fmtDate, fmtMoney, InvoiceKind, InvoiceLineKind, InvoiceStatus, type InvoiceDto } from '@opsflow/shared';
 import { clsx } from './ui';
 
-const money = (n: number | null | undefined) =>
-  n == null ? '—' : n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const money = (n: number | null | undefined) => (n == null ? '—' : fmtMoney(n, '', 2));
+/** A rate prints every decimal it was agreed at — 7.2535 is not 7.25 — and at least the two of a price. */
+const rate = (n: number | null | undefined) =>
+  n == null ? '—' : n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
 const qty = (n: number | null | undefined) => (n == null ? '—' : n.toLocaleString('en-US'));
 const kg = (n: number | null | undefined) => (n == null ? '—' : n.toLocaleString('en-US', { maximumFractionDigits: 3 }));
 
@@ -125,7 +127,7 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
             <thead>
               <tr className="bg-[#1f2328] text-left text-[9.5px] font-semibold uppercase tracking-wider text-white">
                 <th className="w-7 px-3 py-2">#</th>
-                <th className="px-2 py-2">Item &amp; description</th>
+                <th className="whitespace-nowrap px-2 py-2">Item &amp; description</th>
                 <th className="w-28 px-2 py-2">Size</th>
                 <th className="w-16 px-2 py-2 text-right">Qty</th>
                 <th className="w-20 px-2 py-2 text-right">Rate</th>
@@ -142,7 +144,7 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
                   <td className="px-2 py-2 font-semibold"><T>{l.description}</T></td>
                   <td className="px-2 py-2 text-ink-700"><T>{l.size ?? '—'}</T></td>
                   <td className="tnum px-2 py-2 text-right">{qty(l.quantity)}</td>
-                  <td className="tnum px-2 py-2 text-right">{money(l.unitPrice)}</td>
+                  <td className="tnum px-2 py-2 text-right">{rate(l.unitPrice)}</td>
                   <td className="tnum px-3 py-2 text-right font-medium">{money(l.lineTotal)}</td>
                 </tr>
               ))}
@@ -329,7 +331,7 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
 function Meta({ label, value }: { label: string; value: string }) {
   return (
     <tr>
-      <td className="pr-4 text-[10px] font-semibold uppercase tracking-wider text-ink-500">{label}</td>
+      <td className="whitespace-nowrap pr-4 align-top text-[10px] font-semibold uppercase tracking-wider text-ink-500">{label}</td>
       <td className="font-semibold"><T>{value}</T></td>
     </tr>
   );

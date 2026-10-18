@@ -18,7 +18,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { FileText, Lock, Receipt, Send, Truck } from 'lucide-react';
-import { fmtDate, INVOICE_KIND_LABEL, INVOICE_STATUS_LABEL, type OrderDetailDto } from '@opsflow/shared';
+import { fmtDate, INVOICE_KIND_LABEL, type OrderDetailDto } from '@opsflow/shared';
+import { InvoiceStatusChip } from '../../components/InvoiceStatusChip';
 import { useAuth } from '../../lib/auth';
 import { api } from '../../lib/api';
 import { Card, CardHeader, Num, EmptyState, Spinner, clsx } from '../../components/ui';
@@ -29,7 +30,7 @@ export function InvoiceTab({ order }: { order: OrderDetailDto }) {
   const { can } = useAuth();
   // The documents raised on this order in the Proforma / Invoice section.
   const { data: documentsRes } = useQuery({
-    queryKey: ['invoices', '', '', order.poNumber],
+    queryKey: ['invoices', 'for-order', order.poNumber],
     queryFn: () => api.invoices.list({ q: order.poNumber }),
     enabled: can('invoice:read'),
   });
@@ -79,9 +80,7 @@ export function InvoiceTab({ order }: { order: OrderDetailDto }) {
                 <Link key={d.id} to={`/invoices/${d.id}`} className="flex items-center gap-3 px-4 py-2 hover:bg-ink-50">
                   <span className="font-mono text-xs font-semibold text-accent-700">{d.number}</span>
                   <span className="text-xs text-ink-600">{INVOICE_KIND_LABEL[d.kind]}</span>
-                  <span className={clsx('chip', d.status === 'ISSUED' ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' : d.status === 'VOID' ? 'bg-red-50 text-red-700 ring-red-600/20' : 'bg-amber-50 text-amber-800 ring-amber-600/20')}>
-                    {INVOICE_STATUS_LABEL[d.status]}
-                  </span>
+                  <InvoiceStatusChip status={d.status} sentAt={d.sentAt} />
                   <span className="ml-auto tnum text-xs text-ink-600">{d.totalQty.toLocaleString()} pcs</span>
                   <span className="tnum text-sm font-semibold text-ink-900"><Num value={d.total} kind="money" /></span>
                   <span className="text-2xs text-ink-500">{fmtDate(d.date)}</span>

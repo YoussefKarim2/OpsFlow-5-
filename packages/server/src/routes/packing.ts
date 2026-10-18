@@ -9,6 +9,7 @@ import { logActivity, logAndNotify } from '../services/activity-service.js';
 import { assertShippableQuantity, shipmentTotalAfter } from '../services/rules.js';
 import { getRequestContext } from '../request-context.js';
 import { ledgerDeltas } from '../services/import/carton-ledger.js';
+import { dateInput } from '../util/date-input.js';
 
 export const packingRouter = Router();
 packingRouter.use(authenticate);
@@ -480,8 +481,6 @@ packingRouter.post('/:orderId/shipments', requirePermission('shipment:write'), a
   res.status(201).json({ id: shipment.id, overrideApplied: overrode });
 }));
 
-/** A real calendar date, or a 400 — never an Invalid Date handed to Prisma. */
-const dateInput = z.string().refine((v) => !Number.isNaN(new Date(v).getTime()), 'Not a valid date.');
 
 const shipmentPatchSchema = z.object({
   status: z.enum(['NOT_READY', 'READY', 'BOOKED', 'SHIPPED', 'DELIVERED']).optional(),

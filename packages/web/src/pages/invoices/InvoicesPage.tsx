@@ -12,9 +12,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Building2, FileText, Plus, Receipt, Search, Send } from 'lucide-react';
 import {
-  fmtDate, INVOICE_KIND_LABEL, INVOICE_STATUS_LABEL, InvoiceKind, InvoiceStatus,
+  fmtDate, INVOICE_KIND_LABEL, InvoiceKind, InvoiceStatus,
   type CompanyProfileDto, type InvoiceCandidateDto, type InvoiceListRowDto, type OrderSummaryDto,
 } from '@opsflow/shared';
+import { InvoiceStatusChip } from '../../components/InvoiceStatusChip';
 import { api } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import {
@@ -49,13 +50,20 @@ export function InvoicesPage() {
     setParams({}, { replace: true });
   }, [newFor, presetOrder.data, setParams]);
 
-  const list = useQuery({ queryKey: ['invoices', kind, status, q], queryFn: () => api.invoices.list({ kind, status, q }) });
+  // One request for every document; the filters and the tiles are both read
+  // from it, so they cannot disagree and a filter change costs no round trip.
+  const list = useQuery({ queryKey: ['invoices', 'all'], queryFn: () => api.invoices.list() });
   const candidates = useQuery({ queryKey: ['invoice-candidates'], queryFn: api.invoices.candidates, staleTime: 60_000 });
 
-  const rows = list.data?.data ?? [];
-  const all = useQuery({ queryKey: ['invoices', '', '', ''], queryFn: () => api.invoices.list(), staleTime: 60_000 });
+  const rows = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return (list.data?.data ?? []).filter((r) =>
+      (!kind || r.kind === kind)
+      && (!status || r.status === status)
+      && (!needle || [r.number, r.billTo, r.poNumber, r.orderName, r.clientName].some((v) => v.toLowerCase().includes(needle))));
+  }, [list.data, kind, status, q]);
   const stats = useMemo(() => {
-    const docs = all.data?.data ?? [];
+    const docs = list.data?.data ?? [];
     const now = new Date();
     const thisMonth = (d: string) => { const x = new Date(d); return x.getUTCFullYear() === now.getUTCFullYear() && x.getUTCMonth() === now.getUTCMonth(); };
     const issuedInvoices = docs.filter((d) => d.kind === 'INVOICE' && d.status === 'ISSUED');
@@ -65,12 +73,14 @@ export function InvoicesPage() {
       issuedThisMonth: issuedInvoices.filter((d) => thisMonth(d.issuedAt ?? d.date)).reduce((a, d) => a + d.total, 0),
       issuedThisMonthCount: issuedInvoices.filter((d) => thisMonth(d.issuedAt ?? d.date)).length,
     };
-  }, [all.data]);
+  }, [list.data]);
 
-  // Orders with goods packed or shipped and no issued invoice yet.
-  const ready = useMemo(() => (candidates.data?.data ?? []).filter((c) =>
-    (c.packedQty > 0 || c.shippedQty > 0)
-    && !c.invoices.some((i) => i.kind === 'INVOICE' && i.status === 'ISSUED')), [candidates.data]);
+  // Orders with more packed or shipped than their issued invoices cover — so a
+  // split shipment stays on the list until its second invoice is issued.
+  const ready = useMemo(() => (candidates.data?.data ?? []).filter((c) => {
+    const invoiced = c.invoices.filter((i) => i.kind === 'INVOICE' && i.status === 'ISSUED').reduce((a, i) => a + i.totalQty, 0);
+    return Math.max(c.packedQty, c.shippedQty) > invoiced;
+  }), [candidates.data]);
 
   return (
     <div className="space-y-5 p-5">
@@ -115,6 +125,9 @@ export function InvoicesPage() {
                   <span>Shipped <b className="tnum">{c.shippedQty.toLocaleString()}</b></span>
                   <span>Price {c.pricePerPieceUsd == null ? <i className="text-amber-700">not set</i> : <b className="tnum">${c.pricePerPieceUsd.toFixed(2)}</b>}</span>
                 </div>
+                {c.invoices.some((i) => i.status === 'ISSUED' && i.kind === 'INVOICE') && (
+                  <span className="text-2xs text-ink-500">Invoiced so far: {c.invoices.filter((i) => i.status === 'ISSUED' && i.kind === 'INVOICE').reduce((a, i) => a + i.totalQty, 0).toLocaleString()} pcs</span>
+                )}
                 {c.invoices.some((i) => i.status === 'DRAFT' && i.kind === 'INVOICE') ? (
                   <Link to={`/invoices/${c.invoices.find((i) => i.status === 'DRAFT' && i.kind === 'INVOICE')!.id}`} className="btn-secondary btn-sm">Open draft</Link>
                 ) : can('invoice:write') ? (
@@ -130,7 +143,7 @@ export function InvoicesPage() {
       <Card>
         <CardHeader
           title="Documents"
-          subtitle={list.data ? `${rows.length} shown` : undefined}
+          subtitle={list.data ? `${rows.length} of ${list.data.data.length}${list.data.data.length >= 500 ? ' (newest 500)' : ''}` : undefined}
           action={
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex rounded-md border border-ink-300 p-0.5">
@@ -195,14 +208,6 @@ export function InvoicesPage() {
   );
 }
 
-function StatusChip({ status, sentAt }: { status: InvoiceStatus; sentAt?: string | null }) {
-  const tone = status === 'ISSUED'
-    ? (sentAt ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' : 'bg-blue-50 text-blue-700 ring-blue-600/20')
-    : status === 'VOID' ? 'bg-red-50 text-red-700 ring-red-600/20'
-    : 'bg-amber-50 text-amber-800 ring-amber-600/20';
-  return <span className={clsx('chip', tone)}>{INVOICE_STATUS_LABEL[status]}</span>;
-}
-
 function Row({ r, onOpen }: { r: InvoiceListRowDto; onOpen: () => void }) {
   return (
     <tr onClick={onOpen} className="cursor-pointer hover:bg-accent-50/40">
@@ -210,7 +215,7 @@ function Row({ r, onOpen }: { r: InvoiceListRowDto; onOpen: () => void }) {
         <p className="font-mono text-xs font-semibold text-accent-700">{r.number}</p>
         <p className="text-2xs text-ink-500">{INVOICE_KIND_LABEL[r.kind]}</p>
       </td>
-      <td className="td"><StatusChip status={r.status} sentAt={r.sentAt} /></td>
+      <td className="td"><InvoiceStatusChip status={r.status} sentAt={r.sentAt} /></td>
       <td className="td text-xs">{fmtDate(r.date)}</td>
       <td className="td text-xs" dir="auto">{r.billTo}</td>
       <td className="td">
