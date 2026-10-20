@@ -39,7 +39,7 @@ import { cellText, toNumber, toDate, buildLineItems, parseFieldOverride } from '
 import { toIsoDayOrNull } from '@opsflow/shared';
 import { loadWorkbook, readCsvWorkbook } from './open-workbook.js';
 import { readAgeLayingSheet } from './age-laying-reader.js';
-import { orderSizes } from './po-lines.js';
+import { orderSizes, splitColourSize } from './po-lines.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sheet reading
@@ -143,13 +143,28 @@ export function findHeaderCandidates(sheet: ExcelJS.Worksheet): number[] {
     const captions = cells.filter((x) => /:\s*$/.test(x.text)).length;
     if (captions >= 2) continue;
 
-    const next = sheet.getRow(r + 1);
-    const populated = cells.filter((x) => {
-      const v = rawValue(next.getCell(x.col));
-      return v != null && String(cellText(v)).trim() !== '';
-    }).length;
+    // The data must start under the header — but not necessarily on the very
+    // next row. A buyer's load-build template puts one cell on the row after
+    // the headings (its vendor number) and the item rows below that; judged on
+    // that one row alone the real header was discarded, the first item row
+    // became the header, and its "144" and "3" became size columns. The best
+    // of the next three rows is what the header is judged on.
+    let populated = 0;
+    for (let below = r + 1; below <= Math.min(r + 3, sheet.rowCount || MAX_SCAN_ROWS); below++) {
+      const next = sheet.getRow(below);
+      const count = cells.filter((x) => {
+        const v = rawValue(next.getCell(x.col));
+        return v != null && String(cellText(v)).trim() !== '';
+      }).length;
+      populated = Math.max(populated, count);
+    }
 
-    if (populated >= Math.max(2, Math.floor(cells.length * 0.4))) candidates.push(r);
+    // Judged against the headings that exist, lightly: the same template has
+    // twenty-three headings and fills five of them per item (the rest are the
+    // buyer's own bookkeeping), and at four in ten the real header never
+    // qualified. Scoring, not this bar, is what picks the right row among the
+    // candidates; this only keeps a caption with nothing under it out.
+    if (populated >= Math.max(2, Math.ceil(cells.length * 0.15))) candidates.push(r);
   }
   return candidates;
 }
@@ -405,21 +420,61 @@ interface BuildContext {
 const columnFor = (analyses: readonly ColumnAnalysis[], concept: ImportConcept): number | null =>
   analyses.find((a) => a.concept === concept)?.index ?? null;
 
-/** LONG layout: one row per colour × size × quantity. */
-function buildLongMatrix(ctx: BuildContext): ExtractedMatrix | null {
+/**
+ * LONG layout: one row per colour × size × quantity.
+ *
+ * With `sizeFromColour`, the sheet has no Size column and the size is read off
+ * the end of the colour text instead — "HUNTER/WHT YOUTH SMALL" is colour
+ * HUNTER/WHT in size Youth Small. That is how a buyer's ERP writes a SKU
+ * description, and a file written that way was reading as nothing at all. It
+ * is taken only when most rows yield a size, so a plain colour list is not
+ * carved up by accident.
+ *
+ * A file with several styles names each row "Style — Colour": the same
+ * NAVY/RED under two shirts is two products, and an order colour is unique by
+ * name. A row whose description is only a size ("ADULT LARGE", the colour
+ * being in the style's own name) is the style.
+ */
+function buildLongMatrix(ctx: BuildContext, opts: { sizeFromColour?: boolean } = {}): ExtractedMatrix | null {
   const colorCol = columnFor(ctx.analyses, ImportConcept.COLOR);
-  const sizeCol = columnFor(ctx.analyses, ImportConcept.SIZE);
+  const sizeCol = opts.sizeFromColour ? null : columnFor(ctx.analyses, ImportConcept.SIZE);
   const qtyCol = columnFor(ctx.analyses, ImportConcept.QUANTITY);
-  if (colorCol == null || sizeCol == null || qtyCol == null) return null;
+  const styleCol = columnFor(ctx.analyses, ImportConcept.STYLE);
+  if (colorCol == null || qtyCol == null) return null;
+  if (sizeCol == null && !opts.sizeFromColour) return null;
+
+  const styles = new Set(
+    styleCol == null ? [] : ctx.table.rows.map((r) => String(cellText(r[styleCol])).trim()).filter(Boolean),
+  );
+  const qualify = styles.size > 1;
 
   const byColor = new Map<string, Record<string, number>>();
   const sizeOrder: string[] = [];
   let skipped = 0;
+  let unsized = 0;
+  let example: { text: string; colour: string; size: string } | null = null;
 
   for (const row of ctx.table.rows) {
-    const color = String(cellText(row[colorCol])).trim();
-    const size = String(cellText(row[sizeCol])).trim();
+    const text = String(cellText(row[colorCol])).trim();
     const qty = toNumber(row[qtyCol]);
+    const style = styleCol == null ? '' : String(cellText(row[styleCol])).trim();
+
+    // A row with nothing in the colour, size or quantity cells is not a row
+    // that was skipped — it is the vendor number, a spacer, a note. Only a
+    // row that held something is worth telling the coordinator about.
+    const blank = !text && qty == null && (sizeCol == null || String(cellText(row[sizeCol])).trim() === '');
+    if (blank) continue;
+
+    let color = text;
+    let size = sizeCol == null ? '' : String(cellText(row[sizeCol])).trim();
+    if (opts.sizeFromColour) {
+      const split = text ? splitColourSize(text) : { colour: null, size: null };
+      if (!split.size) { if (text) unsized++; skipped++; continue; }
+      size = split.size;
+      color = split.colour ?? '';
+      if (!example && split.colour) example = { text, colour: split.colour, size: split.size };
+    }
+    if (qualify) color = color ? `${style} — ${color}` : style;
 
     if (!color || !size) { skipped++; continue; }
     if (qty == null || qty <= 0) { skipped++; continue; }
@@ -433,13 +488,25 @@ function buildLongMatrix(ctx: BuildContext): ExtractedMatrix | null {
   }
 
   if (byColor.size === 0) return null;
+  // Most rows must carry a size for this reading to be the right one.
+  if (opts.sizeFromColour && unsized > ctx.table.rows.length / 2) return null;
+
+  if (opts.sizeFromColour) {
+    ctx.issues.push({
+      level: 'INFO', field: null, sheet: ctx.table.sheetName, cell: null,
+      message:
+        'The file has no Size column, so the size was read from the end of each colour description'
+        + (example ? ` — "${example.text}" is colour ${example.colour} in size ${example.size}.` : '.')
+        + (qualify ? ` It lists ${styles.size} styles, so each row is named "Style — Colour".` : ''),
+    });
+  }
 
   if (skipped > 0) {
     ctx.issues.push({
       level: 'WARNING', field: null, sheet: ctx.table.sheetName, cell: null,
       message:
-        `${skipped} row${skipped === 1 ? '' : 's'} were skipped because they had no colour, no size, ` +
-        `or no quantity. ${ctx.table.rows.length - skipped} rows were read.`,
+        `${skipped} row${skipped === 1 ? ' was' : 's were'} skipped because ${skipped === 1 ? 'it' : 'they'} had no colour, no size, ` +
+        `or no quantity. ${byColor.size === 0 ? 0 : [...byColor.values()].reduce((a, c) => a + Object.keys(c).length, 0)} rows were read.`,
     });
   }
 
@@ -625,6 +692,8 @@ export async function extractTabular(
     overrides?: Record<number, ImportConcept>;
     /** Fields typed on the review screen, e.g. a PO number the file omits. */
     fieldOverrides?: Record<string, string | number | null>;
+    /** The uploaded file's name: the order is named after it when the file names nothing. */
+    fileName?: string;
   } = {},
 ): Promise<TabularExtractionResult> {
   const wb = new ExcelJS.Workbook();
@@ -719,6 +788,12 @@ export async function extractTabular(
     layout === 'LONG' ? buildLongMatrix(ctx)
     : layout === 'WIDE' ? buildWideMatrix(ctx, sizeColumns)
     : null;
+  // No Size column and no size grid: the size may be inside the colour text.
+  let sizesFromColour = false;
+  if (!matrix && layout !== 'LONG') {
+    matrix = buildLongMatrix(ctx, { sizeFromColour: true });
+    if (matrix) { layout = 'LONG'; sizesFromColour = true; }
+  }
   // Sizes down the side and colours across: the grid turned on its side.
   if (!matrix) {
     matrix = buildTransposedMatrix(chosen.headers, chosen.rows);
@@ -731,7 +806,7 @@ export async function extractTabular(
     }
   }
 
-  if (layout === 'WIDE') {
+  if (layout === 'WIDE' && !sizesFromColour) {
     issues.push({
       level: 'INFO', field: null, sheet: chosen.sheetName, cell: null,
       message:
@@ -778,6 +853,20 @@ export async function extractTabular(
     fields[field] = parseFieldOverride(field, value);
   }
 
+  // A buyer's template often names nothing — no PO cell, no description —
+  // and "Spring buy 2027" is in the file's name. Better than an order with no
+  // name at all; the review screen and Order Details can rename it.
+  if (!fields.orderName && !fields.poNumber && options.fileName) {
+    const stem = options.fileName.replace(/\.[A-Za-z0-9]{1,5}$/, '').replace(/[_]+/g, ' ').trim();
+    if (stem) {
+      fields.orderName = stem;
+      issues.push({
+        level: 'INFO', field: 'orderName', sheet: chosen.sheetName, cell: null,
+        message: `The file names no order, so it is called "${stem}" after the file. Rename it on the review screen or on Order Details.`,
+      });
+    }
+  }
+
   // A PO number the file does not carry is a question, not a failure: the
   // review screen can supply it, and the commit will refuse without it anyway.
   if (!fields.poNumber) {
@@ -795,8 +884,9 @@ export async function extractTabular(
 
   const readiness = assessMapping(columns);
   for (const missing of readiness.missing) {
-    // WIDE files legitimately have no size *column* — the sizes are headers.
-    if (missing === ImportConcept.SIZE && layout === 'WIDE') continue;
+    // WIDE files legitimately have no size *column* — the sizes are headers —
+    // and a file whose sizes sit inside the colour text has already been read.
+    if (missing === ImportConcept.SIZE && (layout === 'WIDE' || sizesFromColour)) continue;
     issues.push({
       level: 'WARNING', field: missing, sheet: chosen.sheetName, cell: null,
       message: `No column was identified as ${CONCEPT_META[missing].label}. `

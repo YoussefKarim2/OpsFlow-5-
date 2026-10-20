@@ -112,6 +112,8 @@ const GROUP_RANK: Record<string, number> = { Infant: 0, Toddler: 1, Kids: 2, Boy
 /** Sort key for a size label, so a grid reads Youth Small … Adult Large. */
 export function sizeSortKey(label: string): number {
   const parts = label.split(' ');
+  // A bare group ("Adult", "Youth") is a size of its own, ahead of that group's sized garments.
+  if (parts.length === 1 && GROUP_RANK[parts[0]!] != null) return GROUP_RANK[parts[0]!]! * 100;
   const group = parts.length > 1 ? GROUP_RANK[parts[0]!] ?? 4 : 4;
   const word = parts[parts.length - 1]!;
   const rank = Object.values(SIZE_WORDS).find((w) => w.label === word)?.rank
@@ -130,7 +132,10 @@ export function orderSizes(sizes: readonly string[]): string[] {
   // Raw labels — "L", "Youth LG", "28" — rather than the canonical ones the
   // sort key expects, so each is looked up by its word and group directly.
   const key = (label: string): number | null => {
+    // One-size goods (a bag, a bib) sit after every sized garment.
+    if (/^(one size|os|osfa|free size|free)$/i.test(label.trim())) return 999;
     const parts = label.trim().toUpperCase().split(/\s+/);
+    if (parts.length === 1 && SIZE_GROUPS[parts[0]!]) return (GROUP_RANK[SIZE_GROUPS[parts[0]!]!] ?? 4) * 100;
     const word = parts[parts.length - 1]!;
     const group = parts.length > 1 ? GROUP_RANK[SIZE_GROUPS[parts[0]!] ?? ''] ?? 4 : 4;
     const rank = SIZE_WORDS[word]?.rank ?? (/^\d+$/.test(word) ? 20 + Number(word) / 1000 : null);
@@ -153,6 +158,13 @@ export function splitColourSize(text: string): { colour: string | null; size: st
   const tokens = text.trim().split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return { colour: null, size: null };
   const last = tokens[tokens.length - 1]!.toUpperCase();
+  // "ONE SIZE" and "FREE SIZE" are two words for one size — a bag, a bib, a
+  // ball — and read one word at a time "SIZE" was no size and 1,000 bags
+  // vanished from the order.
+  if (tokens.length >= 2 && last === 'SIZE' && /^(ONE|FREE)$/.test(tokens[tokens.length - 2]!.toUpperCase())) {
+    const colour = tokens.slice(0, tokens.length - 2).join(' ') || null;
+    return { colour, size: 'One Size' };
+  }
   let sizeWord = SIZE_WORDS[last]?.label ?? null;
   // Numeric sizes ("128", "10", "2-3Y") only count after a group word or alone,
   // so a colour code such as "Pantone 186" is not read as size 186.
@@ -161,9 +173,15 @@ export function splitColourSize(text: string): { colour: string | null; size: st
   const before = tokens.length >= 2 ? tokens[tokens.length - 2]!.toUpperCase() : null;
   const group = before ? SIZE_GROUPS[before] ?? null : null;
   if (!sizeWord && numeric && (group || tokens.length === 1)) sizeWord = numeric;
+  // A group word on its own is a size: a training bib comes in "ADULT" and
+  // "YOUTH", nothing finer, and "SKY ADULT" is a sky-blue adult bib.
+  if (!sizeWord && SIZE_GROUPS[last] && tokens.length >= 2) {
+    return { colour: tokens.slice(0, -1).join(' ') || null, size: SIZE_GROUPS[last]! };
+  }
   if (!sizeWord) return { colour: tokens.join(' '), size: null };
-  // "EXTRA LARGE" is two words for one size.
+  // "EXTRA LARGE" and "EXTRA SMALL" are two words for one size.
   if (sizeWord === 'Large' && before === 'EXTRA') { sizeWord = 'XL'; consumed = 2; }
+  if (sizeWord === 'Small' && before === 'EXTRA') { sizeWord = 'XS'; consumed = 2; }
   const groupLabel = tokens.length > consumed ? SIZE_GROUPS[tokens[tokens.length - consumed - 1]!.toUpperCase()] ?? null : null;
   if (groupLabel) consumed += 1;
   const size = groupLabel ? `${groupLabel} ${sizeWord}` : sizeWord;

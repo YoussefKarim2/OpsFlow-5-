@@ -674,3 +674,100 @@ describe('workbooks from the third round of documents', () => {
     assert.equal(r.matrices.find((x) => x.ledger === 'ORDER')!.computedTotal, 275);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A buyer's load-build template (Kittrich / Xara, "AGE Spring buy 2027")
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The real file: 23 headings on row 1, one cell on row 2 (the vendor number),
+ * then one row per SKU with the size inside the colour description and no PO
+ * anywhere. Read as uploaded, the first item row became the header and the
+ * order came out empty.
+ */
+const LOAD_BUILD_HEADERS = [
+  'JDE PO', 'JDE Line', 'Load Build Request Date', 'Load Build #', 'Xara PO# or style #', 'Vendor',
+  'Xara Part #', 'Style', 'Color description', 'Kittrich #', 'Qty', 'Unit Cost', 'Extended Cost',
+  'Branch Location', 'Ship to Location', 'Leave Blank', 'Leave Blank', 'ETD', 'ETA', 'Original Qty',
+  'Variance', 'PI Unit Cost', 'NOTES:',
+];
+const item = (part: string, style: string, desc: string, qty: number, cost: number) =>
+  [null, null, null, null, null, null, part, style, desc, null, qty, cost];
+const LOAD_BUILD = [
+  LOAD_BUILD_HEADERS,
+  [null, null, null, null, null, 39041],
+  item('XRA-1003HW-YSM', 'TRANMERE SHIRT', 'HUNTER/WHT YOUTH SMALL', 144, 3),
+  item('XRA-1003HW-YXSM', 'TRANMERE SHIRT', 'HUNTER/WHT YOUTH X-SMALL', 120, 3),
+  item('XRA-1003LB-YLG', 'TRANMERE SHIRT', 'LIME/BLACK YOUTH LARGE', 72, 3),
+  item('XRA-1003SB-ALG', 'TRANMERE SHIRT', 'SILVER/BLACK ADULT LARGE', 24, 3),
+  item('XRA-1006NS-ALG', 'HARROGATE SHIRT', 'NAVY/RED ADULT LARGE', 24, 5),
+  item('XRA-1006NS-AXL', 'HARROGATE SHIRT', 'NAVY/RED ADULT X-LARGE', 6, 5),
+  item('XRA-1025NS-ALG', 'CHAMPION SERIES III', 'NAVY/RED ADULT LARGE', 12, 6),
+  item('XRA-5020GP-ALG', 'SHUTOUT GK JERSEY GREY', 'ADULT LARGE', 24, 5.5),
+  item('XRA-5020GP-AMD', 'SHUTOUT GK JERSEY GREY', 'ADULT MEDIUM', 12, 5.5),
+  item('XRA-1030AE-YXSM', 'LEEDS JERSEY UNISEX PEACH', 'YOUTH EXTRA SMALL', 36, 4.17),
+  item('XRA-1051CM-ADULT', 'TRAINING BIB', 'SKY ADULT', 240, 2.5),
+  item('XRA-7030BL-OS', 'XARA BALL BAG', 'BLACK/WHITE ONE SIZE', 1000, 11.5),
+];
+
+describe('a buyer\'s load-build template', () => {
+  test('the headings on row 1 are the header, not the first item row', async () => {
+    const buffer = await buildWorkbook([{ name: 'Template', rows: LOAD_BUILD }]);
+    const result = await extractTabular(buffer, { fileName: 'AGE.Spring buy 2027.xlsx' });
+    assert.equal(result.analysis.headerRowIndex, 1);
+    assert.equal(result.analysis.layout, 'LONG');
+    assert.deepEqual(result.analysis.sizeColumns, [], 'no number under the items is a size column');
+    const by = (c: ImportConcept) => result.analysis.columns.find((x) => x.concept === c)?.header;
+    assert.equal(by(ImportConcept.COLOR), 'Color description');
+    assert.equal(by(ImportConcept.QUANTITY), 'Qty');
+    assert.equal(by(ImportConcept.STYLE), 'Style');
+  });
+
+  test('sizes come from the end of the colour text and colours are qualified by style', async () => {
+    const buffer = await buildWorkbook([{ name: 'Template', rows: LOAD_BUILD }]);
+    const result = await extractTabular(buffer, { fileName: 'AGE.Spring buy 2027.xlsx' });
+    const m = result.matrices[0]!;
+    assert.ok(m, 'a matrix was read');
+    assert.equal(m.computedTotal, 144 + 120 + 72 + 24 + 24 + 6 + 12 + 24 + 12 + 36 + 240 + 1000, 'every row counted, including the bib and the bag');
+    assert.deepEqual(m.sizes, ['Youth XS', 'Youth Small', 'Youth Large', 'Adult', 'Adult Medium', 'Adult Large', 'Adult XL', 'One Size'], 'wearing order, one-size goods last');
+    assert.equal(m.rows.find((r) => r.color === 'LEEDS JERSEY UNISEX PEACH')!.cells['Youth XS'], 36, '"YOUTH EXTRA SMALL" is Youth XS of a style whose colour is in its name');
+    assert.equal(m.rows.find((r) => r.color === 'TRAINING BIB — SKY')!.cells['Adult'], 240, 'a bib comes in Adult and nothing finer');
+    const names = m.rows.map((r) => r.color);
+    assert.ok(names.includes('TRANMERE SHIRT — HUNTER/WHT'));
+    assert.ok(names.includes('HARROGATE SHIRT — NAVY/RED') && names.includes('CHAMPION SERIES III — NAVY/RED'), 'the same colour under two styles is two rows');
+    assert.ok(names.includes('SHUTOUT GK JERSEY GREY'), 'a description that is only a size names the style');
+    assert.ok(names.includes('XARA BALL BAG — BLACK/WHITE'));
+    assert.equal(m.rows.find((r) => r.color === 'TRANMERE SHIRT — HUNTER/WHT')!.cells['Youth Small'], 144);
+    assert.equal(m.rows.find((r) => r.color === 'SHUTOUT GK JERSEY GREY')!.cells['Adult Large'], 24);
+    assert.equal(m.rows.find((r) => r.color === 'XARA BALL BAG — BLACK/WHITE')!.cells['One Size'], 1000);
+    const said = result.issues.find((i) => i.level === 'INFO' && /read from the end of each colour description/i.test(i.message));
+    assert.ok(said, 'the importer says how it read the sizes');
+    assert.ok(!result.issues.some((i) => i.level === 'WARNING' && /identified as Size/i.test(i.message)), 'no complaint about a missing Size column');
+  });
+
+  test('with no PO and no description the order is named after the file', async () => {
+    const buffer = await buildWorkbook([{ name: 'Template', rows: LOAD_BUILD }]);
+    const result = await extractTabular(buffer, { fileName: 'AGE.Spring buy 2027.xlsx' });
+    assert.equal(result.fields.orderName, 'AGE.Spring buy 2027');
+    assert.ok(result.issues.some((i) => i.field === 'poNumber' && i.level === 'WARNING'), 'the missing PO is still reported');
+  });
+
+  test('a plain colour list with a Size column is not carved up', async () => {
+    const buffer = await buildWorkbook([{ name: 'Order', rows: CUSTOMER_A }]);
+    const result = await extractTabular(buffer);
+    assert.deepEqual(result.matrices[0]!.rows.map((r) => r.color), ['Sky Blue', 'Navy']);
+    assert.ok(!result.issues.some((i) => /colour description/i.test(i.message)));
+  });
+
+  test('colour text with no size at its end is left alone', async () => {
+    const rows = [
+      ['Style', 'Colour', 'Qty'],
+      ['ST-1', 'Navy', 10],
+      ['ST-1', 'Red', 12],
+      ['ST-1', 'Pantone 186', 8],
+    ];
+    const buffer = await buildWorkbook([{ name: 'Order', rows }]);
+    const result = await extractTabular(buffer);
+    assert.equal(result.matrices.length, 0, 'no size anywhere means no matrix, not an invented one');
+  });
+});

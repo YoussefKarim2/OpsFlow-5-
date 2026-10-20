@@ -217,6 +217,10 @@ export const CONCEPT_SYNONYMS: Record<ImportConcept, readonly string[]> = {
   COLOR: [
     'color', 'colour', 'shade', 'colorway', 'colourway', 'color name', 'colour name',
     'color code', 'colour code', 'col', 'shade name',
+    // A buyer's ERP heads the colour column "Color description"; as a mere
+    // containment it tied with Description and lost, and the order's name
+    // became "HUNTER/WHT YOUTH SMALL".
+    'color description', 'colour description', 'color desc', 'colour desc', 'color/description', 'colour/description',
     'اللون', 'لون', 'الالوان', 'الألوان', 'الوان', 'ألوان',
   ],
   SIZE: [

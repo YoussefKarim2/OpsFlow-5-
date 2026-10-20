@@ -48,7 +48,7 @@ export async function runExtraction(
     overrides?: Record<number, ImportConcept>;
     fieldOverrides?: Record<string, string | number | null>;
     /** The import job, which names a PDF's stand-in PO number the same on every read. */
-    job?: { id: string; createdAt: Date };
+    job?: { id: string; createdAt: Date; fileName?: string };
   } = {},
 ): Promise<ExtractionResult & { analysis?: TabularAnalysis }> {
   // A PDF has no sheets and no profile, so neither Excel reader applies. It
@@ -85,6 +85,7 @@ export async function runExtraction(
     sheetName: options.sheetName,
     overrides: options.overrides,
     fieldOverrides: options.fieldOverrides,
+    fileName: options.job?.fileName,
   });
 
   const fingerprint = headerFingerprint(firstPass.analysis.columns.map((c) => c.header));
@@ -106,6 +107,7 @@ export async function runExtraction(
     // An explicit correction in this session still beats the saved one.
     overrides: options.overrides,
     fieldOverrides: options.fieldOverrides,
+    fileName: options.job?.fileName,
   });
   replayed.issues.unshift({
     level: 'INFO', field: null, sheet: null, cell: null,
