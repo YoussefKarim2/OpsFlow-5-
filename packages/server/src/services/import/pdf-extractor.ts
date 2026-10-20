@@ -36,6 +36,7 @@ import { readPoLines, readPoHeader, poLinesToOrder, detectDayFirst, findBoilerpl
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { readSizeGrids, gridsToOrder, readPrintedPieces, type GridLine } from './size-grid.js';
+import { readStyleBlocks } from './style-blocks.js';
 
 /**
  * Rewrite a document's numbers from "1.200,50" to "1200.50" when it writes
@@ -858,8 +859,22 @@ export async function extractFromPdf(
   // document's own printed piece count wins, and without one the reading that
   // found the most pieces. On a tie the table reader is kept (it is the one
   // the existing review screens were built around), then the grid.
-  const gridOrder = gridsToOrder(readSizeGrids(gridLines));
   const printedPieces = readPrintedPieces(gridLines);
+  // A grid and a set of titled style blocks are two ways of reading the same
+  // kind of document; a production order often has both (a summary table on
+  // the cover, a block per style behind it). The one that matches the printed
+  // piece count wins, else the one that read more; a tie keeps the grid.
+  const sizeGridOrder = gridsToOrder(readSizeGrids(gridLines));
+  const blockOrder = gridsToOrder(readStyleBlocks(gridLines));
+  const gridOrder = (() => {
+    if (!blockOrder) return sizeGridOrder;
+    if (!sizeGridOrder) return blockOrder;
+    if (printedPieces != null) {
+      if (sizeGridOrder.totalQty === printedPieces) return sizeGridOrder;
+      if (blockOrder.totalQty === printedPieces) return blockOrder;
+    }
+    return blockOrder.totalQty > sizeGridOrder.totalQty ? blockOrder : sizeGridOrder;
+  })();
   type Reading = 'table' | 'grid' | 'lines';
   const readings: Array<{ kind: Reading; qty: number }> = [
     { kind: 'table' as const, qty: tableQty },
@@ -881,6 +896,12 @@ export async function extractFromPdf(
   const best = readings[0]?.kind ?? null;
   const chosenQty = readings[0]?.qty ?? 0;
 
+  // A document's own title — "PULSE RUNNING CLUB - PRODUCTION ORDER" on its
+  // first line — names an order that has no single style and no customer
+  // block to be named after.
+  const firstLine = pageTexts[0]?.map((t) => t.text.trim()).find((t) => t !== '') ?? '';
+  const docTitle = /^(.{3,60}?)\s*[-–—:|]\s*(?:final\s+)?(?:production|purchase|customer|sales)\s+order\b/i.exec(firstLine)?.[1]?.trim() ?? null;
+
   if (best === 'grid' && gridOrder) {
     matrices.length = 0;
     matrices.push({
@@ -889,6 +910,7 @@ export async function extractFromPdf(
     });
     poLineItems = gridOrder.lineItems.map((l) => ({ ...l, unitPrice: l.unitPrice ?? undefined })) as ExtractionResult['lineItems'];
     const name = gridOrder.orderName
+      ?? (!poHeader.client && !poHeader.poNumber ? docTitle : null)
       ?? [poHeader.client?.split(/\s+/)[0], poHeader.poNumber ? `PO ${poHeader.poNumber}` : null, gridOrder.styles.length > 1 ? `(${gridOrder.styles.length} styles)` : null]
         .filter(Boolean).join(' ');
     if (name) { named.orderName = name; fields[ImportConcept.ORDER_NAME] = name; }
@@ -1001,7 +1023,10 @@ export async function extractFromPdf(
     const token = identifying
       ? /\b(?:ref(?:erence)?|no\.?|number|#)\s*[:.]?\s*([A-Za-z0-9][A-Za-z0-9/-]{1,29})\b/i.exec(identifying)?.[1]
       : undefined;
-    const candidate = token ?? identifying;
+    // Only something shaped like a reference stands in for the PO number. A
+    // style name or "(8 styles)" is a name, not a number; the stand-in the
+    // import job provides is better than a phrase nobody would quote.
+    const candidate = token ?? (identifying && /^[A-Za-z0-9][A-Za-z0-9/_.-]{1,29}$/.test(identifying) ? identifying : undefined);
 
     const derived = candidate
       ?? options.placeholderPoNumber

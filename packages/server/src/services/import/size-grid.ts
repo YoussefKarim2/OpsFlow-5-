@@ -104,8 +104,16 @@ export function isSizeLabel(text: string): boolean {
   const t = text.trim();
   if (!t || t.length > 16) return false;
   if (LETTER_SIZE.test(t) || WORD_SIZE.test(t) || AGE_SIZE.test(t) || RANGE_SIZE.test(t)) return true;
+  const group = GROUP.exec(t);
   const rest = t.replace(GROUP, '');
-  if (rest !== t && rest && (LETTER_SIZE.test(rest) || WORD_SIZE.test(rest) || NUMERIC_SIZE.test(rest) || AGE_SIZE.test(rest))) return true;
+  if (group && rest !== t && rest) {
+    if (LETTER_SIZE.test(rest) || WORD_SIZE.test(rest) || AGE_SIZE.test(rest)) return true;
+    // "Youth 10" is a size; "W02" and "M12" are style codes. A number counts
+    // after a group *word*, not after a single letter — a production order's
+    // "W02 / Air Split Short" was read as a size heading, and the grid stopped
+    // at the row before it.
+    if (NUMERIC_SIZE.test(rest) && group[1]!.length > 1) return true;
+  }
   return NUMERIC_SIZE.test(t) && Number(t) > 0 && Number(t) <= 200;
 }
 
@@ -179,8 +187,13 @@ export function readHeading(cells: readonly GridCell[], index = 0): Heading | nu
     else if (isSizeLabel(t.text) && qty == null && price == null && amount == null) sizes.push({ label: t.text, centre, x: t.x, end: t.end });
     else other++;
   }
-  if (sizes.length < 2) return null;
+  // A lettered size beside bare numbers is a label and its value — "Size S | 8"
+  // — not a heading of sizes S and 8. Numbers only count as sizes together.
   const lettered = sizes.some((s) => !/^\d{1,3}$/.test(s.label));
+  if (lettered && sizes.some((s) => /^\d{1,3}$/.test(s.label))) {
+    for (let i = sizes.length - 1; i >= 0; i--) if (/^\d{1,3}$/.test(sizes[i]!.label)) sizes.splice(i, 1);
+  }
+  if (sizes.length < 2) return null;
   if (!lettered && qty == null && amount == null) return null;
   // Words that are neither sizes nor headings (a description column) are fine
   // in moderation; a sentence that happens to contain "S" and "M" is not a heading.
@@ -437,7 +450,7 @@ export function gridsToOrder(blocks: readonly GridBlock[]): GridOrder | null {
  */
 export function readPrintedPieces(lines: readonly GridLine[]): number | null {
   const LABEL = /^(pieces|total\s*pieces|total\s*pcs|total\s*qty|total\s*quantity|total\s*units|qty\s*total|quantity\s*total|grand\s*total\s*qty|total\s*no\.?\s*of\s*pcs)\s*:?$/i;
-  for (const l of lines) {
+  for (const [li, l] of lines.entries()) {
     for (const [i, c] of l.cells.entries()) {
       const text = c.text.trim();
       const m = /^(.*?)\s*:?\s*([\d.,]+)\s*(pcs|pieces|units)?$/i.exec(text);
@@ -446,6 +459,17 @@ export function readPrintedPieces(lines: readonly GridLine[]): number | null {
         const next = l.cells[i + 1]?.text.trim().replace(/\s*(pcs|pieces|units)$/i, '');
         const n = next ? pieces(next) : null;
         if (n != null && n > 0) return n;
+        // A summary strip puts the label on one line and the figure beneath
+        // it: "TOTAL PCS" over "224". The cell under the label, by position —
+        // only for a *total* label: a column headed "Pieces" has a line's
+        // quantity beneath it, not the order's.
+        const below = lines[li + 1];
+        if (below && below.page === l.page && /total/i.test(text)) {
+          const centre = (c.x + c.end) / 2;
+          const under = below.cells.find((d) => Math.abs((d.x + d.end) / 2 - centre) <= 40);
+          const v = under ? pieces(under.text.trim().replace(/\s*(pcs|pieces|units)$/i, '')) : null;
+          if (v != null && v > 0) return v;
+        }
       }
     }
   }

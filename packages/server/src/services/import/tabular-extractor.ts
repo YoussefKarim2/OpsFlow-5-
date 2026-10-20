@@ -169,6 +169,21 @@ export function findHeaderCandidates(sheet: ExcelJS.Worksheet): number[] {
   return candidates;
 }
 
+/** "Proforma invoice" in the first forty rows of a sheet names the document. */
+function looksLikeProforma(sheet: ExcelJS.Worksheet): boolean {
+  const limit = Math.min(sheet.rowCount || 0, 40);
+  for (let r = 1; r <= limit; r++) {
+    const row = sheet.getRow(r);
+    for (let c = 1; c <= Math.min(sheet.columnCount || MAX_SCAN_COLS, MAX_SCAN_COLS); c++) {
+      const text = String(cellText(rawValue(row.getCell(c)))).trim().toLowerCase();
+      // A title, not a mention: a laying sheet's notes may say "as per the
+      // proforma invoice" in a long cell and are not one.
+      if (text.length <= 80 && /pro\s*-?\s*forma\s+invoice/.test(text)) return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Read one sheet as a table, if it looks like one.
  *
@@ -198,18 +213,58 @@ export function readSheetTable(sheet: ExcelJS.Worksheet): SheetTable | null {
  */
 export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): SheetTable | null {
   const headerRow = sheet.getRow(headerRowIndex);
-  const headers: string[] = [];
-  const columns: number[] = [];
+  const allHeaders: string[] = [];
+  const allColumns: number[] = [];
 
   let lastPopulated = 0;
   for (let c = 1; c <= Math.min(sheet.columnCount || MAX_SCAN_COLS, MAX_SCAN_COLS); c++) {
     const text = String(cellText(rawValue(headerRow.getCell(c)))).trim();
-    headers.push(text);
-    columns.push(c);
+    allHeaders.push(text);
+    allColumns.push(c);
     if (text) lastPopulated = c;
   }
-  headers.length = lastPopulated;
-  columns.length = lastPopulated;
+  allHeaders.length = lastPopulated;
+  allColumns.length = lastPopulated;
+
+  // The heading sequence — the non-blank headings in order — is what a block
+  // of this table is recognised by, wherever it sits.
+  const sequence = allHeaders.map((h, i) => ({ text: h.toLowerCase(), i })).filter((h) => h.text !== '');
+  const sequenceTexts = sequence.map((h) => h.text);
+
+  // Side by side: the same headings again further along the header row —
+  // "Product Name | Color | Size | Qty | | Product Name | Color | Size | Qty".
+  // The first run is the table; each later run is the same table beside it,
+  // read with its own columns and appended. Found before the columns are cut.
+  const sideStarts: number[] = [];
+  if (sequenceTexts.length >= 2) {
+    let n = sequenceTexts.length;
+    // The shortest prefix of the sequence that repeats is the real heading.
+    for (let len = 1; len * 2 <= sequenceTexts.length; len++) {
+      const prefix = sequenceTexts.slice(0, len).join('\u0001');
+      let ok = sequenceTexts.length % len === 0;
+      for (let k = len; ok && k < sequenceTexts.length; k += len) ok = sequenceTexts.slice(k, k + len).join('\u0001') === prefix;
+      if (ok) { n = len; break; }
+    }
+    if (n < sequenceTexts.length) for (let k = n; k < sequenceTexts.length; k += n) sideStarts.push(k);
+    sequence.length = n;
+    sequenceTexts.length = n;
+  }
+  const primaryEnd = sideStarts.length > 0 ? sequence[sequence.length - 1]!.i : allHeaders.length - 1;
+  const headers = allHeaders.slice(0, primaryEnd + 1);
+  const columns = allColumns.slice(0, primaryEnd + 1);
+
+  /** The sheet columns to read each primary column from, for a block whose headings sit in `cols` (one per heading). */
+  const mappingFor = (cols: number[]): Array<number | null> =>
+    headers.map((h, i) => {
+      if (!h) return null;
+      const k = sequence.findIndex((q) => q.i === i);
+      return k === -1 ? null : cols[k] ?? null;
+    });
+  const identity: Array<number | null> = columns.map((c) => c);
+  const sideMappings = sideStarts.map((k) => {
+    const fullSequence = allHeaders.map((h, i) => ({ text: h.toLowerCase(), i })).filter((h) => h.text !== '');
+    return mappingFor(fullSequence.slice(k, k + sequence.length).map((q) => allColumns[q.i]!));
+  });
 
   // Group headings above the sizes. A grid with "Youth" over S M L and
   // "Adult" over the next S M L — merged cells, or the word in the first
@@ -229,29 +284,42 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
     }
   }
 
-  const rows: unknown[][] = [];
-  let blankRun = 0;
   const last = Math.min(sheet.rowCount || MAX_SCAN_ROWS, MAX_SCAN_ROWS);
 
   // A sheet written one block per style — the header row again, the rows,
   // a total — is one table in four pieces. Read to the first total, it was
   // one style of four: 579 pieces of a 1,972-piece order. Every repeat of the
   // header row is found first, so a total followed by another block is a
-  // divider rather than the end.
-  const headerKey = headers.map((h) => h.toLowerCase()).join('\u0001');
-  const repeats = new Set<number>();
+  // divider rather than the end. A repeat is known by its headings, not its
+  // columns: a block pasted one column to the right is still this table.
+  const repeats = new Map<number, Array<number | null>>();
+  const maxCol = Math.min(sheet.columnCount || MAX_SCAN_COLS, MAX_SCAN_COLS);
   for (let r = headerRowIndex + 1; r <= last; r++) {
     const row = sheet.getRow(r);
-    const key = columns.map((c) => String(cellText(rawValue(row.getCell(c)))).trim().toLowerCase()).join('\u0001');
-    if (key === headerKey) repeats.add(r);
+    const filled: Array<{ text: string; c: number }> = [];
+    for (let c = 1; c <= maxCol; c++) {
+      const text = String(cellText(rawValue(row.getCell(c)))).trim().toLowerCase();
+      if (text) filled.push({ text, c });
+    }
+    if (filled.length !== sequenceTexts.length || sequenceTexts.length === 0) continue;
+    if (filled.every((f, k) => f.text === sequenceTexts[k])) repeats.set(r, mappingFor(filled.map((f) => f.c)));
   }
-  const lastRepeat = repeats.size > 0 ? Math.max(...repeats) : 0;
+  const lastRepeat = repeats.size > 0 ? Math.max(...repeats.keys()) : 0;
+
+  const rows: unknown[][] = [];
+  const sideRows: unknown[][][] = sideMappings.map(() => []);
+  let mapping = identity;
+  let blankRun = 0;
+
+  const read = (row: ExcelJS.Row, m: Array<number | null>): unknown[] => m.map((c) => (c == null ? null : rawValue(row.getCell(c))));
+  const isFilled = (v: unknown) => v != null && String(cellText(v)).trim() !== '';
 
   for (let r = headerRowIndex + 1; r <= last; r++) {
-    if (repeats.has(r)) { blankRun = 0; continue; }
+    const repeat = repeats.get(r);
+    if (repeat) { mapping = repeat; blankRun = 0; continue; }
     const row = sheet.getRow(r);
-    const values = columns.map((c) => rawValue(row.getCell(c)));
-    const populated = values.filter((v) => v != null && String(cellText(v)).trim() !== '').length;
+    const values = read(row, mapping);
+    const populated = values.filter(isFilled).length;
 
     if (populated === 0) {
       // A gap is normal in a hand-maintained sheet; ten in a row is the end.
@@ -271,12 +339,19 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
     // reading the blank A cell let the totals through as one more colour.
     // With another block of the same table still to come, it is skipped
     // rather than ending the read.
-    const firstFilled = values.find((v) => v != null && String(cellText(v)).trim() !== '');
+    const firstFilled = values.find(isFilled);
     if (isTotalsLabel(firstFilled)) { if (r < lastRepeat) continue; break; }
 
     rows.push(values);
+    sideMappings.forEach((m, k) => {
+      const side = read(row, m);
+      if (side.filter(isFilled).length === 0) return;
+      if (isTotalsLabel(side.find(isFilled))) return;
+      sideRows[k]!.push(side);
+    });
   }
 
+  for (const side of sideRows) rows.push(...side);
   if (rows.length === 0) return null;
 
   return {
@@ -340,7 +415,7 @@ function scoreTable(headers: readonly string[], rows: readonly unknown[][]): num
  * A pattern rather than a list, so YXS, 2XL, 3XL, 38 and "XXL" all qualify
  * without maintenance.
  */
-const SIZE_TOKEN = /^(?:\d?\s?[xy]{0,3}(?:xs|s|m|l|xl|xxl|xxxl)|[0-9]{1,3}(?:\/[0-9]{1,3})?|os|one size|free)$/i;
+const SIZE_TOKEN = /^(?:\d?\s?[axy]{0,3}(?:xs|s|m|l|xl|xxl|xxxl)|[0-9]{1,3}(?:\/[0-9]{1,3})?|os|one size|free)$/i;
 
 /**
  * The same sizes spelled out.
@@ -723,7 +798,9 @@ export async function extractTabular(
 
   // A factory laying sheet reads as a table too — panels as colours, lays as
   // sizes — and imported here it became an order of 84 "pieces" called front,
-  // back and sl. It has a screen of its own.
+  // back and sl. It has a screen of its own. Its table is dropped, not merely
+  // warned about: left in, it still came through as 205 "pieces" of White in
+  // sizes named after marker ratios, one Confirm away from being an order.
   for (const sheet of wb.worksheets) {
     let laying = false;
     try { laying = readAgeLayingSheet(sheet) != null; } catch { /* not one */ }
@@ -732,6 +809,22 @@ export async function extractTabular(
       level: 'WARNING', field: 'documentKind', sheet: sheet.name, cell: null,
       message: `"${sheet.name}" is a laying & marking sheet (lays, layers and panels), not a purchase order. `
         + "Import it from the order's Laying & Marker screen; importing it here would create an order whose colours are panel names.",
+    });
+    const at = tables.findIndex((t) => t.sheetName === sheet.name);
+    if (at !== -1) tables.splice(at, 1);
+    break;
+  }
+
+  // A proforma invoice is the factory's own quotation, not the customer's
+  // order. Its grid sheet may well hold the right quantities — it is read —
+  // but the document is named for what it is, so nobody files it as a PO.
+  const layingSheets = new Set(issues.filter((i) => i.field === 'documentKind').map((i) => i.sheet));
+  for (const sheet of wb.worksheets) {
+    if (layingSheets.has(sheet.name) || !looksLikeProforma(sheet)) continue;
+    issues.push({
+      level: 'WARNING', field: 'documentKind', sheet: sheet.name, cell: null,
+      message: `"${sheet.name}" is a proforma invoice, not a purchase order. `
+        + "If the workbook also carries the order's size grid it has been read below; check it against the customer's PO before confirming, or import it on the order's Proforma Invoice step instead.",
     });
     break;
   }

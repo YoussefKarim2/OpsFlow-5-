@@ -771,3 +771,79 @@ describe('a buyer\'s load-build template', () => {
     assert.equal(result.matrices.length, 0, 'no size anywhere means no matrix, not an invented one');
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// One table in pieces: blocks side by side, blocks shifted a column
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FLORIDA_BLOCK = (name: string, colour: string, qty: number[], offset = 0) => {
+  const pad = Array<null>(offset).fill(null);
+  const sizes = ['YOUTH X-SMALL', 'YOUTH SMALL', 'YOUTH MEDIUM', 'ADULT SMALL'];
+  return [
+    [...pad, 'Product Name', 'Color', 'Size', 'Qty'],
+    ...sizes.map((s, i) => [...pad, name, colour, s, qty[i]!]),
+    [...pad, null, null, 'TOTAL', qty.reduce((a, b) => a + b, 0)],
+  ];
+};
+
+describe('a customer order written as several blocks of the same table', () => {
+  test('two blocks side by side on the same rows are both read', async () => {
+    const left = FLORIDA_BLOCK('CREW NECK - STRIKERS', 'SKY BLUE', [50, 138, 141, 70]);
+    const right = FLORIDA_BLOCK('CREW NECK - NIGHTHAWKS', 'LIME', [50, 138, 141, 50]);
+    const rows = left.map((r, i) => [...r, null, ...(right[i] ?? [])]);
+    const buffer = await buildWorkbook([{ name: 'Sheet1', rows }]);
+    const result = await extractTabular(buffer);
+    const m = result.matrices[0]!;
+    assert.equal(m.computedTotal, 399 + 379);
+    assert.deepEqual(m.rows.map((r) => [r.color, r.total]), [['SKY BLUE', 399], ['LIME', 379]]);
+  });
+
+  test('a later block pasted one column to the right is still this table', async () => {
+    const rows = [
+      ...FLORIDA_BLOCK('CREW NECK - STRIKERS', 'SKY BLUE', [50, 138, 141, 70]),
+      [],
+      ...FLORIDA_BLOCK('CREW NECK - NIGHTHAWKS', 'LIME', [50, 138, 141, 50], 1),
+    ];
+    const buffer = await buildWorkbook([{ name: 'Sheet1', rows }]);
+    const result = await extractTabular(buffer);
+    const m = result.matrices[0]!;
+    assert.equal(m.computedTotal, 399 + 379);
+    assert.equal(m.rows.length, 2);
+    assert.ok(!m.rows.some((r) => /total/i.test(r.color)), 'neither block\'s total row is a colour');
+  });
+
+  test('blocks under each other with the same columns still read as one table', async () => {
+    const rows = [
+      ...FLORIDA_BLOCK('A', 'SKY BLUE', [1, 2, 3, 4]),
+      [],
+      ...FLORIDA_BLOCK('B', 'LIME', [5, 6, 7, 8]),
+    ];
+    const result = await extractTabular(await buildWorkbook([{ name: 'Sheet1', rows }]));
+    assert.equal(result.matrices[0]!.computedTotal, 36);
+  });
+});
+
+describe('a proforma invoice workbook', () => {
+  test('is named for what it is, and its grid sheet is still read with adult and youth sizes', async () => {
+    const invoice = [
+      [], [], [], ['Protime Sports  Proforma invoice No. 18'], ['The goods stated on this invoice are duty free'],
+      ['Shipment From', null, 'Egypt'], ['Date', null, 46238],
+      ['Qty', 'PO#', 'Description', 'HTS Code', 'No. of Cartons', 'UNIT Price in $', 'Total Price in $'],
+      [1972, 'A302059B', 'Florida T shirt', '610990', 18, 7, 13804],
+    ];
+    const grid = [
+      ['Style', 'Florida T shirt', null, null, 'Style #', '3046', null, null, 'Total Qty', 1972],
+      [], ['Date', 46238, null, null, 'PO #', 'A302059B'], [], [], [],
+      ['Color/Size', 'YXXS', 'YXS', 'YS', 'YM', 'YL', 'AS', 'AM', 'AL', 'AXL', 'AXXL', 'AXXXL', 'TOTAL'],
+      ['SKY BLUE', 20, 50, 138, 141, 90, 70, 35, 20, 10, 5, null, 579],
+      ['LIME', 20, 50, 138, 141, 80, 50, 35, 15, 10, 5, null, 544],
+      ['TOTAL', null, null, null, null, null, null, null, null, null, null, null, 1123],
+    ];
+    const buffer = await buildWorkbook([{ name: 'invoice', rows: invoice }, { name: 'A 302059B Florida T shirt', rows: grid }]);
+    const result = await extractTabular(buffer);
+    assert.ok(result.issues.some((i) => i.field === 'documentKind' && /proforma invoice/i.test(i.message)));
+    const m = result.matrices[0]!;
+    assert.equal(m.computedTotal, 1123, 'adult sizes AS…AXXL are sizes too');
+    assert.deepEqual(m.sizes, ['YXXS', 'YXS', 'YS', 'YM', 'YL', 'AS', 'AM', 'AL', 'AXL', 'AXXL']);
+  });
+});
