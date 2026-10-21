@@ -7,7 +7,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeInvoiceTotals, issueBlockers, type CompanyProfileDto } from '@opsflow/shared';
 import {
-  PROFORMA_VALID_DAYS, buildInvoiceDocument, defaultCoverNote, manifestFingerprint,
+  PROFORMA_VALID_DAYS, buildCombinedDocument, buildInvoiceDocument, defaultCoverNote, manifestFingerprint,
   type BuildOrder, type BuildPackingList, type BuildShipment,
 } from './invoice-service.js';
 
@@ -243,5 +243,75 @@ describe('shipped against ordered never mislabels the goods', () => {
     assert.equal(doc.date.toISOString(), '2026-10-18T00:00:00.000Z');
     assert.equal(doc.dueDate!.toISOString(), `2026-11-0${1}T00:00:00.000Z`);
     assert.equal(PROFORMA_VALID_DAYS, 14);
+  });
+});
+
+describe('one document over an order split into several POs', () => {
+  // The second PO: same product, 60 pieces in one carton, shipped two days later.
+  const order2 = order({ id: 'o2', poNumber: 'SO-2026-0139', externalReference: null, pricePerPieceUsd: 6.1, orderCells: [{ orderColorId: 'c1', orderSizeId: 's1', qty: 64 }] });
+  const list2: BuildPackingList = {
+    id: 'pl2', reference: 'EXP-0111', approved: true,
+    cartons: [{ id: 'k9', cartonNumber: 'CTN-000190', cartonSize: null, orderColorId: 'c1', orderSizeId: 's1', qty: 60, netKg: 30, grossKg: 31, lines: [] }],
+  };
+  const ship2 = shipment({ id: 'sh2', qty: 60, actualShippingDate: new Date('2026-10-05T08:00:00Z') });
+  const parts = [
+    { order: order(), packingList: packingList(), shipment: shipment() },
+    { order: order2, packingList: list2, shipment: ship2 },
+  ];
+  const doc = buildCombinedDocument({ kind: 'INVOICE', parts, profile });
+
+  test('each PO keeps its own goods line and price', () => {
+    assert.deepEqual(doc.lines.map((l) => [l.description, l.quantity, l.unitPrice]), [
+      ['Car stand printed cover — Black (PO SO-2026-0138)', 122, 5.95],
+      ['Car stand printed cover — Black (PO SO-2026-0139)', 60, 6.1],
+    ]);
+    assert.equal(computeInvoiceTotals(doc.lines).total, 725.9 + 366);
+    assert.deepEqual(doc.qtyByOrder, [122, 60]);
+  });
+
+  test('cartons run on one sequence and say which PO they are', () => {
+    assert.deepEqual(doc.manifest.map((c) => [c.n, c.cartonNumber, c.poNumber]), [
+      [1, 'CTN-000176', 'SO-2026-0138'], [2, 'CTN-000177', 'SO-2026-0138'], [3, 'CTN-000178', 'SO-2026-0138'],
+      [4, 'CTN-000190', 'SO-2026-0139'],
+    ]);
+  });
+
+  test('shipped against ordered is per PO, so a short PO is not hidden by a full one', () => {
+    assert.deepEqual(doc.reconciliation.map((g) => [g.poNumber, g.ordered, g.shipped, g.short]), [
+      ['SO-2026-0138', 122, 122, 0],
+      ['SO-2026-0139', 64, 60, 4],
+    ]);
+  });
+
+  test('dated the day the last goods left, with every reference listed', () => {
+    assert.equal(doc.date.toISOString(), '2026-10-05T00:00:00.000Z');
+    assert.equal(doc.shipmentRef, 'EXP-0110, EXP-0111');
+    assert.equal(doc.customerReference, 'غطاء ميش مطبوع ستاند');
+    assert.deepEqual(doc.orderRefs.map((r) => r.poNumber), ['SO-2026-0138', 'SO-2026-0139']);
+    assert.equal(doc.orderRef.poNumber, 'SO-2026-0138');
+  });
+
+  test('a warning says which PO it is about', () => {
+    const noPrice = buildCombinedDocument({ kind: 'INVOICE', parts: [parts[0]!, { ...parts[1]!, order: { ...order2, pricePerPieceUsd: null } }], profile });
+    assert.ok(noPrice.warnings.some((w) => w.startsWith('PO SO-2026-0139: The order has no unit price')));
+    assert.ok(!noPrice.warnings.some((w) => w.startsWith('PO SO-2026-0138')));
+  });
+
+  test('one order reads exactly as a single-order document', () => {
+    const one = buildCombinedDocument({ kind: 'INVOICE', parts: [parts[0]!], profile });
+    const plain = buildInvoiceDocument({ kind: 'INVOICE', ...parts[0]!, profile });
+    assert.deepEqual(one.lines, plain.lines);
+    assert.deepEqual(one.warnings, plain.warnings);
+    assert.equal(one.notes, plain.notes);
+    assert.equal(one.date.toISOString(), plain.date.toISOString());
+  });
+
+  test('the cover note lists every PO', () => {
+    const note = defaultCoverNote({
+      kind: 'INVOICE', number: 'INV-2026-0400', billTo: 'Champs Land', shipmentRef: doc.shipmentRef,
+      poNumber: 'SO-2026-0138', orderName: 'Car stand printed cover', qty: 182, hasManifest: true,
+      orders: [{ poNumber: 'SO-2026-0138', orderName: 'Car stand printed cover', qty: 122 }, { poNumber: 'SO-2026-0139', orderName: 'Car stand printed cover', qty: 60 }],
+    });
+    assert.ok(note.includes('PO SO-2026-0138 · Car stand printed cover — 122 pcs; PO SO-2026-0139 · Car stand printed cover — 60 pcs'));
   });
 });

@@ -36,11 +36,18 @@ function SectionLabel({ children }: { children: string }) {
   return <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-ink-500">{children}</p>;
 }
 
+/** The distinct values, in order, as one printed line: split POs usually share a name and style. */
+const joined = (values: Array<string | null>): string =>
+  [...new Set(values.map((v) => v?.trim()).filter((v): v is string => !!v))].join(', ');
+
 export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
   const totals = computeInvoiceTotals(doc.lines);
   const goods = doc.lines.filter((l) => l.kind === InvoiceLineKind.ITEM);
   const extras = doc.lines.filter((l) => l.kind === InvoiceLineKind.EXTRA);
   const isInvoice = doc.kind === InvoiceKind.INVOICE;
+  // Every order the document covers; a JSON saved before documents could
+  // cover several orders has only the one.
+  const orders = doc.orders?.length ? doc.orders : [doc.order];
   const title = isInvoice ? 'INVOICE' : 'PROFORMA INVOICE';
   const seller = doc.seller;
   const sellerLine = [seller.address, seller.taxId ? `Tax ID: ${seller.taxId}` : null, seller.email, seller.website]
@@ -111,9 +118,9 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
                 <Meta label={isInvoice ? 'Invoice date' : 'Date'} value={fmtDate(doc.date)} />
                 {doc.paymentTerms && <Meta label="Terms" value={doc.paymentTerms} />}
                 {doc.dueDate && <Meta label={isInvoice ? 'Due date' : 'Valid until'} value={fmtDate(doc.dueDate)} />}
-                <Meta label="P.O. #" value={doc.order.poNumber} />
-                <Meta label="Order" value={doc.order.orderName} />
-                {doc.order.styleNumber && <Meta label="Style" value={doc.order.styleNumber} />}
+                <Meta label="P.O. #" value={joined(orders.map((o) => o.poNumber))} />
+                <Meta label="Order" value={joined(orders.map((o) => o.orderName))} />
+                {joined(orders.map((o) => o.styleNumber)) && <Meta label="Style" value={joined(orders.map((o) => o.styleNumber))} />}
                 {isInvoice && (doc.shipmentRef || doc.shippedOn) && (
                   <Meta label="Shipment" value={[doc.shipmentRef, doc.shippedOn ? fmtDate(doc.shippedOn) : null].filter(Boolean).join(' · ')} />
                 )}
@@ -231,8 +238,8 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
             <span><span className="mr-1 inline-block h-2 w-2 rounded-sm bg-emerald-500" />Balanced</span>
           </p>
           {doc.reconciliation.map((g) => (
-            <div key={g.product} className="avoid-break mb-3">
-              <p className="mb-1 font-bold"><T>{g.product}</T> <span className="font-normal text-ink-500">({doc.order.poNumber})</span></p>
+            <div key={`${g.poNumber ?? doc.order.poNumber}|${g.product}`} className="avoid-break mb-3">
+              <p className="mb-1 font-bold"><T>{g.product}</T> <span className="font-normal text-ink-500">({g.poNumber ?? doc.order.poNumber})</span></p>
               <table className="w-auto min-w-[50%] border-collapse border border-ink-200">
                 <thead>
                   <tr className="bg-ink-50 text-[9.5px] font-semibold uppercase tracking-wider text-ink-600">
@@ -298,7 +305,7 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
                 <tr key={c.n} className="align-top">
                   <td className="border border-ink-200 px-2 py-1.5"><span className="font-bold">{c.n}</span><br /><span className="text-ink-500">#{c.n}</span></td>
                   <td className="border border-ink-200 px-2 py-1.5 font-mono text-[10px]">{c.cartonNumber}{c.cartonSize ? <><br /><span className="font-sans text-ink-500">{c.cartonSize}</span></> : null}</td>
-                  <td className="border border-ink-200 px-2 py-1.5"><span className="font-medium">{doc.order.poNumber}</span><br /><span className="text-ink-600"><T>{c.product}</T></span></td>
+                  <td className="border border-ink-200 px-2 py-1.5"><span className="font-medium">{c.poNumber ?? doc.order.poNumber}</span><br /><span className="text-ink-600"><T>{c.product}</T></span></td>
                   <td className="border border-ink-200 px-2 py-1.5">
                     {c.contents.map((x, i) => <span key={i}>{i > 0 ? ', ' : ''}<T>{x.label}</T> × {qty(x.qty)}</span>)}
                   </td>

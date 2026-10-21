@@ -26,7 +26,7 @@ import {
   amountInWords, computeInvoiceTotals, formatInvoiceNumber, issueBlockers, lineTotal,
   reconcileShippedAgainstOrdered, summariseSizes,
   type CompanyProfileDto, type InvoiceCartonDto, type InvoiceDto, type InvoiceLineDto,
-  type InvoiceListRowDto, type InvoiceReconciliationGroupDto,
+  type InvoiceListRowDto, type InvoiceOrderRefDto, type InvoiceReconciliationGroupDto,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
@@ -338,13 +338,92 @@ export function buildInvoiceDocument(input: {
   };
 }
 
+/** One order of a combined build: what `buildInvoiceDocument` takes for it. */
+export interface BuildPart {
+  order: BuildOrder;
+  packingList: BuildPackingList | null;
+  shipment: BuildShipment | null;
+  otherPackingLists?: BuildPackingList[];
+}
+
+export interface CombinedDocument extends BuiltDocument {
+  /** One per order, in the order given, the first being `orderRef`. */
+  orderRefs: OrderRef[];
+  /** Pieces per order on the goods lines, for the cover note. */
+  qtyByOrder: number[];
+}
+
+const uniqueJoined = (values: Array<string | null | undefined>): string | null => {
+  const seen = [...new Set(values.map((v) => v?.trim()).filter((v): v is string => !!v))];
+  return seen.length > 0 ? seen.join(', ') : null;
+};
+
+/**
+ * A document over one or more orders — an order split into several POs is
+ * invoiced on one document. Each order is built on its own by
+ * `buildInvoiceDocument`, exactly as a single-order document is, and the
+ * results are laid side by side: every goods line, carton and shipped-vs-ordered
+ * group keeps the PO it came from, so nothing is pooled across orders that could
+ * hide a short shipment on one of them. The bill-to is the first order's; the
+ * caller makes sure every order belongs to the same customer.
+ */
+export function buildCombinedDocument(input: {
+  kind: InvoiceKind;
+  parts: BuildPart[];
+  profile: CompanyProfileDto;
+  now?: Date;
+}): CombinedDocument {
+  const { kind, parts, profile } = input;
+  if (parts.length === 0) throw new ValidationError('Pick at least one order.');
+  const now = input.now ?? new Date();
+  const built = parts.map((p) => buildInvoiceDocument({ kind, ...p, profile, now }));
+  const many = parts.length > 1;
+  const po = (i: number) => parts[i]!.order.poNumber;
+
+  const lines = built.flatMap((d, i) => d.lines.map((l) => ({
+    ...l,
+    description: many ? `${l.description} (PO ${po(i)})` : l.description,
+  })));
+  let n = 0;
+  const manifest = built.flatMap((d, i) => d.manifest.map((c) => ({ ...c, n: ++n, poNumber: po(i) })));
+  const reconciliation = built.flatMap((d, i) => d.reconciliation.map((g) => ({ ...g, poNumber: po(i) })));
+  const warnings = built.flatMap((d, i) => d.warnings.map((w) => (many ? `PO ${po(i)}: ${w}` : w)));
+  const notes = built.map((d, i) => (d.notes && many ? `PO ${po(i)}: ${d.notes}` : d.notes)).filter(Boolean).join('\n') || null;
+
+  // An invoice is dated the day the last of its goods left; a quotation today.
+  const shippedDates = parts.map((p) => p.shipment?.actualShippingDate ?? null).filter((d): d is Date => d != null);
+  const lastShipped = shippedDates.length > 0 ? new Date(Math.max(...shippedDates.map((d) => d.getTime()))) : null;
+  const promised = parts.map((p) => p.order.promisedShippingDate).filter((d): d is Date => d != null);
+  const date = kind === InvoiceKind.INVOICE && lastShipped ? dayOf(lastShipped) : dayOf(now);
+  const dueDate = kind === InvoiceKind.PROFORMA ? addDays(date, PROFORMA_VALID_DAYS) : date;
+  const shippedOn = kind === InvoiceKind.INVOICE
+    ? lastShipped
+    : promised.length > 0 ? new Date(Math.min(...promised.map((d) => d.getTime()))) : null;
+
+  const first = built[0]!;
+  return {
+    ...first,
+    date, dueDate, shippedOn,
+    customerReference: uniqueJoined(built.map((d) => d.customerReference)),
+    shipmentRef: uniqueJoined(built.map((d) => d.shipmentRef)),
+    notes,
+    lines, manifest, reconciliation, warnings,
+    orderRefs: built.map((d) => d.orderRef),
+    qtyByOrder: built.map((d) => d.lines.filter((l) => l.kind === InvoiceLineKind.ITEM).reduce((a, l) => a + (l.quantity ?? 0), 0)),
+  };
+}
+
 /** The paragraph above the document, written the way the sample reads — and promising only what is actually below. */
 export function defaultCoverNote(input: {
   kind: InvoiceKind; number: string; billTo: string; shipmentRef: string | null;
   poNumber: string; orderName: string; qty: number; hasManifest: boolean;
+  /** Every order on the document, when it covers more than one. */
+  orders?: Array<{ poNumber: string; orderName: string; qty: number }>;
 }): string {
   const { kind, number, billTo, shipmentRef, poNumber, orderName, qty, hasManifest } = input;
-  const orderLine = `PO ${poNumber} · ${orderName} — ${qty.toLocaleString()} pcs`;
+  const orderLine = input.orders && input.orders.length > 1
+    ? input.orders.map((o) => `PO ${o.poNumber} · ${o.orderName} — ${o.qty.toLocaleString()} pcs`).join('; ')
+    : `PO ${poNumber} · ${orderName} — ${qty.toLocaleString()} pcs`;
   if (kind === InvoiceKind.PROFORMA) {
     return [
       `Dear ${billTo},`,
@@ -384,7 +463,7 @@ const BUILD_INCLUDE = {
     orderBy: { createdAt: 'desc' as const },
   },
   // Which lists are already on an issued invoice, so "choose for me" prefers one that is not.
-  invoices: { where: { kind: 'INVOICE' as const, status: 'ISSUED' as const }, select: { packingListId: true } },
+  invoiceOrders: { where: { invoice: { kind: 'INVOICE' as const, status: 'ISSUED' as const } }, select: { packingListId: true } },
 } satisfies Prisma.OrderInclude;
 
 type LoadedOrder = Prisma.OrderGetPayload<{ include: typeof BUILD_INCLUDE }>;
@@ -438,7 +517,7 @@ export function pickDefaults(o: LoadedOrder, chosen: { packingListId?: string | 
   let packingList = chosen.packingListId ? o.packingLists.find((l) => l.id === chosen.packingListId) : undefined;
   if (chosen.packingListId && !packingList) throw new NotFoundError('Packing list');
   if (!packingList) {
-    const invoiced = new Set(o.invoices.map((i) => i.packingListId).filter((id): id is string => id != null));
+    const invoiced = new Set(o.invoiceOrders.map((i) => i.packingListId).filter((id): id is string => id != null));
     const withCartons = o.packingLists.filter((l) => l.cartons.length > 0);
     const fresh = withCartons.filter((l) => !invoiced.has(l.id));
     const pool = fresh.length > 0 ? fresh : withCartons;
@@ -516,6 +595,10 @@ export async function withAllocatedNumber<T>(
 
 export const INVOICE_INCLUDE = {
   lines: { orderBy: { position: 'asc' as const } },
+  orders: {
+    orderBy: { position: 'asc' as const },
+    include: { order: { select: { id: true, poNumber: true, orderName: true, styleNumber: true, client: { select: { name: true } } } } },
+  },
   order: { select: { id: true, poNumber: true, orderName: true, styleNumber: true, client: { select: { name: true } } } },
   preparedBy: { select: { name: true } },
   issuedBy: { select: { name: true } },
@@ -541,17 +624,39 @@ export function manifestFingerprint(manifest: InvoiceCartonDto[]): string {
     .join('\n');
 }
 
+/** The orders on a document with the list and consignment each was read from, the first one first. */
+type PartRow = { orderId: string; packingListId: string | null; shipmentId: string | null };
+export function partsOf(inv: PartRow & { orders: PartRow[] }): PartRow[] {
+  return inv.orders.length > 0
+    ? inv.orders.map((o) => ({ orderId: o.orderId, packingListId: o.packingListId, shipmentId: o.shipmentId }))
+    : [{ orderId: inv.orderId, packingListId: inv.packingListId, shipmentId: inv.shipmentId }];
+}
+
 /** A draft whose cartons changed underneath it. Issued documents are never stale: they are the record. */
 export async function isStale(inv: LoadedInvoice): Promise<boolean> {
   if (inv.status !== InvoiceStatus.DRAFT || inv.kind !== InvoiceKind.INVOICE) return false;
-  if (!inv.packingListId) {
+  const manifest = inv.manifest as unknown as InvoiceCartonDto[];
+  const parts = partsOf(inv);
+  for (const part of parts) {
+    // The cartons this order contributed: tagged with its PO, or the whole
+    // manifest on a document built before cartons carried one.
+    const row = inv.orders.find((o) => o.orderId === part.orderId);
+    const po = (row?.orderRef as unknown as OrderRef | null)?.poNumber ?? row?.order.poNumber;
+    const own = parts.length === 1 ? manifest : manifest.filter((c) => c.poNumber === po);
+    if (await partIsStale(part.orderId, part.packingListId, own)) return true;
+  }
+  return false;
+}
+
+async function partIsStale(orderId: string, packingListId: string | null, built: InvoiceCartonDto[]): Promise<boolean> {
+  if (!packingListId) {
     // Built before anything was packed: the moment a carton exists, the
     // ordered quantities it carries are no longer what shipped.
-    const packed = await prisma.carton.count({ where: { packingList: { orderId: inv.orderId } } });
+    const packed = await prisma.carton.count({ where: { packingList: { orderId } } });
     return packed > 0;
   }
   const list = await prisma.packingList.findUnique({
-    where: { id: inv.packingListId },
+    where: { id: packingListId },
     include: {
       order: { include: { sizes: { include: { size: { select: { name: true } } } } } },
       cartons: { include: { lines: { orderBy: { position: 'asc' } } }, orderBy: { position: 'asc' } },
@@ -564,7 +669,7 @@ export async function isStale(inv: LoadedInvoice): Promise<boolean> {
     const contents = cartonContents(order, c);
     return { n: i + 1, cartonNumber: c.cartonNumber, cartonSize: c.cartonSize, product: '', contents, pieces: contents.reduce((a, x) => a + x.qty, 0), netKg: c.netKg, grossKg: c.grossKg };
   });
-  return manifestFingerprint(now) !== manifestFingerprint(inv.manifest as unknown as InvoiceCartonDto[]);
+  return manifestFingerprint(now) !== manifestFingerprint(built);
 }
 
 export function invoiceToDto(inv: LoadedInvoice, stale = false): InvoiceDto {
@@ -585,6 +690,7 @@ export function invoiceToDto(inv: LoadedInvoice, stale = false): InvoiceDto {
     dueDate: iso(inv.dueDate),
     paymentTerms: inv.paymentTerms,
     order: { ...ref, id: inv.order.id },
+    orders: orderRefsOf(inv, ref),
     shipmentId: inv.shipmentId,
     packingListId: inv.packingListId,
     billTo: inv.billTo,
@@ -616,14 +722,38 @@ export function invoiceToDto(inv: LoadedInvoice, stale = false): InvoiceDto {
   };
 }
 
+/** Every order on a document from its snapshots, falling back to the live order where a row has none. */
+function orderRefsOf(inv: LoadedInvoice, first: OrderRef): InvoiceOrderRefDto[] {
+  if (inv.orders.length === 0) {
+    return [{ ...first, id: inv.order.id, packingListId: inv.packingListId, shipmentId: inv.shipmentId }];
+  }
+  return inv.orders.map((o) => {
+    const snap = o.orderRef as unknown as OrderRef | null;
+    return {
+      id: o.order.id,
+      poNumber: snap?.poNumber ?? o.order.poNumber,
+      orderName: snap?.orderName ?? o.order.orderName,
+      styleNumber: snap ? snap.styleNumber : o.order.styleNumber,
+      clientName: snap?.clientName ?? o.order.client.name,
+      packingListId: o.packingListId,
+      shipmentId: o.shipmentId,
+    };
+  });
+}
+
 export function invoiceToListRow(inv: LoadedInvoice): InvoiceListRowDto {
   const totals = computeInvoiceTotals(inv.lines.map(lineToDto));
   const ref = (inv.orderRef as unknown as OrderRef | null);
+  const firstRef: OrderRef = ref ?? {
+    id: inv.order.id, poNumber: inv.order.poNumber, orderName: inv.order.orderName,
+    styleNumber: inv.order.styleNumber, clientName: inv.order.client.name,
+  };
   return {
     id: inv.id, kind: inv.kind, status: inv.status, number: inv.number,
     date: inv.date.toISOString(), dueDate: inv.dueDate?.toISOString() ?? null,
     orderId: inv.order.id, poNumber: ref?.poNumber ?? inv.order.poNumber, orderName: ref?.orderName ?? inv.order.orderName,
     clientName: ref?.clientName ?? inv.order.client.name, billTo: inv.billTo,
+    orders: orderRefsOf(inv, firstRef).map((o) => ({ orderId: o.id, poNumber: o.poNumber, orderName: o.orderName })),
     totalQty: totals.totalQty, total: totals.total, incomplete: totals.incomplete,
     issuedAt: inv.issuedAt?.toISOString() ?? null, sentAt: inv.sentAt?.toISOString() ?? null,
     createdAt: inv.createdAt.toISOString(),

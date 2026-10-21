@@ -276,6 +276,7 @@ model Order {
   productionRecords        ProductionRecord[]
   proformaInvoices         ProformaInvoice[]
   invoices                 Invoice[]
+  invoiceOrders            InvoiceOrder[]
   qualityAudits            QualityAudit[]
   shipments                Shipment[]
   quantities               StageQuantity[]
@@ -1065,6 +1066,7 @@ model PackingList {
   updatedAt      DateTime  @updatedAt
   cartons        Carton[]
   invoices       Invoice[]
+  invoiceOrders  InvoiceOrder[]
   order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([orderId])
@@ -1115,6 +1117,7 @@ model Shipment {
   updatedAt            DateTime       @updatedAt
   attachments          Attachment[]
   invoices             Invoice[]
+  invoiceOrders        InvoiceOrder[]
   order                Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
   @@index([orderId])
@@ -1359,6 +1362,10 @@ model Invoice {
   createdAt         DateTime      @default(now())
   updatedAt         DateTime      @updatedAt
   lines             InvoiceLine[]
+  /// Every order the document covers, the first one being `orderId`. An order
+  /// split into several POs is invoiced on one document; each keeps its own
+  /// packing list and shipment here.
+  orders            InvoiceOrder[]
   order             Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
   shipment          Shipment?     @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
   packingList       PackingList?  @relation(fields: [packingListId], references: [id], onDelete: SetNull)
@@ -1369,6 +1376,27 @@ model Invoice {
   @@index([orderId])
   @@index([status])
   @@map("invoices")
+}
+
+/// One order on a document. `position` 0 is the order on Invoice.orderId.
+model InvoiceOrder {
+  id            String       @id @default(cuid())
+  invoiceId     String
+  orderId       String
+  /// The packing list and consignment this order's goods were read from.
+  packingListId String?
+  shipmentId    String?
+  position      Int          @default(0)
+  /// The order's PO, name, style and client as they were when last built.
+  orderRef      Json?
+  invoice       Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  order         Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  packingList   PackingList? @relation(fields: [packingListId], references: [id], onDelete: SetNull)
+  shipment      Shipment?    @relation(fields: [shipmentId], references: [id], onDelete: SetNull)
+
+  @@unique([invoiceId, orderId])
+  @@index([orderId])
+  @@map("invoice_orders")
 }
 
 model InvoiceLine {

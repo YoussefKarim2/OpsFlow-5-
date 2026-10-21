@@ -3,14 +3,15 @@
  *
  * Three things on one screen: every document the factory has raised, the
  * orders that could be invoiced now, and the letterhead the documents are
- * printed with. "New document" builds a draft from an order in one step; the
- * draft opens in the editor beside its preview.
+ * printed with. "New document" builds a draft from one order, or from several
+ * POs of the same customer (an order split into several POs is invoiced on one
+ * document), in one step; the draft opens in the editor beside its preview.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Building2, FileText, Plus, Receipt, Search, Send } from 'lucide-react';
+import { Building2, Check, FileText, Plus, Receipt, Search, Send, X } from 'lucide-react';
 import {
   fmtDate, INVOICE_KIND_LABEL, InvoiceKind, InvoiceStatus,
   type CompanyProfileDto, type InvoiceCandidateDto, type InvoiceListRowDto, type OrderSummaryDto,
@@ -60,7 +61,7 @@ export function InvoicesPage() {
     return (list.data?.data ?? []).filter((r) =>
       (!kind || r.kind === kind)
       && (!status || r.status === status)
-      && (!needle || [r.number, r.billTo, r.poNumber, r.orderName, r.clientName].some((v) => v.toLowerCase().includes(needle))));
+      && (!needle || [r.number, r.billTo, r.clientName, ...r.orders.flatMap((o) => [o.poNumber, o.orderName])].some((v) => v.toLowerCase().includes(needle))));
   }, [list.data, kind, status, q]);
   const stats = useMemo(() => {
     const docs = list.data?.data ?? [];
@@ -110,7 +111,7 @@ export function InvoicesPage() {
 
       {ready.length > 0 && (
         <Card>
-          <CardHeader title="Ready to invoice" subtitle="Orders with goods packed or shipped and no issued invoice. One click builds the draft from the packing list." />
+          <CardHeader title="Ready to invoice" subtitle="Orders with goods packed or shipped and no issued invoice. One click builds the draft from the packing list; add the customer's other POs in the dialog to put them on one invoice." />
           <div className="divide-y divide-ink-100">
             {ready.slice(0, 8).map((c) => (
               <div key={c.orderId} className="flex flex-wrap items-center gap-3 px-4 py-2.5">
@@ -219,8 +220,11 @@ function Row({ r, onOpen }: { r: InvoiceListRowDto; onOpen: () => void }) {
       <td className="td text-xs">{fmtDate(r.date)}</td>
       <td className="td text-xs" dir="auto">{r.billTo}</td>
       <td className="td">
-        <p className="font-mono text-xs text-ink-700">{r.poNumber}</p>
-        <p className="max-w-[16rem] truncate text-xs text-ink-500" dir="auto">{r.orderName}</p>
+        <p className="max-w-[16rem] truncate font-mono text-xs text-ink-700" title={r.orders.map((o) => o.poNumber).join(', ')}>{r.orders.map((o) => o.poNumber).join(', ')}</p>
+        <p className="max-w-[16rem] truncate text-xs text-ink-500" dir="auto">
+          {[...new Set(r.orders.map((o) => o.orderName))].join(', ')}
+          {r.orders.length > 1 && <span className="ml-1 text-2xs text-ink-400">· {r.orders.length} orders</span>}
+        </p>
       </td>
       <td className="td tnum text-right">{r.totalQty.toLocaleString()}</td>
       <td className={clsx('td tnum text-right font-medium', r.incomplete && 'text-amber-700')} title={r.incomplete ? 'A goods line has no rate yet' : undefined}>
@@ -233,6 +237,8 @@ function Row({ r, onOpen }: { r: InvoiceListRowDto; onOpen: () => void }) {
 
 // ── New document ─────────────────────────────────────────────────────────────
 
+type SourceChoice = { packingListId: string | null; shipmentId: string | null };
+
 function NewDocumentDialog({ preset, presetKind, candidates, onClose }: {
   preset: Picked | null;
   presetKind?: InvoiceKind;
@@ -242,31 +248,46 @@ function NewDocumentDialog({ preset, presetKind, candidates, onClose }: {
   const navigate = useNavigate();
   const toast = useToast();
   const [kind, setKind] = useState<InvoiceKind>(presetKind ?? 'INVOICE');
-  const [picked, setPicked] = useState<Picked | null>(preset);
+  // An order split into several POs goes on one document, so the dialog
+  // collects orders rather than picking one. All of them must be billed to
+  // the same customer; the server checks that too.
+  const [picked, setPicked] = useState<Picked[]>(preset ? [preset] : []);
+  const [choices, setChoices] = useState<Record<string, SourceChoice>>({});
   const [term, setTerm] = useState('');
   const q = useDebounced(term, 250);
-  const [packingListId, setPackingListId] = useState<string | null>(null);
-  const [shipmentId, setShipmentId] = useState<string | null>(null);
 
   const found = useQuery({ queryKey: ['search', q], queryFn: () => api.orders.search(q), enabled: q.trim().length >= 2 });
-  const sources = useQuery({
-    queryKey: ['invoice-sources', picked?.orderId],
-    queryFn: () => api.invoices.sources(picked!.orderId),
-    enabled: !!picked && kind === 'INVOICE',
-  });
 
-  // A fresh order resets the choice of list and consignment to "let the server pick".
-  useEffect(() => { setPackingListId(null); setShipmentId(null); }, [picked?.orderId]);
+  const customer = picked[0]?.clientName ?? null;
+  const pickedIds = new Set(picked.map((p) => p.orderId));
+  const add = (o: Picked) => { if (!pickedIds.has(o.orderId)) setPicked([...picked, o]); setTerm(''); };
+  const remove = (id: string) => {
+    setPicked(picked.filter((p) => p.orderId !== id));
+    setChoices((c) => { const { [id]: _gone, ...rest } = c; return rest; });
+  };
+  const setChoice = (id: string, patch: Partial<SourceChoice>) =>
+    setChoices((c) => ({ ...c, [id]: { ...(c[id] ?? { packingListId: null, shipmentId: null }), ...patch } }));
 
   const create = useMutation({
-    mutationFn: () => api.invoices.create({ orderId: picked!.orderId, kind, packingListId, shipmentId }),
-    onSuccess: (res) => { toast.success(`${res.data.number} built from PO ${res.data.order.poNumber}`); onClose(); navigate(`/invoices/${res.data.id}`); },
+    mutationFn: () => api.invoices.create({
+      kind,
+      orders: picked.map((p) => ({ orderId: p.orderId, packingListId: choices[p.orderId]?.packingListId ?? null, shipmentId: choices[p.orderId]?.shipmentId ?? null })),
+    }),
+    onSuccess: (res) => {
+      toast.success(`${res.data.number} built from PO ${res.data.orders.map((o) => o.poNumber).join(', ')}`);
+      onClose();
+      navigate(`/invoices/${res.data.id}`);
+    },
     onError: (e) => toast.error(e),
   });
 
-  const src = sources.data?.data;
-  const suggestions = term.trim().length >= 2 ? [] : candidates.slice(0, 6);
-  const results: Array<Picked> = term.trim().length >= 2
+  const searching = term.trim().length >= 2;
+  // With an order picked, the suggestions are the same customer's other
+  // orders that are packed or shipped — the usual other half of a split.
+  const suggestions = searching ? [] : candidates
+    .filter((c) => !pickedIds.has(c.orderId) && (!customer || c.clientName === customer))
+    .slice(0, 6);
+  const results: Array<Picked> = searching
     ? (found.data?.data ?? []).map((o: OrderSummaryDto) => ({ orderId: o.id, poNumber: o.poNumber, orderName: o.orderName, clientName: o.clientName }))
     : suggestions.map((c) => ({ orderId: c.orderId, poNumber: c.poNumber, orderName: c.orderName, clientName: c.clientName }));
 
@@ -275,12 +296,12 @@ function NewDocumentDialog({ preset, presetKind, candidates, onClose }: {
       open
       onClose={onClose}
       title="New document"
-      subtitle="Pick the order; the draft is built from it and opens for review."
+      subtitle="Pick the order, or several POs of the same customer to put on one document; the draft is built from them and opens for review."
       footer={
         <>
           <button className="btn-secondary" onClick={onClose}>Cancel</button>
-          <button className="btn-primary" disabled={!picked || create.isPending} onClick={() => create.mutate()}>
-            {create.isPending ? 'Building…' : `Build ${kind === 'INVOICE' ? 'invoice' : 'proforma'}`}
+          <button className="btn-primary" disabled={picked.length === 0 || create.isPending} onClick={() => create.mutate()}>
+            {create.isPending ? 'Building…' : `Build ${kind === 'INVOICE' ? 'invoice' : 'proforma'}${picked.length > 1 ? ` for ${picked.length} orders` : ''}`}
           </button>
         </>
       }
@@ -299,79 +320,122 @@ function NewDocumentDialog({ preset, presetKind, candidates, onClose }: {
           </div>
         </div>
 
-        <Field label="Order" hint={picked ? undefined : 'Type a PO, order name or customer, or pick one of the orders ready to invoice.'}>
-          {picked ? (
-            <div className="flex items-center gap-3 rounded-md border border-ink-300 bg-ink-50 px-3 py-2">
-              <span className="font-mono text-xs font-semibold text-accent-700">{picked.poNumber}</span>
-              <span className="min-w-0 flex-1 truncate text-sm" dir="auto">{picked.orderName}</span>
-              <span className="text-xs text-ink-500">{picked.clientName}</span>
-              <button type="button" className="btn-ghost btn-sm" onClick={() => setPicked(null)}>Change</button>
+        <Field
+          label={picked.length > 1 ? `Orders (${picked.length})` : 'Orders'}
+          hint={picked.length === 0
+            ? 'Type a PO, order name or customer, or pick one of the orders ready to invoice. Add more POs to put them on the same document.'
+            : `Add the other POs of ${customer} to put them on the same document. Each keeps its own lines, cartons and shipped-vs-ordered.`}
+        >
+          {picked.length > 0 && (
+            <div className="mb-2 space-y-1">
+              {picked.map((p) => (
+                <div key={p.orderId} className="flex items-center gap-3 rounded-md border border-ink-300 bg-ink-50 px-3 py-2">
+                  <span className="font-mono text-xs font-semibold text-accent-700">{p.poNumber}</span>
+                  <span className="min-w-0 flex-1 truncate text-sm" dir="auto">{p.orderName}</span>
+                  <span className="text-xs text-ink-500">{p.clientName}</span>
+                  <button type="button" className="btn-ghost btn-sm" onClick={() => remove(p.orderId)} aria-label={`Remove PO ${p.poNumber}`}>
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              ))}
             </div>
-          ) : (
-            <>
-              <input autoFocus className="input" value={term} onChange={(e) => setTerm(e.target.value)} placeholder="PO, order, customer…" />
-              <div className="mt-1 max-h-56 overflow-y-auto rounded-md border border-ink-200">
-                {term.trim().length < 2 && suggestions.length > 0 && (
-                  <p className="bg-ink-50 px-3 py-1 text-2xs font-semibold uppercase tracking-wider text-ink-500">Packed or shipped</p>
-                )}
-                {results.length === 0 ? (
-                  <p className="px-3 py-3 text-center text-xs text-ink-500">{found.isFetching ? 'Searching…' : 'No orders match.'}</p>
-                ) : results.map((o) => (
-                  <button key={o.orderId} type="button" onClick={() => setPicked(o)}
-                    className="flex w-full items-center gap-3 border-b border-ink-100 px-3 py-2 text-left last:border-0 hover:bg-ink-50">
+          )}
+          <input autoFocus={picked.length === 0} className="input" value={term} onChange={(e) => setTerm(e.target.value)}
+            placeholder={picked.length === 0 ? 'PO, order, customer…' : 'Add another PO…'} />
+          {(searching || suggestions.length > 0 || picked.length === 0) && (
+            <div className="mt-1 max-h-56 overflow-y-auto rounded-md border border-ink-200">
+              {!searching && suggestions.length > 0 && (
+                <p className="bg-ink-50 px-3 py-1 text-2xs font-semibold uppercase tracking-wider text-ink-500">
+                  {customer ? `${customer}: other orders packed or shipped` : 'Packed or shipped'}
+                </p>
+              )}
+              {results.length === 0 ? (
+                <p className="px-3 py-3 text-center text-xs text-ink-500">{found.isFetching ? 'Searching…' : 'No orders match.'}</p>
+              ) : results.map((o) => {
+                const already = pickedIds.has(o.orderId);
+                const otherCustomer = !!customer && o.clientName !== customer;
+                return (
+                  <button key={o.orderId} type="button" disabled={already || otherCustomer} onClick={() => add(o)}
+                    title={otherCustomer ? `Billed to ${o.clientName}. One document is billed to one customer.` : undefined}
+                    className="flex w-full items-center gap-3 border-b border-ink-100 px-3 py-2 text-left last:border-0 hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent">
+                    {already ? <Check className="h-3.5 w-3.5 text-accent-600" /> : <Plus className="h-3.5 w-3.5 text-ink-400" />}
                     <span className="font-mono text-xs font-semibold text-accent-700">{o.poNumber}</span>
                     <span className="min-w-0 flex-1 truncate text-sm text-ink-800" dir="auto">{o.orderName}</span>
-                    <span className="truncate text-xs text-ink-500">{o.clientName}</span>
+                    <span className="truncate text-xs text-ink-500">{otherCustomer ? `${o.clientName} · other customer` : o.clientName}</span>
                   </button>
-                ))}
-              </div>
-            </>
+                );
+              })}
+            </div>
           )}
         </Field>
 
-        {picked && kind === 'INVOICE' && (
-          sources.isLoading ? <Spinner label="Reading the packing lists and shipments…" /> : src && (
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div>
-                <span className="label">Packing list</span>
-                {src.packingLists.length === 0
-                  ? <p className="text-xs text-amber-800">No packing list on this order. The draft will be built from the shipment, or from the ordered quantities, and say so.</p>
-                  : (
-                    <div className="space-y-1">
-                      <Choice checked={packingListId === null} onPick={() => setPackingListId(null)} label="Choose for me" hint="The approved list with cartons, else the newest." />
-                      {src.packingLists.map((l) => (
-                        <Choice key={l.id} checked={packingListId === l.id} onPick={() => setPackingListId(l.id)}
-                          label={`${l.reference ?? 'Packing list'} — ${l.cartonCount} carton${l.cartonCount === 1 ? '' : 's'}, ${l.totalQty.toLocaleString()} pcs`}
-                          hint={`${l.approved ? 'Approved' : 'Not approved'} · ${fmtDate(l.createdAt)}`} />
-                      ))}
-                    </div>
-                  )}
-              </div>
-              <div>
-                <span className="label">Shipment</span>
-                {src.shipments.length === 0
-                  ? <p className="text-xs text-amber-800">No shipment recorded yet. The shipping date will be blank until it is, or until you type it.</p>
-                  : (
-                    <div className="space-y-1">
-                      <Choice checked={shipmentId === null} onPick={() => setShipmentId(null)} label="Choose for me" hint="The consignment furthest along." />
-                      {src.shipments.map((s) => (
-                        <Choice key={s.id} checked={shipmentId === s.id} onPick={() => setShipmentId(s.id)}
-                          label={`${s.status.replace(/_/g, ' ')} — ${s.qty.toLocaleString()} pcs`}
-                          hint={[s.actualShippingDate ? fmtDate(s.actualShippingDate) : null, s.awbNumber ?? s.trackingNumber].filter(Boolean).join(' · ') || 'No date or reference yet'} />
-                      ))}
-                    </div>
-                  )}
-              </div>
-              {src.pricePerPieceUsd == null && (
-                <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 sm:col-span-2">
-                  This order has no unit price. The draft will be built without rates; set the price on Order Details and rebuild, or type the rates on the lines.
-                </p>
-              )}
-            </div>
-          )
-        )}
+        {kind === 'INVOICE' && picked.map((p) => (
+          <OrderSources key={p.orderId} order={p} showHeading={picked.length > 1}
+            choice={choices[p.orderId] ?? { packingListId: null, shipmentId: null }}
+            onChange={(patch) => setChoice(p.orderId, patch)} />
+        ))}
       </div>
     </Modal>
+  );
+}
+
+/** The packing list and consignment of one order on the new document. */
+function OrderSources({ order, showHeading, choice, onChange }: {
+  order: Picked;
+  showHeading: boolean;
+  choice: SourceChoice;
+  onChange: (patch: Partial<SourceChoice>) => void;
+}) {
+  const sources = useQuery({ queryKey: ['invoice-sources', order.orderId], queryFn: () => api.invoices.sources(order.orderId) });
+  const src = sources.data?.data;
+  if (sources.isLoading) return <Spinner label={`Reading PO ${order.poNumber}'s packing lists and shipments…`} />;
+  if (sources.error) return <ErrorNote error={sources.error} onRetry={sources.refetch} />;
+  if (!src) return null;
+  return (
+    <div className={clsx(showHeading && 'rounded-md border border-ink-200 p-3')}>
+      {showHeading && (
+        <p className="mb-2 text-xs font-semibold text-ink-800">
+          <span className="font-mono text-accent-700">PO {order.poNumber}</span> <span className="font-normal text-ink-500" dir="auto">{order.orderName}</span>
+        </p>
+      )}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div>
+          <span className="label">Packing list</span>
+          {src.packingLists.length === 0
+            ? <p className="text-xs text-amber-800">No packing list on this order. The draft will be built from the shipment, or from the ordered quantities, and say so.</p>
+            : (
+              <div className="space-y-1">
+                <Choice checked={choice.packingListId === null} onPick={() => onChange({ packingListId: null })} label="Choose for me" hint="The approved list with cartons, else the newest." />
+                {src.packingLists.map((l) => (
+                  <Choice key={l.id} checked={choice.packingListId === l.id} onPick={() => onChange({ packingListId: l.id })}
+                    label={`${l.reference ?? 'Packing list'} — ${l.cartonCount} carton${l.cartonCount === 1 ? '' : 's'}, ${l.totalQty.toLocaleString()} pcs`}
+                    hint={`${l.approved ? 'Approved' : 'Not approved'} · ${fmtDate(l.createdAt)}`} />
+                ))}
+              </div>
+            )}
+        </div>
+        <div>
+          <span className="label">Shipment</span>
+          {src.shipments.length === 0
+            ? <p className="text-xs text-amber-800">No shipment recorded yet. The shipping date will be blank until it is, or until you type it.</p>
+            : (
+              <div className="space-y-1">
+                <Choice checked={choice.shipmentId === null} onPick={() => onChange({ shipmentId: null })} label="Choose for me" hint="The consignment furthest along." />
+                {src.shipments.map((s) => (
+                  <Choice key={s.id} checked={choice.shipmentId === s.id} onPick={() => onChange({ shipmentId: s.id })}
+                    label={`${s.status.replace(/_/g, ' ')} — ${s.qty.toLocaleString()} pcs`}
+                    hint={[s.actualShippingDate ? fmtDate(s.actualShippingDate) : null, s.awbNumber ?? s.trackingNumber].filter(Boolean).join(' · ') || 'No date or reference yet'} />
+                ))}
+              </div>
+            )}
+        </div>
+        {src.pricePerPieceUsd == null && (
+          <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 sm:col-span-2">
+            This order has no unit price. The draft will be built without rates; set the price on Order Details and rebuild, or type the rates on the lines.
+          </p>
+        )}
+      </div>
+    </div>
   );
 }
 

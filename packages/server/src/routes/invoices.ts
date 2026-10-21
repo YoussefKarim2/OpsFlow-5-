@@ -26,11 +26,11 @@ import { prisma } from '../db.js';
 import { authenticate, currentUser, requirePermission } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
 import { dateInput } from '../util/date-input.js';
-import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError } from '../errors.js';
+import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from '../errors.js';
 import { logActivity } from '../services/activity-service.js';
 import {
-  INVOICE_INCLUDE, PROFILE_ID, assertDraft, assertIssuable, assertStillDraft, buildInvoiceDocument, defaultCoverNote,
-  getCompanyProfile, invoiceToDto, invoiceToListRow, isStale, lineToDto, loadInvoice, loadOrderForBuild, pickDefaults,
+  INVOICE_INCLUDE, PROFILE_ID, assertDraft, assertIssuable, assertStillDraft, buildCombinedDocument, defaultCoverNote,
+  getCompanyProfile, invoiceToDto, invoiceToListRow, isStale, lineToDto, loadInvoice, loadOrderForBuild, partsOf, pickDefaults,
   profileToDto, sourcesOf, toBuildOrder, toBuildPackingList, toBuildShipment, withAllocatedNumber,
 } from '../services/invoice-service.js';
 
@@ -112,9 +112,9 @@ invoicesRouter.get('/candidates', requirePermission('invoice:read'), asyncHandle
       client: { select: { name: true } },
       ...SOURCE_SELECT,
       quantities: { where: { ledger: { in: ['ORDER', 'SHIPPED'] } }, select: { orderColorId: true, orderSizeId: true, ledger: true, qty: true } },
-      invoices: {
-        select: { id: true, kind: true, status: true, number: true, lines: { select: { kind: true, quantity: true } } },
-        orderBy: { createdAt: 'desc' },
+      // Through the join, so a document covering several orders counts on each of them.
+      invoiceOrders: {
+        select: { invoice: { select: { id: true, kind: true, status: true, number: true, createdAt: true, lines: { select: { kind: true, quantity: true } } } } },
       },
     },
     orderBy: { updatedAt: 'desc' },
@@ -129,10 +129,14 @@ invoicesRouter.get('/candidates', requirePermission('invoice:read'), asyncHandle
       packedQty: o.packingLists.reduce((a, l) => a + l.cartons.reduce((b, c) => b + c.qty, 0), 0),
       shippedQty: resolveShippedQty(cells, o.shipments),
       pricePerPieceUsd: o.pricePerPieceUsd == null ? null : Number(o.pricePerPieceUsd.toString()),
-      invoices: o.invoices.map((i) => ({
-        id: i.id, kind: i.kind, status: i.status, number: i.number,
-        totalQty: i.lines.filter((l) => l.kind === InvoiceLineKind.ITEM).reduce((a, l) => a + (l.quantity == null ? 0 : Number(l.quantity.toString())), 0),
-      })),
+      invoices: o.invoiceOrders.map((r) => r.invoice)
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .map((i) => ({
+          id: i.id, kind: i.kind, status: i.status, number: i.number,
+          // A document over several orders counts once on each; its pieces
+          // are the whole document's, which is what "invoiced so far" reads.
+          totalQty: i.lines.filter((l) => l.kind === InvoiceLineKind.ITEM).reduce((a, l) => a + (l.quantity == null ? 0 : Number(l.quantity.toString())), 0),
+        })),
       ...sourcesOf(o),
     };
   });
@@ -170,6 +174,8 @@ invoicesRouter.get('/', requirePermission('invoice:read'), asyncHandler(async (r
         OR: [
           { number: { contains: q, mode: 'insensitive' } },
           { billTo: { contains: q, mode: 'insensitive' } },
+          { orders: { some: { order: { poNumber: { contains: q, mode: 'insensitive' } } } } },
+          { orders: { some: { order: { orderName: { contains: q, mode: 'insensitive' } } } } },
           { order: { poNumber: { contains: q, mode: 'insensitive' } } },
           { order: { orderName: { contains: q, mode: 'insensitive' } } },
           { order: { client: { name: { contains: q, mode: 'insensitive' } } } },
@@ -185,39 +191,86 @@ invoicesRouter.get('/', requirePermission('invoice:read'), asyncHandler(async (r
 
 // ── Create ───────────────────────────────────────────────────────────────────
 
-const createSchema = z.object({
+const sourceChoice = z.object({
   orderId: z.string().min(1),
-  kind: z.nativeEnum(InvoiceKind),
   shipmentId: z.string().nullable().optional(),
   packingListId: z.string().nullable().optional(),
 });
 
-/** The builder's inputs for an order, honouring a chosen list and consignment. */
-async function buildFor(orderId: string, kind: InvoiceKind, chosen: { packingListId?: string | null; shipmentId?: string | null }) {
-  const loaded = await loadOrderForBuild(orderId);
-  if (loaded.cancelled) throw new ConflictError('This order is cancelled. A cancelled order is not invoiced.');
-  const { packingList, shipment } = pickDefaults(loaded, chosen);
-  const profile = await getCompanyProfile();
+/**
+ * One order (`orderId`, as the order's Invoice step links it) or several
+ * (`orders`): an order split into several POs is invoiced on one document.
+ */
+const createSchema = z.object({
+  kind: z.nativeEnum(InvoiceKind),
+  orders: z.array(sourceChoice).min(1, 'Pick at least one order.').max(30, 'At most 30 orders on one document.').optional(),
+  orderId: z.string().min(1).optional(),
+  shipmentId: z.string().nullable().optional(),
+  packingListId: z.string().nullable().optional(),
+}).refine((b) => b.orders || b.orderId, { message: 'Pick at least one order.' });
+
+type SourceChoice = z.infer<typeof sourceChoice>;
+
+/** The builder's inputs for one or more orders, honouring each one's chosen list and consignment. */
+async function buildFor(kind: InvoiceKind, choices: SourceChoice[]) {
   const forInvoice = kind === InvoiceKind.INVOICE;
-  const doc = buildInvoiceDocument({
-    kind,
-    order: toBuildOrder(loaded),
-    packingList: forInvoice && packingList ? toBuildPackingList(packingList) : null,
-    shipment: forInvoice && shipment ? toBuildShipment(shipment) : null,
-    otherPackingLists: forInvoice ? loaded.packingLists.filter((l) => l.id !== packingList?.id).map(toBuildPackingList) : [],
-    profile,
+  const loadedAll = [];
+  for (const c of choices) loadedAll.push(await loadOrderForBuild(c.orderId));
+  // An order may be named by id or PO; the same order twice is one order.
+  const seen = new Set<string>();
+  const picked = loadedAll.map((loaded, i) => ({ loaded, choice: choices[i]! })).filter(({ loaded }) => {
+    if (seen.has(loaded.id)) return false;
+    seen.add(loaded.id);
+    return true;
   });
-  return {
-    loaded, doc,
-    shipmentId: forInvoice ? shipment?.id ?? null : null,
-    packingListId: forInvoice ? packingList?.id ?? null : null,
-  };
+  for (const { loaded } of picked) {
+    if (loaded.cancelled) throw new ConflictError(`PO ${loaded.poNumber} is cancelled. A cancelled order is not invoiced.`);
+  }
+  const clients = new Set(picked.map(({ loaded }) => loaded.clientId));
+  if (clients.size > 1) {
+    const names = [...new Set(picked.map(({ loaded }) => loaded.client.name))].join(', ');
+    throw new ValidationError(`One document is billed to one customer, and these orders belong to ${names}. Build a document per customer.`);
+  }
+  const parts = picked.map(({ loaded, choice }) => {
+    const { packingList, shipment } = pickDefaults(loaded, choice);
+    return {
+      loaded,
+      shipmentId: forInvoice ? shipment?.id ?? null : null,
+      packingListId: forInvoice ? packingList?.id ?? null : null,
+      build: {
+        order: toBuildOrder(loaded),
+        packingList: forInvoice && packingList ? toBuildPackingList(packingList) : null,
+        shipment: forInvoice && shipment ? toBuildShipment(shipment) : null,
+        otherPackingLists: forInvoice ? loaded.packingLists.filter((l) => l.id !== packingList?.id).map(toBuildPackingList) : [],
+      },
+    };
+  });
+  const profile = await getCompanyProfile();
+  const doc = buildCombinedDocument({ kind, parts: parts.map((p) => p.build), profile });
+  return { parts, doc };
 }
+
+/** The join rows for a built document, the first order first. */
+const orderRows = (parts: Awaited<ReturnType<typeof buildFor>>['parts'], doc: Awaited<ReturnType<typeof buildFor>>['doc']) =>
+  parts.map((p, i) => ({
+    orderId: p.loaded.id, packingListId: p.packingListId, shipmentId: p.shipmentId,
+    position: i, orderRef: doc.orderRefs[i] as object,
+  }));
+
+/** One activity entry on every order the document covers, so each order's history shows it. */
+async function logOnOrders(orderIds: string[], entry: Omit<Parameters<typeof logActivity>[0], 'orderId'>) {
+  for (const orderId of orderIds) await logActivity({ ...entry, orderId });
+}
+
+const poList = (refs: Array<{ poNumber: string }>) => refs.map((r) => r.poNumber).join(', ');
 
 invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async (req, res) => {
   const body = createSchema.parse(req.body);
   const user = currentUser(req);
-  const { loaded, doc, shipmentId, packingListId } = await buildFor(body.orderId, body.kind, body);
+  const choices: SourceChoice[] = body.orders
+    ?? [{ orderId: body.orderId!, packingListId: body.packingListId, shipmentId: body.shipmentId }];
+  const { parts, doc } = await buildFor(body.kind, choices);
+  const first = parts[0]!;
   // Numbered in the year it is raised, whatever date the goods left: a run of
   // numbers belongs to the year the office is working in.
   const year = new Date().getUTCFullYear();
@@ -227,19 +280,21 @@ invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async 
     tx.invoice.create({
       data: {
         kind: body.kind, number, year, sequence,
-        orderId: loaded.id, shipmentId, packingListId,
+        orderId: first.loaded.id, shipmentId: first.shipmentId, packingListId: first.packingListId,
         date: doc.date, dueDate: doc.dueDate, paymentTerms: doc.paymentTerms,
         billTo: doc.billTo, billToAddress: doc.billToAddress, billToEmail: doc.billToEmail,
         customerReference: doc.customerReference, shipmentRef: doc.shipmentRef, shippedOn: doc.shippedOn,
         coverNote: defaultCoverNote({
           kind: body.kind, number, billTo: doc.billTo, shipmentRef: doc.shipmentRef,
-          poNumber: loaded.poNumber, orderName: loaded.orderName, qty, hasManifest: doc.manifest.length > 0,
+          poNumber: first.loaded.poNumber, orderName: first.loaded.orderName, qty, hasManifest: doc.manifest.length > 0,
+          orders: parts.map((p, i) => ({ poNumber: p.loaded.poNumber, orderName: p.loaded.orderName, qty: doc.qtyByOrder[i] ?? 0 })),
         }),
         terms: doc.terms, bankDetails: doc.bankDetails, notes: doc.notes,
         seller: doc.seller as object, orderRef: doc.orderRef as object,
         manifest: doc.manifest as object[], reconciliation: doc.reconciliation as object[],
         warnings: doc.warnings,
         preparedById: user.id,
+        orders: { create: orderRows(parts, doc) },
         lines: {
           create: doc.lines.map((l, i) => ({
             kind: l.kind, description: l.description, size: l.size,
@@ -250,10 +305,10 @@ invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async 
       include: INVOICE_INCLUDE,
     }));
 
-  await logActivity({
-    orderId: loaded.id, actorId: user.id, actorName: user.name,
+  await logOnOrders(parts.map((p) => p.loaded.id), {
+    actorId: user.id, actorName: user.name,
     action: 'invoice.create',
-    summary: `Built ${body.kind === InvoiceKind.PROFORMA ? 'proforma invoice' : 'invoice'} ${created.number} — ${qty.toLocaleString()} pcs`,
+    summary: `Built ${body.kind === InvoiceKind.PROFORMA ? 'proforma invoice' : 'invoice'} ${created.number} — ${qty.toLocaleString()} pcs${parts.length > 1 ? ` across PO ${poList(doc.orderRefs)}` : ''}`,
     entityType: 'Invoice', entityId: created.id,
   });
 
@@ -341,8 +396,8 @@ invoicesRouter.put('/:id', requirePermission('invoice:write'), asyncHandler(asyn
     return tx.invoice.findUniqueOrThrow({ where: { id: existing.id }, include: INVOICE_INCLUDE });
   });
 
-  await logActivity({
-    orderId: existing.orderId, actorId: user.id, actorName: user.name,
+  await logOnOrders(partsOf(existing).map((p) => p.orderId), {
+    actorId: user.id, actorName: user.name,
     action: 'invoice.update', summary: `Edited draft ${existing.number}`,
     entityType: 'Invoice', entityId: existing.id,
   });
@@ -365,9 +420,8 @@ invoicesRouter.post('/:id/rebuild', requirePermission('invoice:write'), asyncHan
   const existing = await loadInvoice(req.params.id);
   assertDraft(existing);
 
-  const { doc, shipmentId, packingListId } = await buildFor(existing.orderId, existing.kind, {
-    packingListId: existing.packingListId, shipmentId: existing.shipmentId,
-  });
+  const { parts, doc } = await buildFor(existing.kind, partsOf(existing));
+  const first = parts[0]!;
   const typedRate = new Map(
     existing.lines
       .filter((l) => l.kind === InvoiceLineKind.ITEM && l.unitPrice != null)
@@ -383,7 +437,7 @@ invoicesRouter.post('/:id/rebuild', requirePermission('invoice:write'), asyncHan
     const { count } = await tx.invoice.updateMany({
       where: { id: existing.id, status: InvoiceStatus.DRAFT },
       data: {
-        shipmentId, packingListId,
+        orderId: first.loaded.id, shipmentId: first.shipmentId, packingListId: first.packingListId,
         shipmentRef: doc.shipmentRef ?? existing.shipmentRef,
         shippedOn: doc.shippedOn ?? existing.shippedOn,
         notes: existing.notes ?? doc.notes,
@@ -393,6 +447,8 @@ invoicesRouter.post('/:id/rebuild', requirePermission('invoice:write'), asyncHan
       },
     });
     assertStillDraft(count, existing.number);
+    await tx.invoiceOrder.deleteMany({ where: { invoiceId: existing.id } });
+    await tx.invoiceOrder.createMany({ data: orderRows(parts, doc).map((r) => ({ ...r, invoiceId: existing.id })) });
     await tx.invoiceLine.deleteMany({ where: { invoiceId: existing.id } });
     if (lines.length > 0) {
       await tx.invoiceLine.createMany({
@@ -405,8 +461,8 @@ invoicesRouter.post('/:id/rebuild', requirePermission('invoice:write'), asyncHan
     return tx.invoice.findUniqueOrThrow({ where: { id: existing.id }, include: INVOICE_INCLUDE });
   });
 
-  await logActivity({
-    orderId: existing.orderId, actorId: user.id, actorName: user.name,
+  await logOnOrders(partsOf(existing).map((p) => p.orderId), {
+    actorId: user.id, actorName: user.name,
     action: 'invoice.rebuild', summary: `Rebuilt draft ${existing.number} from the order`,
     entityType: 'Invoice', entityId: existing.id,
   });
@@ -431,8 +487,8 @@ invoicesRouter.post('/:id/issue', requirePermission('invoice:issue'), asyncHandl
   assertStillDraft(count, existing.number);
   const updated = await loadInvoice(existing.id);
   const totals = computeInvoiceTotals(updated.lines.map(lineToDto));
-  await logActivity({
-    orderId: existing.orderId, actorId: user.id, actorName: user.name,
+  await logOnOrders(partsOf(existing).map((p) => p.orderId), {
+    actorId: user.id, actorName: user.name,
     action: 'invoice.issue',
     summary: `Issued ${existing.number} — $${totals.total.toLocaleString('en-US', { minimumFractionDigits: 2 })} for ${totals.totalQty.toLocaleString()} pcs`,
     entityType: 'Invoice', entityId: existing.id,
@@ -452,8 +508,8 @@ invoicesRouter.post('/:id/sent', requirePermission('invoice:write'), asyncHandle
     data: { sentAt: existing.sentAt ?? new Date() },
   });
   if (count === 0) throw new ConflictError(`${existing.number} is no longer issued. Reload it.`);
-  await logActivity({
-    orderId: existing.orderId, actorId: user.id, actorName: user.name,
+  await logOnOrders(partsOf(existing).map((p) => p.orderId), {
+    actorId: user.id, actorName: user.name,
     action: 'invoice.sent', summary: `Marked ${existing.number} as sent to the customer`,
     entityType: 'Invoice', entityId: existing.id,
   });
@@ -473,8 +529,8 @@ invoicesRouter.post('/:id/void', requirePermission('invoice:issue'), asyncHandle
     data: { status: InvoiceStatus.VOID, voidedAt: new Date(), voidReason: reason },
   });
   if (count === 0) throw new ConflictError(`${existing.number} is no longer issued. Reload it.`);
-  await logActivity({
-    orderId: existing.orderId, actorId: user.id, actorName: user.name,
+  await logOnOrders(partsOf(existing).map((p) => p.orderId), {
+    actorId: user.id, actorName: user.name,
     action: 'invoice.void', summary: `Voided ${existing.number}: ${reason}`,
     entityType: 'Invoice', entityId: existing.id,
   });
@@ -483,13 +539,16 @@ invoicesRouter.post('/:id/void', requirePermission('invoice:issue'), asyncHandle
 
 invoicesRouter.delete('/:id', requirePermission('invoice:write'), asyncHandler(async (req, res) => {
   const user = currentUser(req);
-  const existing = await prisma.invoice.findUnique({ where: { id: req.params.id } });
+  const existing = await prisma.invoice.findUnique({
+    where: { id: req.params.id },
+    include: { orders: { select: { orderId: true, packingListId: true, shipmentId: true }, orderBy: { position: 'asc' } } },
+  });
   if (!existing) throw new NotFoundError('Invoice');
   assertDraft(existing);
   const { count } = await prisma.invoice.deleteMany({ where: { id: existing.id, status: InvoiceStatus.DRAFT } });
   assertStillDraft(count, existing.number);
-  await logActivity({
-    orderId: existing.orderId, actorId: user.id, actorName: user.name,
+  await logOnOrders(partsOf(existing).map((p) => p.orderId), {
+    actorId: user.id, actorName: user.name,
     action: 'invoice.delete', summary: `Deleted draft ${existing.number}`,
     entityType: 'Invoice', entityId: existing.id,
   });

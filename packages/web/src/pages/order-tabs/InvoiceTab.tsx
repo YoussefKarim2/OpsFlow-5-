@@ -34,7 +34,8 @@ export function InvoiceTab({ order }: { order: OrderDetailDto }) {
     queryFn: () => api.invoices.list({ q: order.poNumber }),
     enabled: can('invoice:read'),
   });
-  const documents = (documentsRes?.data ?? []).filter((d) => d.orderId === order.id);
+  // Any document this order is on, including one that covers it with other POs.
+  const documents = (documentsRes?.data ?? []).filter((d) => d.orders.some((o) => o.orderId === order.id));
 
   const { data: proformaRes, isLoading } = useQuery({
     queryKey: ['proforma', order.id],

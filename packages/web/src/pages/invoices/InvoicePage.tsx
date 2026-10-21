@@ -179,7 +179,11 @@ export function InvoicePage() {
         <div className="min-w-0">
           <h1 className="font-mono text-lg font-semibold text-ink-900">{inv.number}</h1>
           <p className="text-xs text-ink-500">
-            {INVOICE_KIND_LABEL[inv.kind]} · PO <Link to={`/orders/${inv.order.id}`} className="font-mono text-accent-700 hover:underline">{inv.order.poNumber}</Link> · {inv.order.clientName}
+            {INVOICE_KIND_LABEL[inv.kind]} · PO{' '}
+            {inv.orders.map((o, i) => (
+              <span key={o.id}>{i > 0 ? ', ' : ''}<Link to={`/orders/${o.id}`} className="font-mono text-accent-700 hover:underline">{o.poNumber}</Link></span>
+            ))}
+            {' '}· {inv.order.clientName}
           </p>
         </div>
         <StatusLine inv={inv} />

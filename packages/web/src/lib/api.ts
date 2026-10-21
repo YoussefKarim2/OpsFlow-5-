@@ -1032,7 +1032,8 @@ export const api = {
     sources: (orderId: string) =>
       get<{ data: Pick<InvoiceCandidateDto, 'orderId' | 'poNumber' | 'orderName' | 'clientName' | 'pricePerPieceUsd' | 'packingLists' | 'shipments'> }>(`/invoices/order/${orderId}/sources`),
     get: (id: string) => get<{ data: InvoiceDto }>(`/invoices/${id}`),
-    create: (body: { orderId: string; kind: InvoiceKind; shipmentId?: string | null; packingListId?: string | null }) =>
+    /** One document over one or more orders; each order names its packing list and shipment, or lets the server pick. */
+    create: (body: { kind: InvoiceKind; orders: Array<{ orderId: string; shipmentId?: string | null; packingListId?: string | null }> }) =>
       post<{ data: InvoiceDto }>('/invoices', body),
     update: (id: string, body: InvoiceEditBody) => put<{ data: InvoiceDto }>(`/invoices/${id}`, body),
     rebuild: (id: string) => post<{ data: InvoiceDto }>(`/invoices/${id}/rebuild`),

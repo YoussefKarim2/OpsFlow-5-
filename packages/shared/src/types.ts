@@ -687,6 +687,8 @@ export interface InvoiceCartonDto {
   cartonNumber: string;
   cartonSize: string | null;
   product: string;
+  /** The PO the carton belongs to. Absent on documents built before one document could cover several orders. */
+  poNumber?: string;
   contents: Array<{ label: string; qty: number }>;
   pieces: number;
   netKg: number | null;
@@ -696,8 +698,21 @@ export interface InvoiceCartonDto {
 export interface InvoiceReconciliationRowDto { label: string; ordered: number; shipped: number; short: number }
 export interface InvoiceReconciliationGroupDto {
   product: string;
+  /** The PO the group compares against. Absent on documents built before one document could cover several orders. */
+  poNumber?: string;
   rows: InvoiceReconciliationRowDto[];
   ordered: number; shipped: number; short: number;
+}
+
+/** One order on a document, as it was when the document was last built. */
+export interface InvoiceOrderRefDto {
+  id: string;
+  poNumber: string;
+  orderName: string;
+  styleNumber: string | null;
+  clientName: string;
+  packingListId: string | null;
+  shipmentId: string | null;
 }
 
 export interface InvoiceDto {
@@ -709,7 +724,10 @@ export interface InvoiceDto {
   dueDate: string | null;
   paymentTerms: string | null;
 
+  /** The first order on the document. */
   order: { id: string; poNumber: string; orderName: string; styleNumber: string | null; clientName: string };
+  /** Every order the document covers, the first one first: an order split into several POs is invoiced on one document. */
+  orders: InvoiceOrderRefDto[];
   shipmentId: string | null;
   packingListId: string | null;
 
@@ -765,6 +783,8 @@ export interface InvoiceListRowDto {
   poNumber: string;
   orderName: string;
   clientName: string;
+  /** Every order on the document, the first one first. */
+  orders: Array<{ orderId: string; poNumber: string; orderName: string }>;
   billTo: string;
   totalQty: number;
   total: number;
