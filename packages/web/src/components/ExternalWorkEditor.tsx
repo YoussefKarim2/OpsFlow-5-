@@ -19,6 +19,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Lock } from 'lucide-react';
 import { api } from '../lib/api';
 import { Num, ErrorNote, Field, clsx } from './ui';
+import { ComboSelect } from './ComboSelect';
 
 export interface ExternalOpRow {
   id?: string;
@@ -121,14 +122,14 @@ export function ExternalWorkEditor({
           hints, above the line table. */}
       <div className="grid grid-cols-1 gap-3 rounded-md border border-ink-200 bg-ink-50/60 p-3 sm:grid-cols-3">
         <Field label="Factory" hint="Applied to each new operation you add below.">
-          <select
+          <ComboSelect
             className="input"
             value={defaults.factoryId}
             onChange={(e) => setDefaults({ ...defaults, factoryId: e.target.value })}
           >
             <option value="">Choose when adding</option>
             {factories.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-          </select>
+          </ComboSelect>
         </Field>
         <Field label="Expected back" hint="The date work sent today should return.">
           <input
@@ -183,14 +184,14 @@ export function ExternalWorkEditor({
                     />
                   </td>
                   <td className="p-1">
-                    <select
+                    <ComboSelect
                       className="input border-transparent bg-transparent" disabled={locked}
                       value={r.externalFactoryId ?? ''}
                       onChange={(e) => set(i, { externalFactoryId: e.target.value || null })}
                     >
                       <option value="">—</option>
                       {factories.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
-                    </select>
+                    </ComboSelect>
                   </td>
                   <td className="p-1">
                     <input className="input border-transparent bg-transparent" disabled={locked}

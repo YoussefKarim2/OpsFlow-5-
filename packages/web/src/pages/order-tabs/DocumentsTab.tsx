@@ -13,6 +13,7 @@ import { ExternalLink } from 'lucide-react';
 import { fmtDate } from '@opsflow/shared';
 import { api, resolveFileUrl } from '../../lib/api';
 import { Card, Spinner, EmptyState } from '../../components/ui';
+import { ComboSelect } from '../../components/ComboSelect';
 
 const TYPES = [
   'ALL', 'CUSTOMER_PO', 'CUSTOMER_REFERENCE', 'ARTWORK', 'TECH_PACK', 'FABRIC_PHOTO',
@@ -40,11 +41,11 @@ export function DocumentsTab({ orderId }: { orderId: string }) {
       <Card>
         <div className="card-header">
           <h3 className="card-title">Documents</h3>
-          <select value={type} onChange={(e) => setType(e.target.value)} className="input w-56">
+          <ComboSelect value={type} onChange={(e) => setType(e.target.value)} className="input w-56">
             {TYPES.map((t) => (
               <option key={t} value={t}>{t === 'ALL' ? 'All document types' : t.replace(/_/g, ' ')}</option>
             ))}
-          </select>
+          </ComboSelect>
         </div>
         {filtered.length === 0 ? (
           <EmptyState

@@ -29,6 +29,7 @@ import { api, type ChangeEventDto } from '../lib/api';
 import {
   Card, Spinner, ErrorNote, EmptyState, Avatar, Field, clsx, useDebounced,
 } from '../components/ui';
+import { ComboSelect } from '../components/ComboSelect';
 
 const PRIORITIES: NotificationPriority[] = ['URGENT', 'HIGH', 'NORMAL', 'LOW'];
 
@@ -187,7 +188,7 @@ export function WhatChangedPage({ embedded = false }: { embedded?: boolean } = {
           </Field>
 
           <Field label="Priority">
-            <select
+            <ComboSelect
               className="input"
               value={priority}
               onChange={(e) => change(setPriority)(e.target.value as NotificationPriority | 'ALL')}
@@ -201,16 +202,16 @@ export function WhatChangedPage({ embedded = false }: { embedded?: boolean } = {
                     : ''}
                 </option>
               ))}
-            </select>
+            </ComboSelect>
           </Field>
 
           <Field label="Changed by">
-            <select className="input" value={actorId} onChange={(e) => change(setActorId)(e.target.value)}>
+            <ComboSelect className="input" value={actorId} onChange={(e) => change(setActorId)(e.target.value)}>
               <option value="">Anyone</option>
               {(options?.actors ?? []).map((a) => (
                 <option key={a.id} value={a.id}>{a.name} ({a.count})</option>
               ))}
-            </select>
+            </ComboSelect>
           </Field>
 
           <Field label="From">

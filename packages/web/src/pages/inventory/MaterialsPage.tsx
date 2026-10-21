@@ -22,6 +22,7 @@ import {
   ConfirmDialog, clsx, useToast, useDebounced,
 } from '../../components/ui';
 import { StockStatusChip, StockBar } from './parts';
+import { ComboSelect } from '../../components/ComboSelect';
 
 export function MaterialsPage() {
   const { can } = useAuth();
@@ -135,18 +136,18 @@ export function MaterialsPage() {
           action={
             <div className="flex flex-wrap items-center gap-2">
               <SlidersHorizontal className="h-3.5 w-3.5 text-ink-400" />
-              <select className="input w-40" value={typeFilter} onChange={(e) => setFilter('type', e.target.value)}>
+              <ComboSelect className="input w-40" value={typeFilter} onChange={(e) => setFilter('type', e.target.value)}>
                 <option value="">All types</option>
                 {(meta?.types ?? []).map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-              </select>
-              <select className="input w-36" value={statusFilter} onChange={(e) => setFilter('status', e.target.value)}>
+              </ComboSelect>
+              <ComboSelect className="input w-36" value={statusFilter} onChange={(e) => setFilter('status', e.target.value)}>
                 <option value="">Any status</option>
                 <option value="low">Needs attention</option>
                 <option value="OK">Good</option>
                 <option value="LOW">Low</option>
                 <option value="OUT_OF_STOCK">Out of stock</option>
                 <option value="OVER_RESERVED">Over-reserved</option>
-              </select>
+              </ComboSelect>
               <input
                 className="input w-52"
                 placeholder="Search name, code, supplier…"
@@ -336,14 +337,14 @@ function CreateMaterialModal({
             <input className="input" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
           </Field>
           <Field label="Type">
-            <select className="input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
+            <ComboSelect className="input" value={form.type} onChange={(e) => setForm({ ...form, type: e.target.value })}>
               {types.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </select>
+            </ComboSelect>
           </Field>
           <Field label="Unit" hint="Cannot be changed once stock has moved.">
-            <select className="input" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })}>
+            <ComboSelect className="input" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })}>
               {units.map((u) => <option key={u} value={u}>{u}</option>)}
-            </select>
+            </ComboSelect>
           </Field>
 
           {relevant.has('colorName') && (

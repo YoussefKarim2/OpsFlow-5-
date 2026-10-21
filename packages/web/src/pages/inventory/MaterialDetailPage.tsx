@@ -17,6 +17,7 @@ import { useAuth } from '../../lib/auth';
 import { Card, CardHeader, ConfirmDialog, EmptyState, ErrorNote, Spinner, clsx, useToast } from '../../components/ui';
 import { StockStatusChip, StockPositionPanel, MovementDirection } from './parts';
 import { ReceiveModal, AdjustModal } from './MaterialsPage';
+import { ComboSelect } from '../../components/ComboSelect';
 
 export function MaterialDetailPage() {
   const { id = '' } = useParams();
@@ -445,10 +446,10 @@ export function MovementsPage() {
           title="Recent movements"
           subtitle={`${rows.length} shown, newest first`}
           action={
-            <select className="input w-48" value={type} onChange={(e) => setType(e.target.value)}>
+            <ComboSelect className="input w-48" value={type} onChange={(e) => setType(e.target.value)}>
               <option value="">All movement types</option>
               {(meta?.movementTypes ?? []).map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-            </select>
+            </ComboSelect>
           }
         />
         {rows.length === 0 ? (

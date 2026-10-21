@@ -23,6 +23,7 @@ import {
 } from '@opsflow/shared';
 import { api, ApiError, type BomRowDto } from '../lib/api';
 import { Num, ErrorNote, clsx } from './ui';
+import { ComboSelect } from './ComboSelect';
 
 /** The value of the item dropdown's "type it yourself" entry. */
 const OTHER_ITEM = '__other__';
@@ -252,7 +253,7 @@ export function BomEditor({
               <Fragment key={i}>
                 <tr>
                   <td className="p-1">
-                    <select
+                    <ComboSelect
                       aria-label="Department"
                       className={clsx('input border-transparent bg-transparent', !r.department && 'text-ink-400')}
                       value={r.department ?? ''}
@@ -260,7 +261,7 @@ export function BomEditor({
                     >
                       <option value="">Choose…</option>
                       {BOM_DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
-                    </select>
+                    </ComboSelect>
                   </td>
                   <td className="p-1">
                     {r.typed ? (
@@ -279,7 +280,8 @@ export function BomEditor({
                         )}
                       </div>
                     ) : (
-                      <select
+                      <ComboSelect
+                        allowCustom
                         aria-label="Item"
                         className={clsx('input border-transparent bg-transparent', !r.item.trim() && 'ring-1 ring-red-400')}
                         value={r.item ? bomItemsFor(r.department).find((x) => x.toLowerCase() === r.item.trim().toLowerCase()) ?? r.item : ''}
@@ -288,7 +290,7 @@ export function BomEditor({
                         <option value="">Choose…</option>
                         {bomItemsFor(r.department).map((x) => <option key={x} value={x}>{x}</option>)}
                         <option value={OTHER_ITEM}>Other (type it)…</option>
-                      </select>
+                      </ComboSelect>
                     )}
                   </td>
                   <td className="p-1">

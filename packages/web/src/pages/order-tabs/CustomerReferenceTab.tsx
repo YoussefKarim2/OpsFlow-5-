@@ -13,6 +13,7 @@ import { fmtDate } from '@opsflow/shared';
 import { api, type AttachmentDto, resolveFileUrl } from '../../lib/api';
 import { Card, Spinner, EmptyState, ConfirmDialog, Field, clsx, useToast } from '../../components/ui';
 import { AuthedImage } from '../../components/Attachments';
+import { ComboSelect } from '../../components/ComboSelect';
 
 /**
  * The document types that belong to step 1. The full list lives on the
@@ -102,11 +103,11 @@ export function CustomerReferenceTab({ orderId }: { orderId: string }) {
             label="What is this document?"
             hint="Chosen before the file, so nothing is ever filed as “Other” by accident."
           >
-            <select className="input" value={docType} onChange={(e) => setDocType(e.target.value)}>
+            <ComboSelect className="input" value={docType} onChange={(e) => setDocType(e.target.value)}>
               {REFERENCE_TYPES.map((t) => (
                 <option key={t.value} value={t.value}>{t.label}</option>
               ))}
-            </select>
+            </ComboSelect>
           </Field>
 
           <div

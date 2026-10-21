@@ -14,6 +14,7 @@ import {
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { Card, CardHeader, StatTile, Spinner, ErrorNote, EmptyState, useToast, clsx } from '../components/ui';
+import { ComboSelect } from '../components/ComboSelect';
 
 /**
  * Factory productivity — Phase 1.
@@ -140,10 +141,10 @@ export function ProductivityPage() {
 
         <label className="ml-auto flex items-center gap-1.5 text-xs text-ink-600">
           Primary operation
-          <select className="input !py-1 text-xs" value={primary}
+          <ComboSelect className="input !py-1 text-xs" value={primary}
             onChange={(e) => update({ primary: e.target.value === PRIMARY_OPERATION ? null : e.target.value })}>
             {PRODUCTION_OPERATIONS.map((o) => <option key={o} value={o}>{opLabel(o)}</option>)}
-          </select>
+          </ComboSelect>
         </label>
       </div>
 

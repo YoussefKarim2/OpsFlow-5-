@@ -19,6 +19,7 @@ import {
 import { CONCEPT_META, ImportConcept, type ColumnAnalysis } from '@opsflow/shared';
 import { api, type LayingImportAnalysisDto, type LayingRowDto } from '../../lib/api';
 import { Modal, Card, CardHeader, EmptyState, ErrorNote, clsx, useToast } from '../../components/ui';
+import { ComboSelect } from '../../components/ComboSelect';
 
 type Step = 'upload' | 'map' | 'review';
 type Resolution = 'KEEP' | 'REPLACE' | 'ADD_NEW';
@@ -322,9 +323,9 @@ function MapStep({
                         {c.samples.length > 0 ? c.samples.join(', ') : <span className="text-ink-300">no values</span>}
                       </td>
                       <td className="td">
-                        <select className="input" value={value} disabled={busy} onChange={(e) => onChange(c.index, e.target.value)}>
+                        <ComboSelect className="input" value={value} disabled={busy} onChange={(e) => onChange(c.index, e.target.value)}>
                           {CONCEPT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                        </select>
+                        </ComboSelect>
                       </td>
                     </tr>
                   );
@@ -501,7 +502,7 @@ function RowLine({
         <td className="td">
           {conflict ? (
             <div className="flex items-center gap-2">
-              <select
+              <ComboSelect
                 className="input input-sm"
                 value={resolution ?? 'REPLACE'}
                 onChange={(e) => onResolutionChange(e.target.value as Resolution)}
@@ -509,7 +510,7 @@ function RowLine({
                 <option value="KEEP">Keep existing</option>
                 <option value="REPLACE">Replace</option>
                 <option value="ADD_NEW">Add as new</option>
-              </select>
+              </ComboSelect>
               <button className="text-2xs text-accent-600 underline" onClick={() => setShowDiff((v) => !v)}>
                 {showDiff ? 'Hide' : 'Compare'}
               </button>

@@ -13,6 +13,7 @@ import {
   Card, CardHeader, StatTile, Num, Modal, Field, Spinner, ErrorNote, EmptyState, clsx,
 } from '../../components/ui';
 import { AttachmentsPanel } from '../../components/Attachments';
+import { ComboSelect } from '../../components/ComboSelect';
 
 interface PackingList {
   id: string; reference: string | null; approved: boolean; approvedAt: string | null;
@@ -253,7 +254,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
                     {/* A consignment moves along in place. Recording a second
                         row to say it arrived counted its pieces twice. */}
                     {can('shipment:write') ? (
-                      <select
+                      <ComboSelect
                         aria-label="Shipment status"
                         className={clsx('chip cursor-pointer', SHIP_TONE[s.status])}
                         value={s.status}
@@ -261,7 +262,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
                         onChange={(e) => updateShipment.mutate({ id: s.id, status: e.target.value })}
                       >
                         {SHIP_STATUSES.map((st) => <option key={st} value={st}>{st.replace(/_/g, ' ')}</option>)}
-                      </select>
+                      </ComboSelect>
                     ) : (
                       <span className={clsx('chip', SHIP_TONE[s.status])}>{s.status.replace(/_/g, ' ')}</span>
                     )}
@@ -389,16 +390,16 @@ function CartonModal({
             <input value={form.cartonSize} onChange={(e) => setForm({ ...form, cartonSize: e.target.value })} className="input" />
           </Field>
           <Field label="Colour">
-            <select value={form.orderColorId} onChange={(e) => setForm({ ...form, orderColorId: e.target.value })} className="input">
+            <ComboSelect value={form.orderColorId} onChange={(e) => setForm({ ...form, orderColorId: e.target.value })} className="input">
               <option value="">Mixed / not specified</option>
               {matrix?.colors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            </ComboSelect>
           </Field>
           <Field label="Size">
-            <select value={form.orderSizeId} onChange={(e) => setForm({ ...form, orderSizeId: e.target.value })} className="input">
+            <ComboSelect value={form.orderSizeId} onChange={(e) => setForm({ ...form, orderSizeId: e.target.value })} className="input">
               <option value="">Mixed / not specified</option>
               {matrix?.sizes.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
+            </ComboSelect>
           </Field>
           <Field label="Quantity">
             <input type="number" min={1} value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} className="input" />
@@ -480,11 +481,11 @@ function ShipmentModal({
 
         <div className="grid grid-cols-2 gap-3">
           <Field label="Status">
-            <select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} className="input">
+            <ComboSelect value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })} className="input">
               {SHIP_STATUSES.map((s) => (
                 <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
               ))}
-            </select>
+            </ComboSelect>
           </Field>
           <Field label="Quantity" hint={`${producedQty.toLocaleString()} produced`}>
             <input type="number" min={0} value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value })} className="input" />

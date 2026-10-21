@@ -17,6 +17,7 @@ import {
 } from '../../components/ui';
 import { AttachmentsPanel } from '../../components/Attachments';
 import { CutOrderGrid } from '../../components/CutOrderGrid';
+import { ComboSelect } from '../../components/ComboSelect';
 
 interface Op {
   id: string; externalFactoryName: string | null; externalReference: string | null;
@@ -453,20 +454,21 @@ function SheetField({
             {display || <span className="text-ink-400">—</span>}
           </span>
         ) : choices ? (
-          <select className="input" value={value} onChange={(e) => onChange(e.target.value)}>
+          <ComboSelect className="input" value={value} onChange={(e) => onChange(e.target.value)}>
             <option value="">—</option>
             {choices.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          </ComboSelect>
         ) : options && options.length > 0 ? (
           <>
-            <select
+            <ComboSelect
+              allowCustom
               className="input mb-1"
-              value={options.includes(value) ? value : ''}
+              value={value}
               onChange={(e) => { if (e.target.value) onChange(e.target.value); }}
             >
               <option value="">Choose…</option>
               {options.map((o) => <option key={o} value={o}>{o}</option>)}
-            </select>
+            </ComboSelect>
             {/* The list is what is used today, not the only thing allowed. */}
             <input className="input" value={value} placeholder="or type" onChange={(e) => onChange(e.target.value)} />
           </>

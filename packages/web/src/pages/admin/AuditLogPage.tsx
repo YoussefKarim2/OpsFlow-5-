@@ -26,6 +26,7 @@ import {
   Card, EmptyState, ErrorNote, Field, Spinner, TabStrip, clsx,
 } from '../../components/ui';
 import { WhatChangedPage } from '../WhatChanged';
+import { ComboSelect } from '../../components/ComboSelect';
 
 type Tab = 'whatchanged' | 'activity' | 'changes';
 
@@ -123,23 +124,23 @@ export function AuditLogPage() {
 
         <div className="grid gap-3 border-b border-ink-200 bg-ink-50 p-4 sm:grid-cols-2 lg:grid-cols-5">
           <Field label="User">
-            <select className="input" value={filters.actorId} onChange={(e) => set({ actorId: e.target.value })}>
+            <ComboSelect className="input" value={filters.actorId} onChange={(e) => set({ actorId: e.target.value })}>
               <option value="">Anyone</option>
               {(facets?.actors ?? []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-            </select>
+            </ComboSelect>
           </Field>
           <Field label="Action">
-            <select className="input" value={filters.action} onChange={(e) => set({ action: e.target.value })}>
+            <ComboSelect className="input" value={filters.action} onChange={(e) => set({ action: e.target.value })}>
               <option value="">Any action</option>
               {actionOptions.map((a) => <option key={a} value={a}>{humanise(a)}</option>)}
-            </select>
+            </ComboSelect>
           </Field>
           {tab === 'changes' && (
             <Field label="Record type">
-              <select className="input" value={filters.entityType} onChange={(e) => set({ entityType: e.target.value })}>
+              <ComboSelect className="input" value={filters.entityType} onChange={(e) => set({ entityType: e.target.value })}>
                 <option value="">Anything</option>
                 {(facets?.entityTypes ?? []).map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
+              </ComboSelect>
             </Field>
           )}
           <Field label="From">

@@ -17,6 +17,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { Num, ErrorNote, clsx } from './ui';
+import { ComboSelect } from './ComboSelect';
 
 export interface CartonLineRow {
   orderSizeId: string | null;
@@ -70,14 +71,14 @@ export function CartonSizes({
         {rows.map((r, i) => (
           <div key={i} className="flex items-center gap-2">
             <label className="text-xs text-ink-500 w-10">Size</label>
-            <select
+            <ComboSelect
               className={clsx('input w-40', r.orderSizeId && duplicated.has(r.orderSizeId) && 'ring-1 ring-amber-400')}
               value={r.orderSizeId ?? ''}
               onChange={(e) => set(i, { orderSizeId: e.target.value || null })}
             >
               <option value="">—</option>
               {sizes.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
-            </select>
+            </ComboSelect>
 
             <label className="ml-2 text-xs text-ink-500">Quantity</label>
             <input

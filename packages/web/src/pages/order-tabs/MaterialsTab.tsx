@@ -25,6 +25,7 @@ import {
   Card, CardHeader, EmptyState, ErrorNote, Field, Modal, ProgressBar, Spinner,
   clsx, useToast,
 } from '../../components/ui';
+import { ComboSelect } from '../../components/ComboSelect';
 
 const STATUS_STYLE: Record<RequirementResult['status'], { label: string; chip: string; hint: string }> = {
   COVERED:    { label: 'Covered',    chip: 'bg-emerald-50 text-emerald-700 ring-emerald-200', hint: 'Reserved or already issued' },
@@ -477,14 +478,14 @@ function LinkModal({
           it moves the balance. Only materials held in a compatible unit can be linked.
         </p>
         <Field label="Material">
-          <select className="input" value={materialId} onChange={(e) => setMaterialId(e.target.value)}>
+          <ComboSelect className="input" value={materialId} onChange={(e) => setMaterialId(e.target.value)}>
             <option value="">Choose…</option>
             {(data?.data ?? []).map((m) => (
               <option key={m.id} value={m.id}>
                 {m.name} ({m.unit}) — {fmtNumber(m.position.availableQty, { places: 0 })} available
               </option>
             ))}
-          </select>
+          </ComboSelect>
         </Field>
       </div>
     </Modal>

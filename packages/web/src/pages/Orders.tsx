@@ -8,6 +8,7 @@ import {
   Card, ProgressBar, StatusBadge, Num, Spinner, ErrorNote,
   EmptyState, Avatar, useDebounced, clsx,
 } from '../components/ui';
+import { ComboSelect } from '../components/ComboSelect';
 
 export function OrdersPage() {
   const navigate = useNavigate();
@@ -226,10 +227,10 @@ function FilterSelect({
   return (
     <div>
       <label className="label">{label}</label>
-      <select value={value} onChange={(e) => onChange(e.target.value)} className="input">
+      <ComboSelect value={value} onChange={(e) => onChange(e.target.value)} className="input">
         <option value="">All</option>
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
+      </ComboSelect>
     </div>
   );
 }

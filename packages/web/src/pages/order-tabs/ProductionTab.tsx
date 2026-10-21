@@ -19,6 +19,7 @@ import {
   Card, CardHeader, StatTile, Num, Modal, Field,
   Spinner, ErrorNote, EmptyState,
 } from '../../components/ui';
+import { ComboSelect } from '../../components/ComboSelect';
 
 const OPERATIONS = ['CUTTING', 'SEWING', 'PRINTING', 'EMBROIDERY', 'PACKING'] as const;
 
@@ -290,9 +291,9 @@ function RecordModal({
             <input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} className="input" />
           </Field>
           <Field label="Operation">
-            <select value={form.operation} onChange={(e) => setForm({ ...form, operation: e.target.value })} className="input">
+            <ComboSelect value={form.operation} onChange={(e) => setForm({ ...form, operation: e.target.value })} className="input">
               {OPERATIONS.map((o) => <option key={o} value={o}>{o.charAt(0) + o.slice(1).toLowerCase()}</option>)}
-            </select>
+            </ComboSelect>
           </Field>
         </div>
         <Field label="Quantity (pieces)">

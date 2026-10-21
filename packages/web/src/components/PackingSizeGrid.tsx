@@ -16,6 +16,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { Num, ErrorNote } from './ui';
+import { ComboSelect } from './ComboSelect';
 
 interface GridRow {
   cartonNumber: string;
@@ -107,16 +108,16 @@ export function PackingSizeGrid({
                   onChange={(e) => set(i, { cartonNumber: e.target.value })} />
               </td>
               <td className="p-1">
-                <select className="input border-transparent bg-transparent" value={r.orderColorId}
+                <ComboSelect className="input border-transparent bg-transparent" value={r.orderColorId}
                   onChange={(e) => set(i, { orderColorId: e.target.value })}>
                   {colors.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                </ComboSelect>
               </td>
               <td className="p-1">
-                <select className="input border-transparent bg-transparent" value={r.orderSizeId}
+                <ComboSelect className="input border-transparent bg-transparent" value={r.orderSizeId}
                   onChange={(e) => set(i, { orderSizeId: e.target.value })}>
                   {sizes.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
-                </select>
+                </ComboSelect>
               </td>
               <td className="p-1">
                 <input className="input tnum border-transparent bg-transparent text-right" value={r.qty || ''}

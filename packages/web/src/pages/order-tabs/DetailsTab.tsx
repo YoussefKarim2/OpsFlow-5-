@@ -11,6 +11,7 @@ import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Card, CardHeader, Field, FreeText, ErrorNote, clsx } from '../../components/ui';
+import { ComboSelect } from '../../components/ComboSelect';
 
 export function DetailsTab({ order }: { order: OrderDetailDto }) {
   const qc = useQueryClient();
@@ -134,7 +135,7 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
             <div>
               <p className="label">Production sample</p>
               {editing ? (
-                <select
+                <ComboSelect
                   className="input"
                   value={form.productionSample == null ? '' : form.productionSample ? 'yes' : 'no'}
                   onChange={(e) => setForm({
@@ -145,7 +146,7 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
                   <option value="">Not decided</option>
                   <option value="yes">Yes</option>
                   <option value="no">No</option>
-                </select>
+                </ComboSelect>
               ) : (
                 <p className={clsx(
                   'text-sm',
@@ -317,10 +318,10 @@ function Select({
     <div>
       <p className="label">{label}</p>
       {editing ? (
-        <select value={value} onChange={(e) => onChange(e.target.value)} className="input">
+        <ComboSelect allowCustom value={value} onChange={(e) => onChange(e.target.value)} className="input">
           <option value="">—</option>
           {options.map((o) => <option key={o} value={o}>{o}</option>)}
-        </select>
+        </ComboSelect>
       ) : (
         <p className="text-sm text-ink-800">{display || '—'}</p>
       )}
@@ -355,7 +356,8 @@ function AddressPicker({
   return (
     <div>
       <p className="label">{label}</p>
-      <select
+      <ComboSelect
+        allowCustom
         className="input mb-1.5"
         value={options.includes(value) ? value : ''}
         onChange={(e) => { if (e.target.value) onChange(e.target.value); }}
@@ -364,7 +366,7 @@ function AddressPicker({
         {options.map((o) => (
           <option key={o} value={o}>{o.length > 70 ? `${o.slice(0, 70)}…` : o}</option>
         ))}
-      </select>
+      </ComboSelect>
       <textarea
         className="input min-h-[3.5rem]"
         value={value}
@@ -395,10 +397,10 @@ function Picker({
       <p className="label">{label}</p>
       {editing ? (
         <>
-          <select value={value} onChange={(e) => onChange(e.target.value)} className="input">
+          <ComboSelect value={value} onChange={(e) => onChange(e.target.value)} className="input">
             <option value="">—</option>
             {options.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
-          </select>
+          </ComboSelect>
           {hint && <p className="mt-1 text-2xs text-ink-500">{hint}</p>}
         </>
       ) : (

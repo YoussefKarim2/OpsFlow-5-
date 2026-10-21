@@ -13,6 +13,7 @@ import { Save } from 'lucide-react';
 import type { ChangeCategory, NotificationPriority } from '@opsflow/shared';
 import { api } from '../lib/api';
 import { Card, CardHeader, Spinner, useToast } from './ui';
+import { ComboSelect } from './ComboSelect';
 
 interface Row {
   category: ChangeCategory;
@@ -90,13 +91,13 @@ export function NotificationPreferencesPanel() {
                   />
                 </td>
                 <td className="td">
-                  <select
+                  <ComboSelect
                     className="input input-sm"
                     value={r.minPriority}
                     onChange={(e) => update(r.category, { minPriority: e.target.value as NotificationPriority })}
                   >
                     {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-                  </select>
+                  </ComboSelect>
                 </td>
               </tr>
             ))}

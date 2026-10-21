@@ -22,6 +22,7 @@ import { useAuth } from '../../lib/auth';
 import {
   Card, CardHeader, EmptyState, ErrorNote, Field, Modal, Num, Spinner, StatTile, clsx, useDebounced, useToast,
 } from '../../components/ui';
+import { ComboSelect } from '../../components/ComboSelect';
 
 type KindFilter = '' | InvoiceKind;
 type Picked = { orderId: string; poNumber: string; orderName: string; clientId: string; clientName: string };
@@ -152,12 +153,12 @@ export function InvoicesPage() {
                   <button key={k} onClick={() => setKind(k)} className={clsx('rounded px-2 py-0.5 text-xs', kind === k ? 'bg-accent-600 text-white' : 'text-ink-600')}>{l}</button>
                 ))}
               </div>
-              <select className="input !w-auto !py-1 text-xs" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
+              <ComboSelect className="input !w-auto !py-1 text-xs" value={status} onChange={(e) => setStatus(e.target.value as StatusFilter)}>
                 <option value="">Any status</option>
                 <option value="DRAFT">Draft</option>
                 <option value="ISSUED">Issued</option>
                 <option value="VOID">Void</option>
-              </select>
+              </ComboSelect>
               <label className="relative">
                 <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-ink-400" />
                 <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Number, PO, customer" className="input !w-52 !py-1 !pl-7 text-xs" />

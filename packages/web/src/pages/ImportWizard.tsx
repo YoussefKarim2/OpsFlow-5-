@@ -28,6 +28,7 @@ import { api, type ImportAnalysisDto } from '../lib/api';
 import {
   Card, CardHeader, EmptyState, ErrorNote, Field, Spinner, clsx, useToast,
 } from '../components/ui';
+import { ComboSelect } from '../components/ComboSelect';
 
 type Step = 'upload' | 'analyse' | 'map' | 'review';
 
@@ -341,7 +342,7 @@ function AnalyseStep({
           }
           action={
             a && a.candidateSheets.length > 1 && (
-              <select
+              <ComboSelect
                 className="input w-52"
                 value={a.sheetName}
                 disabled={busy}
@@ -350,7 +351,7 @@ function AnalyseStep({
                 {a.candidateSheets.map((s) => (
                   <option key={s.name} value={s.name}>{s.name} ({s.rows} rows)</option>
                 ))}
-              </select>
+              </ComboSelect>
             )
           }
         />
@@ -456,14 +457,14 @@ function MapStep({
                       {c.samples.length > 0 ? c.samples.join(', ') : <span className="text-ink-300">no values</span>}
                     </td>
                     <td className="td">
-                      <select
+                      <ComboSelect
                         className="input"
                         value={value}
                         disabled={busy}
                         onChange={(e) => onChange(c.index, e.target.value)}
                       >
                         {CONCEPT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                      </select>
+                      </ComboSelect>
                     </td>
                     <td className="td max-w-xs text-2xs text-ink-500">
                       {c.source === 'MANUAL' ? 'You chose this'
@@ -485,10 +486,10 @@ function MapStep({
         />
         <div className="flex flex-wrap items-end gap-3 p-4">
           <Field label="Save against">
-            <select className="input w-64" value={saveFor} onChange={(e) => setSaveFor(e.target.value)}>
+            <ComboSelect className="input w-64" value={saveFor} onChange={(e) => setSaveFor(e.target.value)}>
               <option value="">Any customer with this file shape</option>
               {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
+            </ComboSelect>
           </Field>
           <button
             className="btn-secondary"

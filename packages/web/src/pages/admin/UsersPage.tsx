@@ -19,6 +19,7 @@ import {
   Card, CardHeader, ConfirmDialog, CopyableSecret, EmptyState, ErrorNote, Field,
   Modal, Spinner, clsx, useToast,
 } from '../../components/ui';
+import { ComboSelect } from '../../components/ComboSelect';
 
 const DEPARTMENTS = Object.keys(DEPARTMENT_LABEL) as Department[];
 
@@ -497,18 +498,18 @@ function CreateUserModal({
             />
           </Field>
           <Field label="Role">
-            <select className="input" value={form.roleKey} onChange={(e) => setForm({ ...form, roleKey: e.target.value })}>
+            <ComboSelect className="input" value={form.roleKey} onChange={(e) => setForm({ ...form, roleKey: e.target.value })}>
               {roles.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
-            </select>
+            </ComboSelect>
           </Field>
           <Field label="Department" hint="Decides which tasks and notifications reach them.">
-            <select
+            <ComboSelect
               className="input"
               value={form.department}
               onChange={(e) => setForm({ ...form, department: e.target.value as Department })}
             >
               {DEPARTMENTS.map((d) => <option key={d} value={d}>{DEPARTMENT_LABEL[d].en}</option>)}
-            </select>
+            </ComboSelect>
           </Field>
           <Field label="Phone (optional)">
             <input className="input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
@@ -605,18 +606,18 @@ function EditUserModal({
             <input className="input" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
           </Field>
           <Field label="Role">
-            <select className="input" value={form.roleKey} onChange={(e) => setForm({ ...form, roleKey: e.target.value })}>
+            <ComboSelect className="input" value={form.roleKey} onChange={(e) => setForm({ ...form, roleKey: e.target.value })}>
               {roles.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}
-            </select>
+            </ComboSelect>
           </Field>
           <Field label="Department">
-            <select
+            <ComboSelect
               className="input"
               value={form.department}
               onChange={(e) => setForm({ ...form, department: e.target.value as Department })}
             >
               {DEPARTMENTS.map((d) => <option key={d} value={d}>{DEPARTMENT_LABEL[d].en}</option>)}
-            </select>
+            </ComboSelect>
           </Field>
           <Field label="Phone" hint="Leave blank to keep the current number.">
             <input className="input" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
