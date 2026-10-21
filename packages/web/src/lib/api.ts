@@ -1030,7 +1030,7 @@ export const api = {
       get<{ data: InvoiceListRowDto[] }>(`/invoices${qs(filters)}`),
     candidates: () => get<{ data: InvoiceCandidateDto[] }>('/invoices/candidates'),
     sources: (orderId: string) =>
-      get<{ data: Pick<InvoiceCandidateDto, 'orderId' | 'poNumber' | 'orderName' | 'clientName' | 'pricePerPieceUsd' | 'packingLists' | 'shipments'> }>(`/invoices/order/${orderId}/sources`),
+      get<{ data: Pick<InvoiceCandidateDto, 'orderId' | 'poNumber' | 'orderName' | 'clientId' | 'clientName' | 'pricePerPieceUsd' | 'packingLists' | 'shipments'> }>(`/invoices/order/${orderId}/sources`),
     get: (id: string) => get<{ data: InvoiceDto }>(`/invoices/${id}`),
     /** One document over one or more orders; each order names its packing list and shipment, or lets the server pick. */
     create: (body: { kind: InvoiceKind; orders: Array<{ orderId: string; shipmentId?: string | null; packingListId?: string | null }> }) =>

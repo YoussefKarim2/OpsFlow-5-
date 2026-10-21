@@ -268,11 +268,20 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
               </p>
             </div>
           ))}
-          <p className="font-bold">
-            Grand total — Ordered: {qty(doc.reconciliation.reduce((a, g) => a + g.ordered, 0))} ·
-            Shipped: {qty(doc.reconciliation.reduce((a, g) => a + g.shipped, 0))} ·
-            Short: {(() => { const s = doc.reconciliation.reduce((a, g) => a + g.short, 0); return s < 0 ? `over by ${qty(-s)}` : qty(s); })()}
-          </p>
+          {(() => {
+            // Shortages and over-shipments are added up apart, size by size, so
+            // extra pieces of one size, colour or PO never hide a shortage of another.
+            const rows = doc.reconciliation.flatMap((g) => g.rows);
+            const short = rows.reduce((a, r) => a + Math.max(0, r.short), 0);
+            const over = rows.reduce((a, r) => a + Math.max(0, -r.short), 0);
+            return (
+              <p className="font-bold">
+                Grand total — Ordered: {qty(doc.reconciliation.reduce((a, g) => a + g.ordered, 0))} ·
+                Shipped: {qty(doc.reconciliation.reduce((a, g) => a + g.shipped, 0))} ·
+                Short: {qty(short)}{over > 0 ? <> · Over-shipped: {qty(over)}</> : null}
+              </p>
+            );
+          })()}
         </section>
       )}
 

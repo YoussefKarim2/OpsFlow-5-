@@ -24,7 +24,7 @@ import {
 } from '../../components/ui';
 
 type KindFilter = '' | InvoiceKind;
-type Picked = { orderId: string; poNumber: string; orderName: string; clientName: string };
+type Picked = { orderId: string; poNumber: string; orderName: string; clientId: string; clientName: string };
 type StatusFilter = '' | InvoiceStatus;
 
 export function InvoicesPage() {
@@ -47,7 +47,7 @@ export function InvoicesPage() {
   useEffect(() => {
     if (!newFor || !presetOrder.data) return;
     const o = presetOrder.data.data;
-    setCreating({ open: true, order: { orderId: o.orderId, poNumber: o.poNumber, orderName: o.orderName, clientName: o.clientName } });
+    setCreating({ open: true, order: { orderId: o.orderId, poNumber: o.poNumber, orderName: o.orderName, clientId: o.clientId, clientName: o.clientName } });
     setParams({}, { replace: true });
   }, [newFor, presetOrder.data, setParams]);
 
@@ -132,7 +132,7 @@ export function InvoicesPage() {
                 {c.invoices.some((i) => i.status === 'DRAFT' && i.kind === 'INVOICE') ? (
                   <Link to={`/invoices/${c.invoices.find((i) => i.status === 'DRAFT' && i.kind === 'INVOICE')!.id}`} className="btn-secondary btn-sm">Open draft</Link>
                 ) : can('invoice:write') ? (
-                  <button className="btn-primary btn-sm" onClick={() => setCreating({ open: true, order: { orderId: c.orderId, poNumber: c.poNumber, orderName: c.orderName, clientName: c.clientName }, kind: 'INVOICE' })}>Build invoice</button>
+                  <button className="btn-primary btn-sm" onClick={() => setCreating({ open: true, order: { orderId: c.orderId, poNumber: c.poNumber, orderName: c.orderName, clientId: c.clientId, clientName: c.clientName }, kind: 'INVOICE' })}>Build invoice</button>
                 ) : null}
               </div>
             ))}
@@ -258,6 +258,8 @@ function NewDocumentDialog({ preset, presetKind, candidates, onClose }: {
 
   const found = useQuery({ queryKey: ['search', q], queryFn: () => api.orders.search(q), enabled: q.trim().length >= 2 });
 
+  // Matched by id: two customers can share a name.
+  const customerId = picked[0]?.clientId ?? null;
   const customer = picked[0]?.clientName ?? null;
   const pickedIds = new Set(picked.map((p) => p.orderId));
   const add = (o: Picked) => { if (!pickedIds.has(o.orderId)) setPicked([...picked, o]); setTerm(''); };
@@ -285,11 +287,11 @@ function NewDocumentDialog({ preset, presetKind, candidates, onClose }: {
   // With an order picked, the suggestions are the same customer's other
   // orders that are packed or shipped — the usual other half of a split.
   const suggestions = searching ? [] : candidates
-    .filter((c) => !pickedIds.has(c.orderId) && (!customer || c.clientName === customer))
+    .filter((c) => !pickedIds.has(c.orderId) && (!customerId || c.clientId === customerId))
     .slice(0, 6);
   const results: Array<Picked> = searching
-    ? (found.data?.data ?? []).map((o: OrderSummaryDto) => ({ orderId: o.id, poNumber: o.poNumber, orderName: o.orderName, clientName: o.clientName }))
-    : suggestions.map((c) => ({ orderId: c.orderId, poNumber: c.poNumber, orderName: c.orderName, clientName: c.clientName }));
+    ? (found.data?.data ?? []).map((o: OrderSummaryDto) => ({ orderId: o.id, poNumber: o.poNumber, orderName: o.orderName, clientId: o.clientId, clientName: o.clientName }))
+    : suggestions.map((c) => ({ orderId: c.orderId, poNumber: c.poNumber, orderName: c.orderName, clientId: c.clientId, clientName: c.clientName }));
 
   return (
     <Modal
@@ -353,7 +355,7 @@ function NewDocumentDialog({ preset, presetKind, candidates, onClose }: {
                 <p className="px-3 py-3 text-center text-xs text-ink-500">{found.isFetching ? 'Searching…' : 'No orders match.'}</p>
               ) : results.map((o) => {
                 const already = pickedIds.has(o.orderId);
-                const otherCustomer = !!customer && o.clientName !== customer;
+                const otherCustomer = !!customerId && o.clientId !== customerId;
                 return (
                   <button key={o.orderId} type="button" disabled={already || otherCustomer} onClick={() => add(o)}
                     title={otherCustomer ? `Billed to ${o.clientName}. One document is billed to one customer.` : undefined}

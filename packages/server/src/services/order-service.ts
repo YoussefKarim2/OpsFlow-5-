@@ -749,6 +749,7 @@ export function buildOrderSummary(
     id: order.id,
     poNumber: order.poNumber,
     orderName: order.orderName,
+    clientId: order.clientId,
     clientName: order.client.name,
     season: order.season,
     coordinatorName: order.coordinator?.name ?? null,

@@ -1389,6 +1389,9 @@ model InvoiceOrder {
   position      Int          @default(0)
   /// The order's PO, name, style and client as they were when last built.
   orderRef      Json?
+  /// This order's pieces on the document's goods lines, so "invoiced so far"
+  /// counts each order's share rather than the whole document on every order.
+  qty           Int?
   invoice       Invoice      @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   order         Order        @relation(fields: [orderId], references: [id], onDelete: Cascade)
   packingList   PackingList? @relation(fields: [packingListId], references: [id], onDelete: SetNull)

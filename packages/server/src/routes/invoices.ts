@@ -30,7 +30,7 @@ import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, Valida
 import { logActivity } from '../services/activity-service.js';
 import {
   INVOICE_INCLUDE, PROFILE_ID, assertDraft, assertIssuable, assertStillDraft, buildCombinedDocument, defaultCoverNote,
-  getCompanyProfile, invoiceToDto, invoiceToListRow, isStale, lineToDto, loadInvoice, loadOrderForBuild, partsOf, pickDefaults,
+  baseDescription, getCompanyProfile, invoiceToDto, invoiceToListRow, isStale, lineToDto, loadInvoice, loadOrderForBuild, partsOf, pickDefaults, qtyPerOrder,
   profileToDto, sourcesOf, toBuildOrder, toBuildPackingList, toBuildShipment, withAllocatedNumber,
 } from '../services/invoice-service.js';
 
@@ -108,13 +108,13 @@ invoicesRouter.get('/candidates', requirePermission('invoice:read'), asyncHandle
       ],
     },
     select: {
-      id: true, poNumber: true, orderName: true, pricePerPieceUsd: true,
+      id: true, poNumber: true, orderName: true, clientId: true, pricePerPieceUsd: true,
       client: { select: { name: true } },
       ...SOURCE_SELECT,
       quantities: { where: { ledger: { in: ['ORDER', 'SHIPPED'] } }, select: { orderColorId: true, orderSizeId: true, ledger: true, qty: true } },
       // Through the join, so a document covering several orders counts on each of them.
       invoiceOrders: {
-        select: { invoice: { select: { id: true, kind: true, status: true, number: true, createdAt: true, lines: { select: { kind: true, quantity: true } } } } },
+        select: { qty: true, invoice: { select: { id: true, kind: true, status: true, number: true, createdAt: true, lines: { select: { kind: true, quantity: true } } } } },
       },
     },
     orderBy: { updatedAt: 'desc' },
@@ -124,18 +124,19 @@ invoicesRouter.get('/candidates', requirePermission('invoice:read'), asyncHandle
   const data: InvoiceCandidateDto[] = orders.map((o) => {
     const cells = o.quantities.map((q) => ({ colorId: q.orderColorId, sizeId: q.orderSizeId, ledger: q.ledger, qty: q.qty }));
     return {
-      orderId: o.id, poNumber: o.poNumber, orderName: o.orderName, clientName: o.client.name,
+      orderId: o.id, poNumber: o.poNumber, orderName: o.orderName, clientId: o.clientId, clientName: o.client.name,
       orderQty: cells.filter((c) => c.ledger === 'ORDER').reduce((a, c) => a + c.qty, 0),
       packedQty: o.packingLists.reduce((a, l) => a + l.cartons.reduce((b, c) => b + c.qty, 0), 0),
       shippedQty: resolveShippedQty(cells, o.shipments),
       pricePerPieceUsd: o.pricePerPieceUsd == null ? null : Number(o.pricePerPieceUsd.toString()),
-      invoices: o.invoiceOrders.map((r) => r.invoice)
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-        .map((i) => ({
+      invoices: [...o.invoiceOrders]
+        .sort((a, b) => b.invoice.createdAt.getTime() - a.invoice.createdAt.getTime())
+        .map(({ qty, invoice: i }) => ({
           id: i.id, kind: i.kind, status: i.status, number: i.number,
-          // A document over several orders counts once on each; its pieces
-          // are the whole document's, which is what "invoiced so far" reads.
-          totalQty: i.lines.filter((l) => l.kind === InvoiceLineKind.ITEM).reduce((a, l) => a + (l.quantity == null ? 0 : Number(l.quantity.toString())), 0),
+          // This order's share of the document, so a shared invoice does not
+          // count another PO's pieces as invoiced here. A row without a share
+          // (built before shares were kept) is the whole document.
+          totalQty: qty ?? i.lines.filter((l) => l.kind === InvoiceLineKind.ITEM).reduce((a, l) => a + (l.quantity == null ? 0 : Number(l.quantity.toString())), 0),
         })),
       ...sourcesOf(o),
     };
@@ -148,12 +149,12 @@ invoicesRouter.get('/candidates', requirePermission('invoice:read'), asyncHandle
 invoicesRouter.get('/order/:orderId/sources', requirePermission('invoice:read'), asyncHandler(async (req, res) => {
   const o = await prisma.order.findFirst({
     where: { OR: [{ id: req.params.orderId }, { poNumber: req.params.orderId }] },
-    select: { id: true, poNumber: true, orderName: true, pricePerPieceUsd: true, client: { select: { name: true } }, ...SOURCE_SELECT },
+    select: { id: true, poNumber: true, orderName: true, clientId: true, pricePerPieceUsd: true, client: { select: { name: true } }, ...SOURCE_SELECT },
   });
   if (!o) throw new NotFoundError('Order');
   res.json({
     data: {
-      orderId: o.id, poNumber: o.poNumber, orderName: o.orderName, clientName: o.client.name,
+      orderId: o.id, poNumber: o.poNumber, orderName: o.orderName, clientId: o.clientId, clientName: o.client.name,
       pricePerPieceUsd: o.pricePerPieceUsd == null ? null : Number(o.pricePerPieceUsd.toString()),
       ...sourcesOf(o),
     },
@@ -216,20 +217,25 @@ async function buildFor(kind: InvoiceKind, choices: SourceChoice[]) {
   const forInvoice = kind === InvoiceKind.INVOICE;
   const loadedAll = [];
   for (const c of choices) loadedAll.push(await loadOrderForBuild(c.orderId));
-  // An order may be named by id or PO; the same order twice is one order.
-  const seen = new Set<string>();
-  const picked = loadedAll.map((loaded, i) => ({ loaded, choice: choices[i]! })).filter(({ loaded }) => {
-    if (seen.has(loaded.id)) return false;
-    seen.add(loaded.id);
-    return true;
+  // An order may be named by id or PO; the same order twice is one order —
+  // unless the two ask for different packing lists or shipments, which one
+  // order on one document cannot honour, so that is refused rather than guessed.
+  const seen = new Map<string, SourceChoice>();
+  const picked = loadedAll.map((loaded, i) => ({ loaded, choice: choices[i]! })).filter(({ loaded, choice }) => {
+    const before = seen.get(loaded.id);
+    if (!before) { seen.set(loaded.id, choice); return true; }
+    if ((before.packingListId ?? null) !== (choice.packingListId ?? null) || (before.shipmentId ?? null) !== (choice.shipmentId ?? null)) {
+      throw new ValidationError(`PO ${loaded.poNumber} is listed twice with different packing lists or shipments. One order goes on a document once.`);
+    }
+    return false;
   });
   for (const { loaded } of picked) {
     if (loaded.cancelled) throw new ConflictError(`PO ${loaded.poNumber} is cancelled. A cancelled order is not invoiced.`);
   }
   const clients = new Set(picked.map(({ loaded }) => loaded.clientId));
   if (clients.size > 1) {
-    const names = [...new Set(picked.map(({ loaded }) => loaded.client.name))].join(', ');
-    throw new ValidationError(`One document is billed to one customer, and these orders belong to ${names}. Build a document per customer.`);
+    const owners = picked.map(({ loaded }) => `PO ${loaded.poNumber} (${loaded.client.name})`).join(', ');
+    throw new ValidationError(`One document is billed to one customer, and these orders belong to different customers: ${owners}. Build a document per customer.`);
   }
   const parts = picked.map(({ loaded, choice }) => {
     const { packingList, shipment } = pickDefaults(loaded, choice);
@@ -251,10 +257,14 @@ async function buildFor(kind: InvoiceKind, choices: SourceChoice[]) {
 }
 
 /** The join rows for a built document, the first order first. */
-const orderRows = (parts: Awaited<ReturnType<typeof buildFor>>['parts'], doc: Awaited<ReturnType<typeof buildFor>>['doc']) =>
+const orderRows = (
+  parts: Awaited<ReturnType<typeof buildFor>>['parts'],
+  doc: Awaited<ReturnType<typeof buildFor>>['doc'],
+  qty: number[] = doc.qtyByOrder,
+) =>
   parts.map((p, i) => ({
     orderId: p.loaded.id, packingListId: p.packingListId, shipmentId: p.shipmentId,
-    position: i, orderRef: doc.orderRefs[i] as object,
+    position: i, orderRef: doc.orderRefs[i] as object, qty: qty[i] ?? 0,
   }));
 
 /** One activity entry on every order the document covers, so each order's history shows it. */
@@ -340,13 +350,15 @@ const editSchema = z.object({
   billTo: z.string().trim().min(1, 'The bill-to name is needed.').max(300).optional(),
   billToAddress: text(600),
   billToEmail: email,
-  customerReference: text(200),
-  shipmentRef: text(200),
+  // Room for a document over many orders, whose references, notes and cover
+  // note list every PO: the editor sends every field back on each save.
+  customerReference: text(2000),
+  shipmentRef: text(2000),
   shippedOn: dateInput.nullable().optional(),
-  coverNote: text(3000),
+  coverNote: text(12000),
   terms: text(4000),
   bankDetails: text(2000),
-  notes: text(2000),
+  notes: text(12000),
   lines: z.array(lineSchema).max(300).optional(),
 });
 
@@ -392,6 +404,13 @@ invoicesRouter.put('/:id', requirePermission('invoice:write'), asyncHandler(asyn
           })),
         });
       }
+      // Keep each order's share in step with the lines as typed.
+      const rows = existing.orders;
+      const pos = rows.map((r) => (r.orderRef as { poNumber?: string } | null)?.poNumber ?? r.order.poNumber);
+      const shares = qtyPerOrder(body.lines.map((l) => ({ kind: l.kind, description: l.description, quantity: l.quantity ?? null })), pos);
+      for (const [i, r] of rows.entries()) {
+        await tx.invoiceOrder.update({ where: { id: r.id }, data: { qty: shares[i] ?? 0 } });
+      }
     }
     return tx.invoice.findUniqueOrThrow({ where: { id: existing.id }, include: INVOICE_INCLUDE });
   });
@@ -422,11 +441,13 @@ invoicesRouter.post('/:id/rebuild', requirePermission('invoice:write'), asyncHan
 
   const { parts, doc } = await buildFor(existing.kind, partsOf(existing));
   const first = parts[0]!;
-  const typedRate = new Map(
-    existing.lines
-      .filter((l) => l.kind === InvoiceLineKind.ITEM && l.unitPrice != null)
-      .map((l) => [l.description, Number(l.unitPrice!.toString())] as const),
-  );
+  // A rate typed on a line the order still has no price for, found by the
+  // line's description, or by it without its "(PO x)" when the PO was renamed
+  // or the document went from several orders to one.
+  const typed = existing.lines.filter((l) => l.kind === InvoiceLineKind.ITEM && l.unitPrice != null);
+  const exactRate = new Map(typed.map((l) => [l.description, Number(l.unitPrice!.toString())] as const));
+  const baseRate = new Map(typed.map((l) => [baseDescription(l.description), Number(l.unitPrice!.toString())] as const));
+  const typedRate = { get: (d: string) => exactRate.get(d) ?? baseRate.get(baseDescription(d)) };
   const extras = existing.lines.filter((l) => l.kind === InvoiceLineKind.EXTRA);
   const lines = [
     ...doc.lines.map((l) => ({ ...l, unitPrice: l.unitPrice ?? typedRate.get(l.description) ?? null })),
@@ -448,7 +469,8 @@ invoicesRouter.post('/:id/rebuild', requirePermission('invoice:write'), asyncHan
     });
     assertStillDraft(count, existing.number);
     await tx.invoiceOrder.deleteMany({ where: { invoiceId: existing.id } });
-    await tx.invoiceOrder.createMany({ data: orderRows(parts, doc).map((r) => ({ ...r, invoiceId: existing.id })) });
+    const shares = qtyPerOrder(lines, parts.map((p) => p.loaded.poNumber));
+    await tx.invoiceOrder.createMany({ data: orderRows(parts, doc, shares).map((r) => ({ ...r, invoiceId: existing.id })) });
     await tx.invoiceLine.deleteMany({ where: { invoiceId: existing.id } });
     if (lines.length > 0) {
       await tx.invoiceLine.createMany({

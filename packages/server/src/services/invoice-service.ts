@@ -353,6 +353,27 @@ export interface CombinedDocument extends BuiltDocument {
   qtyByOrder: number[];
 }
 
+/** A goods line's description without the "(PO x)" a multi-order build adds. */
+export const baseDescription = (d: string): string => d.replace(/\s*\(PO [^()]+\)$/, '');
+
+/**
+ * Each order's pieces on a document's goods lines, in the order given. A line
+ * belongs to the PO its description ends with; on a one-order document every
+ * line is that order's, and a line typed without a PO counts on the first.
+ */
+export function qtyPerOrder(
+  lines: Array<{ kind: InvoiceLineKind; description: string; quantity: number | null }>,
+  poNumbers: string[],
+): number[] {
+  const out = poNumbers.map(() => 0);
+  for (const l of lines) {
+    if (l.kind !== InvoiceLineKind.ITEM || l.quantity == null) continue;
+    const i = poNumbers.length === 1 ? 0 : poNumbers.findIndex((po) => l.description.trim().endsWith(`(PO ${po})`));
+    out[i < 0 ? 0 : i]! += l.quantity;
+  }
+  return out.map((q) => Math.round(q));
+}
+
 const uniqueJoined = (values: Array<string | null | undefined>): string | null => {
   const seen = [...new Set(values.map((v) => v?.trim()).filter((v): v is string => !!v))];
   return seen.length > 0 ? seen.join(', ') : null;
@@ -389,6 +410,14 @@ export function buildCombinedDocument(input: {
   const reconciliation = built.flatMap((d, i) => d.reconciliation.map((g) => ({ ...g, poNumber: po(i) })));
   const warnings = built.flatMap((d, i) => d.warnings.map((w) => (many ? `PO ${po(i)}: ${w}` : w)));
   const notes = built.map((d, i) => (d.notes && many ? `PO ${po(i)}: ${d.notes}` : d.notes)).filter(Boolean).join('\n') || null;
+  // One bill-to block: say so when another order carries its own address.
+  const firstAddress = built[0]!.billToAddress?.trim() ?? null;
+  built.forEach((d, i) => {
+    const addr = d.billToAddress?.trim() ?? null;
+    if (i > 0 && addr && addr !== firstAddress) {
+      warnings.push(`PO ${po(i)} has its own billing address, which differs from PO ${po(0)}'s. The document is billed to PO ${po(0)}'s address; edit the bill-to block if that is wrong.`);
+    }
+  });
 
   // An invoice is dated the day the last of its goods left; a quotation today.
   const shippedDates = parts.map((p) => p.shipment?.actualShippingDate ?? null).filter((d): d is Date => d != null);
@@ -409,7 +438,7 @@ export function buildCombinedDocument(input: {
     notes,
     lines, manifest, reconciliation, warnings,
     orderRefs: built.map((d) => d.orderRef),
-    qtyByOrder: built.map((d) => d.lines.filter((l) => l.kind === InvoiceLineKind.ITEM).reduce((a, l) => a + (l.quantity ?? 0), 0)),
+    qtyByOrder: qtyPerOrder(lines, parts.map((p) => p.order.poNumber)),
   };
 }
 

@@ -7,7 +7,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeInvoiceTotals, issueBlockers, type CompanyProfileDto } from '@opsflow/shared';
 import {
-  PROFORMA_VALID_DAYS, buildCombinedDocument, buildInvoiceDocument, defaultCoverNote, manifestFingerprint,
+  PROFORMA_VALID_DAYS, baseDescription, buildCombinedDocument, buildInvoiceDocument, qtyPerOrder, defaultCoverNote, manifestFingerprint,
   type BuildOrder, type BuildPackingList, type BuildShipment,
 } from './invoice-service.js';
 
@@ -313,5 +313,33 @@ describe('one document over an order split into several POs', () => {
       orders: [{ poNumber: 'SO-2026-0138', orderName: 'Car stand printed cover', qty: 122 }, { poNumber: 'SO-2026-0139', orderName: 'Car stand printed cover', qty: 60 }],
     });
     assert.ok(note.includes('PO SO-2026-0138 · Car stand printed cover — 122 pcs; PO SO-2026-0139 · Car stand printed cover — 60 pcs'));
+  });
+});
+
+describe('each order\'s share of a shared document', () => {
+  const item = (description: string, quantity: number | null) => ({ kind: 'ITEM' as const, description, quantity });
+  test('lines are counted on the PO they name', () => {
+    assert.deepEqual(qtyPerOrder([item('Cover — Black (PO A)', 80), item('Cover — Black (PO B)', 50), { kind: 'EXTRA' as const, description: 'Courier', quantity: null }], ['A', 'B']), [80, 50]);
+  });
+  test('a typed line without a PO counts on the first order; one order takes every line', () => {
+    assert.deepEqual(qtyPerOrder([item('Cover (PO B)', 50), item('Spare covers', 3)], ['A', 'B']), [3, 50]);
+    assert.deepEqual(qtyPerOrder([item('Cover', 80), item('Cover (PO X)', 2)], ['A']), [82]);
+  });
+  test('the PO suffix comes off for matching a typed rate', () => {
+    assert.equal(baseDescription('Cover — Black (PO A302059B-2)'), 'Cover — Black');
+    assert.equal(baseDescription('Cover (large)'), 'Cover (large)');
+  });
+  test('a second order with its own billing address is flagged', () => {
+    const doc = buildCombinedDocument({
+      kind: 'PROFORMA', profile,
+      parts: [
+        { order: order(), packingList: null, shipment: null },
+        { order: order({ id: 'o2', poNumber: 'P2', billingAddress: 'Warehouse 9, Alexandria' }), packingList: null, shipment: null },
+      ],
+    });
+    assert.equal(doc.billToAddress, 'Abu Rawash, Giza');
+    assert.ok(doc.warnings.some((w) => w.startsWith('PO P2 has its own billing address')));
+    const same = buildCombinedDocument({ kind: 'PROFORMA', profile, parts: [{ order: order(), packingList: null, shipment: null }, { order: order({ id: 'o2', poNumber: 'P2' }), packingList: null, shipment: null }] });
+    assert.ok(!same.warnings.some((w) => w.includes('billing address')));
   });
 });

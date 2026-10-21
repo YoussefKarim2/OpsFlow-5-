@@ -43,6 +43,7 @@ export interface OrderSummaryDto {
   id: string;
   poNumber: string;
   orderName: string;
+  clientId: string;
   clientName: string;
   season: string;
   coordinatorName: string | null;
@@ -799,6 +800,7 @@ export interface InvoiceCandidateDto {
   orderId: string;
   poNumber: string;
   orderName: string;
+  clientId: string;
   clientName: string;
   orderQty: number;
   packedQty: number;

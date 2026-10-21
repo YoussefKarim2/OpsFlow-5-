@@ -698,6 +698,23 @@ ordersRouter.delete('/:id', requireSuperAdmin, asyncHandler(async (req, res) => 
     );
   }
 
+  // A customer document is a record that outlives the order: an issued or
+  // void invoice keeps its number and its POs, and a draft shared with other
+  // orders belongs to them too. Both must be dealt with first; a draft over
+  // this order alone goes with it, as it always has.
+  const docs = await prisma.invoice.findMany({
+    where: { OR: [{ orderId: order.id }, { orders: { some: { orderId: order.id } } }] },
+    select: { number: true, status: true, _count: { select: { orders: true } } },
+  });
+  const kept = docs.filter((d) => d.status !== 'DRAFT');
+  if (kept.length > 0) {
+    throw new ConflictError(`PO ${order.poNumber} is on ${kept.map((d) => d.number).join(', ')}, which ${kept.length === 1 ? 'has' : 'have'} been issued. An issued document is the record and keeps its order, so this order cannot be deleted.`);
+  }
+  const shared = docs.filter((d) => d._count.orders > 1);
+  if (shared.length > 0) {
+    throw new ConflictError(`PO ${order.poNumber} is on draft ${shared.map((d) => d.number).join(', ')} together with other orders. Delete that draft, or build it again without this order, first.`);
+  }
+
   const files = await prisma.attachment.findMany({
     where: { orderId: order.id },
     select: { storageKey: true },
