@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { OutageBanner } from './OutageBanner';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard, Package, Boxes, ShieldCheck,
@@ -60,6 +60,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   const { user, logout, can } = useAuth();
   const navigate = useNavigate();
 
+  // Orders is the most used screen and the widest one, so there the sidebar
+  // shrinks to its icons on desktop: the page gets the room, and the labels
+  // stop crowding each other. Each icon keeps its name as a tooltip and for
+  // screen readers. The phone drawer keeps its labels: it slides over the
+  // page and takes no width from it.
+  const { pathname } = useLocation();
+  const compact = pathname === '/orders' || pathname.startsWith('/orders/');
+
   const visible = NAV.filter((n) => !n.requires || can(n.requires));
   const groups = [...new Set(visible.map((n) => n.group))];
 
@@ -68,15 +76,16 @@ export function AppShell({ children }: { children: ReactNode }) {
       {/* Sidebar */}
       <aside
         className={clsx(
-          'fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-ink-800 bg-ink-950 transition-transform lg:static lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-ink-800 bg-ink-950 transition-[transform,width] lg:static lg:translate-x-0',
           open ? 'translate-x-0' : '-translate-x-full',
+          compact && 'lg:w-16',
         )}
       >
-        <div className="flex h-14 shrink-0 items-center gap-2.5 border-b border-ink-800 px-4">
-          <div className="flex h-7 w-7 items-center justify-center rounded bg-accent-600 text-sm font-bold text-white">
+        <div className={clsx('flex h-14 shrink-0 items-center gap-2.5 border-b border-ink-800 px-4', compact && 'lg:justify-center lg:px-0')}>
+          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-accent-600 text-sm font-bold text-white" title={compact ? 'OpsFlow' : undefined}>
             OF
           </div>
-          <div className="min-w-0">
+          <div className={clsx('min-w-0', compact && 'lg:hidden')}>
             <p className="truncate text-sm font-semibold text-white">OpsFlow</p>
             <p className="truncate text-2xs text-ink-400">Order Control Centre</p>
           </div>
@@ -86,36 +95,40 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 py-3">
-          {groups.map((group) => (
-            <div key={group} className="mb-4">
-              <p className="mb-1 px-2 text-2xs font-semibold uppercase tracking-wider text-ink-500">{group}</p>
+          {groups.map((group, gi) => (
+            <div key={group} className={clsx('mb-4', compact && 'lg:mb-2')}>
+              <p className={clsx('mb-1 px-2 text-2xs font-semibold uppercase tracking-wider text-ink-500', compact && 'lg:hidden')}>{group}</p>
+              {/* Icon-only: a thin rule stands in for the group heading. */}
+              {compact && gi > 0 && <div className="mx-2 mb-2 hidden border-t border-ink-800 lg:block" aria-hidden />}
               {visible.filter((n) => n.group === group).map((item) => (
                 <NavLink
                   key={item.to}
                   to={item.to}
                   end={item.to === '/'}
                   onClick={() => setOpen(false)}
+                  title={compact ? item.label : undefined}
                   className={({ isActive }) =>
                     clsx(
                       'mb-0.5 flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors',
+                      compact && 'lg:justify-center lg:py-2',
                       isActive
                         ? 'bg-accent-600/15 font-medium text-accent-200'
                         : 'text-ink-300 hover:bg-ink-900 hover:text-white',
                     )
                   }
                 >
-                  <item.icon className="h-4 w-4 shrink-0" />
-                  <span className="truncate">{item.label}</span>
+                  <item.icon className={clsx('h-4 w-4 shrink-0', compact && 'lg:h-5 lg:w-5')} />
+                  <span className={clsx('truncate', compact && 'lg:sr-only')}>{item.label}</span>
                 </NavLink>
               ))}
             </div>
           ))}
         </nav>
 
-        <div className="shrink-0 border-t border-ink-800 p-3">
-          <div className="flex items-center gap-2.5">
-            <Avatar name={user?.name ?? '?'} />
-            <div className="min-w-0 flex-1">
+        <div className={clsx('shrink-0 border-t border-ink-800 p-3', compact && 'lg:px-0')}>
+          <div className={clsx('flex items-center gap-2.5', compact && 'lg:flex-col lg:gap-1.5')}>
+            <span title={compact ? `${user?.name ?? ''} · ${user?.roleLabel ?? ''}` : undefined}><Avatar name={user?.name ?? '?'} /></span>
+            <div className={clsx('min-w-0 flex-1', compact && 'lg:hidden')}>
               <p className="truncate text-sm font-medium text-white">{user?.name}</p>
               <p className="flex items-center gap-1 truncate text-2xs text-ink-400">
                 {user?.isSuperAdmin && <ShieldCheck className="h-3 w-3 shrink-0 text-accent-400" />}
