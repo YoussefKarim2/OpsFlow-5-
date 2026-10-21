@@ -8,7 +8,9 @@
  *
  * What typing can do depends on what the field stores:
  *   - `allowCustom`: the field is free text with suggestions (a season, a
- *     fabric, an item), so whatever is typed is kept as the value.
+ *     fabric, an item). Enter still takes the highlighted suggestion, so a
+ *     half-typed word never becomes a value by accident; new text is kept from
+ *     the "Use …" row (arrow up to it, or click it), or by Tab / leaving the box.
  *   - otherwise the value must be one of the list — an id, a status — so typing
  *     searches; text that matches no option is put back to the current choice
  *     when the box is left, rather than saving something the server would refuse.
@@ -155,9 +157,9 @@ export function ComboSelect({
   const onType = (text: string) => {
     setQuery(text);
     setOpen(true);
-    // With free text allowed, Enter keeps what was typed (or the option it
-    // spells exactly); otherwise Enter takes the best match.
-    setActive(allowCustom || !norm(text) ? -1 : 0);
+    // Enter takes the best match. Where free text is allowed and nothing
+    // matches, Enter keeps what was typed (the "Use …" row).
+    setActive(norm(text) ? 0 : -1);
   };
 
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -165,8 +167,12 @@ export function ComboSelect({
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       if (!open) { openList(); return; }
-      if (count === 0) return;
-      setActive((a) => (e.key === 'ArrowDown' ? (a + 1) % count : (a <= 0 ? count - 1 : a - 1)));
+      // With a "Use …" row on top, index -1 is that row.
+      const first = offerCustom ? -1 : 0;
+      if (count === 0) { if (offerCustom) setActive(-1); return; }
+      setActive((a) => (e.key === 'ArrowDown'
+        ? (a + 1 >= count ? first : a + 1)
+        : (a <= first ? count - 1 : a - 1)));
     } else if (e.key === 'Enter') {
       if (!open && !typing) return;
       e.preventDefault();
@@ -200,7 +206,7 @@ export function ComboSelect({
         if (disabled || e.target === inputRef.current || !boxRef.current?.contains(e.target as Node)) return;
         e.preventDefault();
         inputRef.current?.focus();
-        if (open) close(); else openList();
+        if (open) close(); else { openList(); if (query === null) inputRef.current?.select(); }
       }}
     >
       <input
@@ -222,7 +228,9 @@ export function ComboSelect({
         value={query ?? shown}
         placeholder={placeholder}
         onFocus={(e) => { e.currentTarget.select(); }}
-        onClick={() => { if (!open) openList(); }}
+        // Opening the list selects the text, so typing replaces the current
+        // choice instead of adding to it — also when the box already had focus.
+        onClick={(e) => { if (!open) { openList(); if (query === null) e.currentTarget.select(); } }}
         onChange={(e) => onType(e.target.value)}
         onKeyDown={onKey}
         onBlur={commit}
@@ -239,7 +247,8 @@ export function ComboSelect({
         >
           {offerCustom && (
             <li
-              className="cursor-pointer border-b border-ink-100 px-3 py-1.5 text-accent-700 hover:bg-accent-50"
+              className={clsx('cursor-pointer border-b border-ink-100 px-3 py-1.5 text-accent-700 hover:bg-accent-50', active === -1 && 'bg-accent-50')}
+              onMouseEnter={() => setActive(-1)}
               onClick={() => { emit(query!.trim()); close(); }}
             >
               Use “{query!.trim()}”
