@@ -84,7 +84,11 @@ export function ComboSelect({
   /** What is being typed; null while the box shows the current choice. */
   const [query, setQuery] = useState<string | null>(null);
   const [active, setActive] = useState(-1);
-  const [pos, setPos] = useState<{ top: number; left: number; width: number; maxHeight: number } | null>(null);
+  const [pos, setPos] = useState<{ top?: number; bottom?: number; left: number; width: number; maxWidth: number; maxHeight: number } | null>(null);
+  /** Whether the highlight was last moved by the mouse: Tab then keeps the current choice. */
+  const hovered = useRef(false);
+  /** When the box itself was last pressed, so a <label> around it cannot reopen the list it just closed. */
+  const boxPressedAt = useRef(0);
   const boxRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
@@ -96,7 +100,10 @@ export function ComboSelect({
     if (!typing) return usable;
     const q = norm(query!);
     if (!q) return usable;
-    const starts = usable.filter((o) => norm(o.label).startsWith(q));
+    // An exact match first, so Enter takes "Navy" over "Navy Melange", the
+    // same choice leaving the box would make.
+    const isExact = (o: Opt) => norm(o.label) === q || o.value === query!.trim();
+    const starts = usable.filter((o) => norm(o.label).startsWith(q)).sort((a, b) => Number(isExact(b)) - Number(isExact(a)));
     const contains = usable.filter((o) => !norm(o.label).startsWith(q) && (norm(o.label).includes(q) || norm(o.value) === q));
     return [...starts, ...contains];
   }, [options, typing, query]);
@@ -108,7 +115,7 @@ export function ComboSelect({
     onChange?.({ target: { value: next, name }, currentTarget: { value: next, name } } as unknown as ChangeEvent<HTMLSelectElement>);
   }, [name, onChange, value]);
 
-  const close = () => { setOpen(false); setQuery(null); setActive(-1); };
+  const close = () => { setOpen(false); setQuery(null); setActive(-1); hovered.current = false; };
   const pick = (o: Opt) => { emit(o.value); close(); };
 
   /** Leaving the box: keep a match, keep typed text where the field allows it, otherwise put the choice back. */
@@ -127,18 +134,37 @@ export function ComboSelect({
   const place = useCallback(() => {
     const r = boxRef.current?.getBoundingClientRect();
     if (!r) return;
-    const below = window.innerHeight - r.bottom - 8;
-    const above = r.top - 8;
+    // The visible area, which on a phone excludes the on-screen keyboard.
+    // Fixed positions count from the page area, which excludes scrollbars.
+    const { clientWidth: pageWidth, clientHeight: pageHeight } = document.documentElement;
+    const vv = window.visualViewport;
+    const viewTop = vv?.offsetTop ?? 0;
+    const viewBottom = Math.min(pageHeight, viewTop + (vv?.height ?? pageHeight));
+    const below = viewBottom - r.bottom - 8;
+    const above = r.top - viewTop - 8;
     const up = below < 200 && above > below;
-    const maxHeight = Math.min(280, Math.max(120, up ? above : below));
-    setPos({ top: up ? r.top - 2 - maxHeight : r.bottom + 2, left: r.left, width: Math.max(r.width, 180), maxHeight });
+    const maxHeight = Math.max(80, Math.min(280, up ? above : below));
+    // Kept on screen at the right edge; a list opening upwards hangs from the
+    // box by its bottom edge, so a short list sits against the box.
+    const width = Math.max(r.width, 180);
+    const left = Math.max(8, Math.min(r.left, pageWidth - width - 8));
+    setPos({
+      ...(up ? { bottom: pageHeight - r.top + 2 } : { top: r.bottom + 2 }),
+      left, width, maxWidth: Math.min(512, pageWidth - left - 8), maxHeight,
+    });
   }, []);
   useLayoutEffect(() => {
     if (!open) return;
     place();
     window.addEventListener('scroll', place, true);
     window.addEventListener('resize', place);
-    return () => { window.removeEventListener('scroll', place, true); window.removeEventListener('resize', place); };
+    window.visualViewport?.addEventListener('resize', place);
+    window.visualViewport?.addEventListener('scroll', place);
+    return () => {
+      window.removeEventListener('scroll', place, true); window.removeEventListener('resize', place);
+      window.visualViewport?.removeEventListener('resize', place);
+      window.visualViewport?.removeEventListener('scroll', place);
+    };
   }, [open, place]);
 
   // Keep the highlighted option in view.
@@ -152,6 +178,7 @@ export function ComboSelect({
     setOpen(true);
     const i = matches.findIndex((o) => o.value === value);
     setActive(i);
+    hovered.current = false;
   };
 
   const onType = (text: string) => {
@@ -160,6 +187,7 @@ export function ComboSelect({
     // Enter takes the best match. Where free text is allowed and nothing
     // matches, Enter keeps what was typed (the "Use …" row).
     setActive(norm(text) ? 0 : -1);
+    hovered.current = false;
   };
 
   const onKey = (e: KeyboardEvent<HTMLInputElement>) => {
@@ -169,6 +197,7 @@ export function ComboSelect({
       if (!open) { openList(); return; }
       // With a "Use …" row on top, index -1 is that row.
       const first = offerCustom ? -1 : 0;
+      hovered.current = false;
       if (count === 0) { if (offerCustom) setActive(-1); return; }
       setActive((a) => (e.key === 'ArrowDown'
         ? (a + 1 >= count ? first : a + 1)
@@ -181,7 +210,8 @@ export function ComboSelect({
     } else if (e.key === 'Escape') {
       if (open || typing) { e.preventDefault(); e.stopPropagation(); close(); }
     } else if (e.key === 'Tab') {
-      if (open && active >= 0 && active < count && (!typing || !allowCustom)) pick(matches[active]!);
+      // Not an option the pointer merely passed over on the way.
+      if (open && active >= 0 && active < count && !hovered.current && (!typing || !allowCustom)) pick(matches[active]!);
       else commit();
     }
   };
@@ -205,8 +235,10 @@ export function ComboSelect({
         // clicks on the box itself count.
         if (disabled || e.target === inputRef.current || !boxRef.current?.contains(e.target as Node)) return;
         e.preventDefault();
+        boxPressedAt.current = Date.now();
         inputRef.current?.focus();
-        if (open) close(); else { openList(); if (query === null) inputRef.current?.select(); }
+        // Closing with the arrow keeps typed text the way leaving the box does.
+        if (open) commit(); else { openList(); if (query === null) inputRef.current?.select(); }
       }}
     >
       <input
@@ -230,7 +262,11 @@ export function ComboSelect({
         onFocus={(e) => { e.currentTarget.select(); }}
         // Opening the list selects the text, so typing replaces the current
         // choice instead of adding to it — also when the box already had focus.
-        onClick={(e) => { if (!open) { openList(); if (query === null) e.currentTarget.select(); } }}
+        onClick={(e) => {
+          // A <label> around the box passes the press on as a click here.
+          if (Date.now() - boxPressedAt.current < 500) return;
+          if (!open) { openList(); if (query === null) e.currentTarget.select(); }
+        }}
         onChange={(e) => onType(e.target.value)}
         onKeyDown={onKey}
         onBlur={commit}
@@ -241,14 +277,14 @@ export function ComboSelect({
           ref={listRef}
           id={listId}
           role="listbox"
-          style={{ position: 'fixed', top: pos.top, left: pos.left, minWidth: pos.width, maxHeight: pos.maxHeight }}
-          className="z-[70] max-w-[min(32rem,calc(100vw-1rem))] overflow-y-auto rounded-md border border-ink-200 bg-white py-1 text-sm normal-case tracking-normal text-ink-800 shadow-lg"
+          style={{ position: 'fixed', top: pos.top, bottom: pos.bottom, left: pos.left, minWidth: pos.width, maxWidth: pos.maxWidth, maxHeight: pos.maxHeight }}
+          className="z-[70] overflow-y-auto rounded-md border border-ink-200 bg-white py-1 text-sm normal-case tracking-normal text-ink-800 shadow-lg"
           onMouseDown={(e) => e.preventDefault()}
         >
           {offerCustom && (
             <li
               className={clsx('cursor-pointer border-b border-ink-100 px-3 py-1.5 text-accent-700 hover:bg-accent-50', active === -1 && 'bg-accent-50')}
-              onMouseEnter={() => setActive(-1)}
+              onMouseEnter={() => { setActive(-1); hovered.current = true; }}
               onClick={() => { emit(query!.trim()); close(); }}
             >
               Use “{query!.trim()}”
@@ -270,7 +306,7 @@ export function ComboSelect({
                 o.value === value && 'font-semibold',
               )}
               title={o.label}
-              onMouseEnter={() => setActive(i)}
+              onMouseEnter={() => { setActive(i); hovered.current = true; }}
               onClick={() => pick(o)}
             >
               {o.label || ' '}
