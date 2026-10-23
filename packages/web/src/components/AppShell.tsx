@@ -135,8 +135,10 @@ export function AppShell({ children }: { children: ReactNode }) {
                     )
                   }
                 >
-                  {/* 24px when narrow: the icons' own grid, so every line falls on a whole pixel. */}
-                  <item.icon className={clsx('h-4 w-4 shrink-0 transition-[width,height]', ease, compact && 'lg:h-6 lg:w-6')} />
+                  {/* 24px when narrow, the icons' own grid, drawn with a 1.5px line
+                      rather than the default 2px so the larger icons stay as light
+                      as the small ones beside the labels. */}
+                  <item.icon className={clsx('h-4 w-4 shrink-0 transition-[width,height,stroke-width]', ease, compact && 'lg:h-6 lg:w-6 lg:[stroke-width:1.5]')} />
                   <span className={clsx('truncate transition-opacity', ease, compact && 'lg:opacity-0')}>{item.label}</span>
                 </NavLink>
               ))}
