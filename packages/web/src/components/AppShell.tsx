@@ -67,6 +67,12 @@ export function AppShell({ children }: { children: ReactNode }) {
   // page and takes no width from it.
   const { pathname } = useLocation();
   const compact = pathname === '/orders' || pathname.startsWith('/orders/');
+  // Narrowing slides rather than reflows: on desktop the sidebar sits over the
+  // page's left edge and only its own width animates, while the page takes its
+  // new width at once — so a wide Orders table is laid out once, not every
+  // frame. Icons keep their left edge, labels fade where they are, and nothing
+  // swaps alignment halfway, so the whole thing moves as one.
+  const ease = 'duration-300 ease-[cubic-bezier(0.2,0,0,1)] motion-reduce:transition-none';
 
   const visible = NAV.filter((n) => !n.requires || can(n.requires));
   const groups = [...new Set(visible.map((n) => n.group))];
@@ -76,16 +82,18 @@ export function AppShell({ children }: { children: ReactNode }) {
       {/* Sidebar */}
       <aside
         className={clsx(
-          'fixed inset-y-0 left-0 z-40 flex w-60 flex-col border-r border-ink-800 bg-ink-950 transition-[transform,width] lg:static lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-40 flex w-60 flex-col overflow-hidden border-r border-ink-800 bg-ink-950 transition-[transform,width] lg:translate-x-0',
+          ease,
           open ? 'translate-x-0' : '-translate-x-full',
           compact && 'lg:w-16',
         )}
       >
-        <div className={clsx('flex h-14 shrink-0 items-center gap-2.5 border-b border-ink-800 px-4', compact && 'lg:justify-center lg:px-0')}>
+        {/* 18px in from the edge: the logo's centre is the narrow bar's centre. */}
+        <div className="flex h-14 shrink-0 items-center gap-2.5 border-b border-ink-800 px-[18px]">
           <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-accent-600 text-sm font-bold text-white" title={compact ? 'OpsFlow' : undefined}>
             OF
           </div>
-          <div className={clsx('min-w-0', compact && 'lg:hidden')}>
+          <div className={clsx('min-w-0 whitespace-nowrap transition-opacity', ease, compact && 'lg:opacity-0')}>
             <p className="truncate text-sm font-semibold text-white">OpsFlow</p>
             <p className="truncate text-2xs text-ink-400">Order Control Centre</p>
           </div>
@@ -96,10 +104,18 @@ export function AppShell({ children }: { children: ReactNode }) {
 
         <nav className="flex-1 overflow-y-auto px-2 py-3">
           {groups.map((group, gi) => (
-            <div key={group} className={clsx('mb-4', compact && 'lg:mb-2')}>
-              <p className={clsx('mb-1 px-2 text-2xs font-semibold uppercase tracking-wider text-ink-500', compact && 'lg:hidden')}>{group}</p>
-              {/* Icon-only: a thin rule stands in for the group heading. */}
-              {compact && gi > 0 && <div className="mx-2 mb-2 hidden border-t border-ink-800 lg:block" aria-hidden />}
+            <div key={group} className={clsx('transition-[margin]', ease, compact ? 'mb-4 lg:mb-2' : 'mb-4')}>
+              <p className={clsx(
+                'max-h-4 overflow-hidden whitespace-nowrap px-2 text-2xs font-semibold uppercase tracking-wider text-ink-500 transition-[max-height,margin,opacity]',
+                ease, compact ? 'mb-1 lg:mb-0 lg:max-h-0 lg:opacity-0' : 'mb-1',
+              )}>{group}</p>
+              {/* Icon-only: a thin rule fades in where the group heading was. */}
+              {gi > 0 && (
+                <div aria-hidden className={clsx(
+                  'mx-2 hidden border-t transition-[border-color,margin] lg:block', ease,
+                  compact ? 'mb-2 border-ink-800' : 'mb-0 border-transparent',
+                )} />
+              )}
               {visible.filter((n) => n.group === group).map((item) => (
                 <NavLink
                   key={item.to}
@@ -109,16 +125,19 @@ export function AppShell({ children }: { children: ReactNode }) {
                   title={compact ? item.label : undefined}
                   className={({ isActive }) =>
                     clsx(
-                      'mb-0.5 flex items-center gap-2.5 rounded-md px-2 py-1.5 text-sm transition-colors',
-                      compact && 'lg:justify-center lg:py-2',
+                      'mb-0.5 flex items-center gap-2.5 whitespace-nowrap rounded-md px-2 py-1.5 text-sm transition-[padding,background-color,color]',
+                      ease,
+                      // 12px in, so a 24px icon sits on the narrow bar's centre.
+                      compact && 'lg:py-2 lg:pl-3',
                       isActive
                         ? 'bg-accent-600/15 font-medium text-accent-200'
                         : 'text-ink-300 hover:bg-ink-900 hover:text-white',
                     )
                   }
                 >
-                  <item.icon className={clsx('h-4 w-4 shrink-0', compact && 'lg:h-[22px] lg:w-[22px]')} />
-                  <span className={clsx('truncate', compact && 'lg:sr-only')}>{item.label}</span>
+                  {/* 24px when narrow: the icons' own grid, so every line falls on a whole pixel. */}
+                  <item.icon className={clsx('h-4 w-4 shrink-0 transition-[width,height]', ease, compact && 'lg:h-6 lg:w-6')} />
+                  <span className={clsx('truncate transition-opacity', ease, compact && 'lg:opacity-0')}>{item.label}</span>
                 </NavLink>
               ))}
             </div>
@@ -149,7 +168,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       {open && <div className="fixed inset-0 z-30 bg-ink-950/50 lg:hidden" onClick={() => setOpen(false)} />}
 
       {/* Main */}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className={clsx('flex min-w-0 flex-1 flex-col print:!pl-0', compact ? 'lg:pl-16' : 'lg:pl-60')}>
         <header className="no-print sticky top-0 z-20 flex h-14 shrink-0 items-center gap-3 border-b border-ink-200 bg-white px-4">
           <button className="text-ink-500 lg:hidden" onClick={() => setOpen(true)}>
             <Menu className="h-5 w-5" />
