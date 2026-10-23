@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import { QtyLedger } from '../enums.js';
 import { safeDiv, safePct, roundUp, fmtNumber, fmtMoney, NOT_CALCULATED } from './num.js';
 import {
-  buildMatrix, computeCutOrderTotal, computeCutMatrix, computeCuttableQty, ledgerTotal, computeStockDeduction,
+  buildMatrix, computeCutOrderTotal, computeCutOrderQty, computeCutMatrix, computeCuttableQty, ledgerTotal, computeStockDeduction,
   computeCutVariance, computeFunnel, computeColorProgress, type QtyCell, type AxisRef,
 } from './quantities.js';
 import { computeProductionAnalytics } from './production.js';
@@ -114,8 +114,8 @@ describe('quantities — Main Order sheet', () => {
 });
 
 describe('quantities — Cut Order allowance', () => {
-  // The rule under test: ROUNDUP(mainOrderQty × (1 + cutPct)), applied ONCE at
-  // the total, with the size/colour grid apportioned to sum to exactly that.
+  // The rule under test: ROUNDUP(cell × (1 + cutPct)) for every colour and
+  // size on its own, the headline being the sum of the cells.
   // Rounding always goes up: pieces are whole and a factory must never cut
   // fewer than the allowance asks for.
 
@@ -157,30 +157,30 @@ describe('quantities — Cut Order allowance', () => {
 
   test('the breakdown sums to exactly the headline cut quantity', () => {
     const cut = computeCutMatrix(orderCells(), COLORS, SIZES, CUT_PCT);
-    assert.equal(ledgerTotal(cut, QtyLedger.CUT), computeCutOrderTotal(1972, CUT_PCT));
-    assert.equal(ledgerTotal(cut, QtyLedger.CUT), 2071);
+    assert.equal(ledgerTotal(cut, QtyLedger.CUT), computeCutOrderQty(orderCells(), COLORS, SIZES, CUT_PCT));
+    // Each of the forty cells rounded up on its own: 13 above 1,972 × 1.05 rounded once.
+    assert.equal(ledgerTotal(cut, QtyLedger.CUT), 2084);
   });
 
   test('row and column totals reconcile to that same total', () => {
     const cut = computeCutMatrix(orderCells(), COLORS, SIZES, CUT_PCT);
     const m = buildMatrix(cut, COLORS, SIZES, QtyLedger.CUT);
-    assert.equal(totalOf(Object.values(m.rowTotals)), 2071);
-    assert.equal(totalOf(Object.values(m.colTotals)), 2071);
-    assert.equal(m.grandTotal, 2071);
+    assert.equal(totalOf(Object.values(m.rowTotals)), 2084);
+    assert.equal(totalOf(Object.values(m.colTotals)), 2084);
+    assert.equal(m.grandTotal, 2084);
   });
 
-  test('every cell stays within one piece of its exact share', () => {
+  test('every cell is its own pieces plus the allowance, rounded up', () => {
     const cut = computeCutMatrix(orderCells(), COLORS, SIZES, CUT_PCT);
     const order = buildMatrix(orderCells(), COLORS, SIZES, QtyLedger.ORDER);
     for (const c of cut) {
       const exact = (order.cells[c.colorId]?.[c.sizeId] ?? 0) * (1 + CUT_PCT);
-      assert.ok(Math.abs(c.qty - exact) < 1, `${c.colorId}/${c.sizeId}: ${c.qty} vs ${exact}`);
+      assert.equal(c.qty, Math.ceil(exact - 1e-6), `${c.colorId}/${c.sizeId}: ${c.qty} vs ${exact}`);
     }
   });
 
-  test('the spare piece goes to the largest fraction', () => {
-    // 300 / 500 / 700 / 472 at 5% → 315 / 525 / 735 / 496, summing to 2,071.
-    // Only the 472 cell has a fraction (495.6), so it takes the spare piece.
+  test('a fraction of a piece rounds up in its own cell', () => {
+    // 300 / 500 / 700 / 472 at 5% → 315 / 525 / 735 / 495.6 → 496.
     const colors: AxisRef[] = [{ id: 'Black', name: 'Black', position: 0 }];
     const sizes: AxisRef[] = ['S', 'M', 'L', 'XL'].map((n, i) => ({ id: n, name: n, position: i }));
     const cells: QtyCell[] = [300, 500, 700, 472].map((qty, i) => ({
@@ -645,7 +645,8 @@ describe('finished stock comes off the cut order', () => {
   test('with nothing in stock, nothing is subtracted', () => {
     // The behaviour every order without a stock entry must keep seeing.
     assert.equal(computeCuttableQty(ORDER, COLORS, SIZES), 810);
-    assert.equal(cutTotal(ORDER), computeCutOrderTotal(810, 0.05));
+    assert.equal(cutTotal(ORDER), computeCutOrderQty(ORDER, COLORS, SIZES, 0.05));
+    // 105 + 210 + 157.5→158 + 84 + 168 + 126
     assert.equal(cutTotal(ORDER), 851);
   });
 
@@ -653,8 +654,9 @@ describe('finished stock comes off the cut order', () => {
     const withStock = [...ORDER,
       cell('navy', 's', QtyLedger.STOCK, 50), cell('white', 'm', QtyLedger.STOCK, 60)];
     assert.equal(computeCuttableQty(withStock, COLORS, SIZES), 700);
-    // 700 × 1.05 = 735 — the allowance is not paid on pieces already held.
-    assert.equal(cutTotal(withStock), 735);
+    // Navy S 50 → 52.5 → 53, Navy L 150 → 157.5 → 158, the rest exact:
+    // 53 + 210 + 158 + 84 + 105 + 126 = 736. No allowance on pieces already held.
+    assert.equal(cutTotal(withStock), 736);
   });
 
   test('it is deducted from the colour and size it belongs to', () => {
@@ -682,10 +684,9 @@ describe('finished stock comes off the cut order', () => {
   });
 
   test('the grid still sums to the headline figure', () => {
-    // The invariant the apportionment exists to protect, now with stock in play.
+    // The headline is the sum of the cells, with stock in play too.
     const withStock = [...ORDER,
       cell('navy', 'm', QtyLedger.STOCK, 37), cell('white', 'l', QtyLedger.STOCK, 11)];
-    const net = computeCuttableQty(withStock, COLORS, SIZES);
-    assert.equal(cutTotal(withStock), computeCutOrderTotal(net, 0.05));
+    assert.equal(cutTotal(withStock), computeCutOrderQty(withStock, COLORS, SIZES, 0.05));
   });
 });

@@ -89,7 +89,7 @@ Extracted and reimplemented exactly:
 
 | Excel | Location | Rule |
 |---|---|---|
-| `ROUNDUP(MainOrder × (1 + cutPct))` | `Cut Order!S44` | Cut order total, rounded up once at the total: 1,972 at 5% → 2,071. The colour/size grid is apportioned by largest remainder to sum to exactly that, so the header and the grid cannot disagree. |
+| `ROUNDUP(cell × (1 + cutPct))` | `Cut Order!S44` | Every colour/size cell gets the allowance on its own and is rounded up to a whole piece (41 × 1.05 = 43.05 → 44). The cut order total is the sum of the cells: 1,972 at 5% → 2,084 on the reference order. |
 | `=K17-I17` | `BOM!L17` | Shortage = issued − required (negative = short) |
 | `=SUM(D23:R23)` / `=SUM(D23:D45)` | `Main Order` | Row/column/grand totals |
 | `=D22/D14` | `Costing!D17` | Work days = machine-days used ÷ machine count |

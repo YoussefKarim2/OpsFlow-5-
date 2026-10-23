@@ -11,7 +11,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Wand2, Save, FileSearch } from 'lucide-react';
 import {
   QtyLedger, LEDGER_LABEL, buildMatrix, fmtNumber, fmtDate,
-  ledgerTotal, computeCutOrderTotal, computeCuttableQty,
+  ledgerTotal, computeCutOrderQty, computeCuttableQty,
   type OrderDetailDto, type QtyCell, type AxisRef,
 } from '@opsflow/shared';
 import { api, ApiError } from '../../lib/api';
@@ -231,7 +231,7 @@ export function QuantityTab({
   const pctParsed = Number(pctText);
   const pctValid = Number.isFinite(pctParsed) && pctParsed >= 0 && pctParsed <= 50;
   const cutPct = pctValid ? pctParsed / 100 : order.cutPercentage;
-  const cutOrderQty = computeCutOrderTotal(cuttableQty, cutPct);
+  const cutOrderQty = computeCutOrderQty(withEdits, colors, sizes, cutPct);
   const savedCutQty = ledgerTotal(baseCells, QtyLedger.CUT);
   const pctDirty = pctDraft !== null && Math.abs(cutPct - order.cutPercentage) > 1e-9;
 
@@ -275,7 +275,7 @@ export function QuantityTab({
                 onClick={() => generateCut.mutate()}
                 disabled={generateCut.isPending}
                 className="btn-secondary btn-sm"
-                title={`ROUNDUP(main order × ${(1 + order.cutPercentage).toFixed(4)}), shared across the grid`}
+                title={`Each size: ROUNDUP(main order × ${(1 + order.cutPercentage).toFixed(4)})`}
               >
                 <Wand2 className="h-3.5 w-3.5" />
                 {generateCut.isPending ? 'Generating…' : `Regenerate at ${(order.cutPercentage * 100).toFixed(0)}%`}
@@ -365,10 +365,10 @@ export function QuantityTab({
                 {/* The arithmetic, shown. With stock recorded the subtraction
                     is named, so the figure is never a number nobody can trace. */}
                 <div className="mt-0.5 text-2xs text-ink-400">
-                  Calculated — {stockQty > 0
-                    ? `(${fmtNumber(mainOrderQty)} − ${fmtNumber(stockQty)} in stock) × `
-                    : `${fmtNumber(mainOrderQty)} × `}
-                  {(1 + cutPct).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}
+                  Each size of {stockQty > 0
+                    ? `(${fmtNumber(mainOrderQty)} − ${fmtNumber(stockQty)} in stock)`
+                    : fmtNumber(mainOrderQty)}
+                  {' × '}{(1 + cutPct).toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}, rounded up
                 </div>
               </div>
 
@@ -408,10 +408,10 @@ export function QuantityTab({
             <p className="bg-blue-50 px-4 py-2 text-xs text-blue-800">
               The cut quantity is calculated, not typed:
               <code className="mx-1 rounded bg-white px-1 py-0.5 font-mono text-2xs">
-                ROUNDUP(main order × (1 + {cutPct.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}))
+                ROUNDUP(size × (1 + {cutPct.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}))
               </code>
-              rounded up once to whole pieces. The grid below is shared out to sum to exactly
-              that total. The Main Order itself is never changed.
+              for every colour and size on its own, rounded up to a whole piece even for 0.01.
+              The total is the sum of the grid. The Main Order itself is never changed.
             </p>
 
             {savedCutQty === 0 ? (

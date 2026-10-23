@@ -107,25 +107,12 @@ export function ledgerTotals(cells: readonly QtyCell[]): Record<QtyLedger, numbe
 const PIECE_EPSILON = 1e-6;
 
 /**
- * Cut Order total — the headline figure.
+ * One cell's cut quantity: its pieces with the allowance added, rounded UP to
+ * a whole piece. Pieces are whole, and a factory must never cut fewer than the
+ * allowance asks for, so even 0.01 of a piece rounds up.
  *
- * ROUNDING RULE (the single rule for the whole Cut Order):
- * the allowance is applied to the Main Order total and rounded UP once, at the
- * total. Pieces are whole, and a factory must never cut fewer than the
- * allowance asks for, so the rounding always goes up.
- *
- *     cutOrderQty = ROUNDUP(mainOrderQty × (1 + cutPct))
- *     1,972 × 1.05 = 2,070.6 → 2,071
- *     1,000 × 1.00 = 1,000.0 → 1,000
- *     1,000 × 1.10 = 1,100.0 → 1,100
- *
- * The size/colour breakdown is then apportioned to sum to exactly this number
- * (see `computeCutMatrix`), so the header and the grid can never disagree.
- *
- * The quantity passed in is what remains to be cut — the order less any
- * finished stock already held (see `computeCuttableQty`). Stock that exists
- * does not need cutting, and the allowance applies to what is actually cut, not
- * to pieces already sitting in the warehouse.
+ *     40 × 1.05 = 42.0  → 42
+ *     41 × 1.05 = 43.05 → 44
  */
 export function computeCutOrderTotal(mainOrderQty: number, cutPct: number): number {
   if (!Number.isFinite(mainOrderQty) || mainOrderQty <= 0) return 0;
@@ -135,15 +122,14 @@ export function computeCutOrderTotal(mainOrderQty: number, cutPct: number): numb
 /**
  * Apply the cut allowance across the whole matrix, producing CUT ledger cells.
  *
- * Rounding up every cell independently would overshoot the headline total —
- * on the reference order, forty cells each gaining most of a piece adds 13 —
- * and the grid would then contradict the number printed above it. So each cell
- * takes its exact share, the fractions are floored, and the pieces left over
- * are handed to the largest fractions first (largest-remainder apportionment).
+ * ROUNDING RULE (the single rule for the whole Cut Order): the allowance is
+ * applied to every colour and size on its own and each is rounded up — see
+ * `computeCutOrderTotal`. The headline total is the sum of those cells (see
+ * `computeCutOrderQty`), so it can be a few pieces above the total × (1 +
+ * allowance): every size gets its full allowance, rather than the extra being
+ * shared out from a total rounded once.
  *
- * Every cell lands within one piece of its exact share, the column sums to the
- * headline total by construction, and the result is deterministic: ties break
- * on colour then size position, never on object key order.
+ * What is cut is the order less finished stock already held, per cell.
  */
 export function computeCutMatrix(
   cells: readonly QtyCell[],
@@ -155,46 +141,25 @@ export function computeCutMatrix(
   // Finished stock already covers part of the order, so it is not cut again.
   // Netted per cell — see `computeCuttableQty` for why not on the totals.
   const stock = buildMatrix(cells, colors, sizes, QtyLedger.STOCK);
-  const netAt = (colorId: string, sizeId: string): number =>
-    Math.max(0, (order.cells[colorId]?.[sizeId] ?? 0) - (stock.cells[colorId]?.[sizeId] ?? 0));
-
-  const target = computeCutOrderTotal(computeCuttableQty(cells, colors, sizes), cutPct);
-  if (target <= 0) return [];
-
-  interface Share { colorId: string; sizeId: string; base: number; remainder: number; rank: number }
-  const shares: Share[] = [];
-  let allocated = 0;
-
-  order.colors.forEach((c, ci) => {
-    order.sizes.forEach((s, si) => {
-      const orderQty = netAt(c.id, s.id);
-      if (orderQty <= 0) return;
-      const exact = orderQty * (1 + cutPct);
-      const base = Math.floor(exact + PIECE_EPSILON);
-      allocated += base;
-      shares.push({
-        colorId: c.id, sizeId: s.id,
-        base, remainder: exact - base,
-        rank: ci * order.sizes.length + si,
-      });
-    });
-  });
-
-  // Flooring can only ever land at or below the target, so this is never negative.
-  let leftover = target - allocated;
-  const byRemainder = [...shares].sort((a, b) => b.remainder - a.remainder || a.rank - b.rank);
-  for (const share of byRemainder) {
-    if (leftover <= 0) break;
-    share.base += 1;
-    leftover -= 1;
+  const out: QtyCell[] = [];
+  for (const c of order.colors) {
+    for (const s of order.sizes) {
+      const net = Math.max(0, (order.cells[c.id]?.[s.id] ?? 0) - (stock.cells[c.id]?.[s.id] ?? 0));
+      const qty = computeCutOrderTotal(net, cutPct);
+      if (qty > 0) out.push({ colorId: c.id, sizeId: s.id, ledger: QtyLedger.CUT, qty });
+    }
   }
+  return out;
+}
 
-  return shares
-    .filter((share) => share.base > 0)
-    .map((share) => ({
-      colorId: share.colorId, sizeId: share.sizeId,
-      ledger: QtyLedger.CUT, qty: share.base,
-    }));
+/** The Cut Order headline: the sum of the cells `computeCutMatrix` rounds up one by one. */
+export function computeCutOrderQty(
+  cells: readonly QtyCell[],
+  colors: AxisRef[],
+  sizes: AxisRef[],
+  cutPct: number,
+): number {
+  return computeCutMatrix(cells, colors, sizes, cutPct).reduce((a, c) => a + c.qty, 0);
 }
 
 /**
