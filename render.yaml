@@ -1,0 +1,57 @@
+# Render Blueprint — a second home for OpsFlow, alongside Railway.
+#
+# New → Blueprint in the Render dashboard, pick this repository, and Render
+# creates both pieces below. One web service serves the API and the built web
+# app together, exactly as on Railway (see railpack.json).
+#
+# Free plan: the web service sleeps after 15 minutes idle and the free
+# database is deleted 30 days after it is created. Change both `plan` values
+# to `starter` before relying on this for real work.
+
+services:
+  - type: web
+    name: opsflow
+    runtime: node
+    plan: free
+    region: frankfurt
+    branch: main
+    # NODE_ENV=production makes a plain `npm ci` skip devDependencies, and the
+    # build needs them (typescript, prisma, vite).
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm run migrate:deploy -w @opsflow/server && npm run start -w @opsflow/server
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: opsflow-db
+          property: connectionString
+      # A new random secret, not Railway's: sessions are per site.
+      - key: JWT_SECRET
+        generateValue: true
+      # Render puts one proxy in front of the service. The login rate limiter
+      # keys on the caller's address, so this must not be "false" here.
+      - key: TRUST_PROXY
+        value: "1"
+      - key: STORAGE_DRIVER
+        value: db
+      # Off while Railway is still live: both sites would send the same
+      # deadline and overdue alerts, so everyone would get each one twice.
+      - key: EMAIL_SENDING_ENABLED
+        value: "false"
+      # The free instance's disk is wiped on every deploy and restart, so
+      # on-disk backups there would be lost anyway.
+      - key: BACKUP_ENABLED
+        value: "false"
+
+databases:
+  - name: opsflow-db
+    plan: free
+    region: frankfurt
+    databaseName: opsflow
+    user: opsflow
+    postgresMajorVersion: "17"
