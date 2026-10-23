@@ -847,3 +847,80 @@ describe('a proforma invoice workbook', () => {
     assert.deepEqual(m.sizes, ['YXXS', 'YXS', 'YS', 'YM', 'YL', 'AS', 'AM', 'AL', 'AXL', 'AXXL']);
   });
 });
+
+describe('reading a customer workbook: fixes after the load-build template', () => {
+  test('a title block of five label lines above a gap still leaves the real header in reach', async () => {
+    const rows = [
+      ['ACME Sportswear', 'Purchase Order'],
+      [],
+      ['PO Number', 'PO-77'],
+      ['Customer', 'Acme'],
+      ['Ship to', 'Cairo'],
+      ['Season', 'SS27'],
+      [],
+      ['Style', 'Colour', 'Size', 'Qty'],
+      ['T1', 'Navy', 'S', 10],
+      ['T1', 'Navy', 'M', 20],
+    ];
+    const result = await extractTabular(await buildWorkbook([{ name: 'PO', rows }]));
+    assert.equal(result.analysis.headerRowIndex, 8);
+    assert.equal(result.matrices[0]!.computedTotal, 30);
+  });
+
+  test('a repeated header row with a block title beside it is still a repeat', async () => {
+    const rows = [
+      ['PO Number', 'Style', 'Color', 'Size', 'Qty'],
+      ['PO-1', 'ST-1', 'Navy', 'S', 10],
+      ['Total', null, null, null, 10],
+      [],
+      ['PO Number', 'Style', 'Color', 'Size', 'Qty', null, 'Block 2'],
+      ['PO-1', 'ST-2', 'Red', 'S', 7],
+      ['Total', null, null, null, 7],
+    ];
+    const result = await extractTabular(await buildWorkbook([{ name: 'PO', rows }]));
+    assert.equal(result.matrices[0]!.computedTotal, 17);
+  });
+
+  test('a right-hand table longer than the left-hand one is read to its end', async () => {
+    const rows = [
+      ['Color', 'Size', 'Qty', null, 'Color', 'Size', 'Qty'],
+      ['Navy', 'S', 10, null, 'Red', 'S', 5],
+      ['Navy', 'M', 10, null, 'Red', 'M', 5],
+      [null, null, null, null, 'Red', 'L', 5],
+      [null, null, null, null, 'Red', 'XL', 5],
+    ];
+    const result = await extractTabular(await buildWorkbook([{ name: 'PO', rows }]));
+    assert.equal(result.matrices[0]!.computedTotal, 40);
+  });
+
+  test('a right-hand table carries on past the left-hand total', async () => {
+    const rows = [
+      ['Color', 'Size', 'Qty', null, 'Color', 'Size', 'Qty'],
+      ['Navy', 'S', 10, null, 'Red', 'S', 5],
+      ['Total', null, 10, null, 'Red', 'M', 5],
+      [null, null, null, null, 'Red', 'L', 5],
+      [null, null, null, null, 'Total', null, 15],
+    ];
+    const result = await extractTabular(await buildWorkbook([{ name: 'PO', rows }]));
+    const m = result.matrices[0]!;
+    assert.equal(m.computedTotal, 25);
+    assert.ok(!m.rows.some((r) => /total/i.test(r.color)));
+  });
+
+  test('a style printed once per group names the rows below it', async () => {
+    const rows = [
+      ['PO Number', 'Style', 'Color', 'Size', 'Qty'],
+      ['PO-1', 'ST-1', 'Navy', 'S', 10],
+      ['PO-1', null, 'Navy', 'M', 10],
+      ['PO-1', 'ST-2', 'Navy', 'S', 7],
+      ['PO-1', null, 'Navy', 'M', 7],
+    ];
+    const result = await extractTabular(await buildWorkbook([{ name: 'PO', rows }]));
+    const m = result.matrices[0]!;
+    assert.equal(m.computedTotal, 34);
+    assert.deepEqual(
+      m.rows.map((r) => [r.color, r.cells]),
+      [['ST-1 — Navy', { S: 10, M: 10 }], ['ST-2 — Navy', { S: 7, M: 7 }]],
+    );
+  });
+});

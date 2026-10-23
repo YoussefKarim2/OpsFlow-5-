@@ -81,7 +81,7 @@ export function parseAmount(raw: string): number | null {
 const BARCODE = /^\d{8,}$/;
 
 /** A whole-number piece count as printed ("12", "1,200", "12.0000"). */
-function pieces(text: string): number | null {
+export function pieces(text: string): number | null {
   const t = text.trim();
   if (BARCODE.test(t)) return null;
   const n = parseAmount(t);
@@ -109,10 +109,11 @@ export function isSizeLabel(text: string): boolean {
   if (group && rest !== t && rest) {
     if (LETTER_SIZE.test(rest) || WORD_SIZE.test(rest) || AGE_SIZE.test(rest)) return true;
     // "Youth 10" is a size; "W02" and "M12" are style codes. A number counts
-    // after a group *word*, not after a single letter — a production order's
-    // "W02 / Air Split Short" was read as a size heading, and the grid stopped
-    // at the row before it.
-    if (NUMERIC_SIZE.test(rest) && group[1]!.length > 1) return true;
+    // after a group *word* — a production order's "W02 / Air Split Short" was
+    // read as a size heading, and the grid stopped at the row before it. Of
+    // the single letters, Y, K and W before a number that is not zero-padded
+    // are how youth, kids' and waist sizes are written: "Y10", "K4", "W30".
+    if (NUMERIC_SIZE.test(rest) && (group[1]!.length > 1 || (/^[YKW]$/i.test(group[1]!) && !/^0/.test(rest)))) return true;
   }
   return NUMERIC_SIZE.test(t) && Number(t) > 0 && Number(t) <= 200;
 }
@@ -188,9 +189,12 @@ export function readHeading(cells: readonly GridCell[], index = 0): Heading | nu
     else other++;
   }
   // A lettered size beside bare numbers is a label and its value — "Size S | 8"
-  // — not a heading of sizes S and 8. Numbers only count as sizes together.
+  // — not a heading of sizes S and 8. Numbers only count as sizes together:
+  // where they outnumber the lettered sizes ("4 | 6 | 8 | XS", a kids' range
+  // running into the letters) the heading is all sizes.
   const lettered = sizes.some((s) => !/^\d{1,3}$/.test(s.label));
-  if (lettered && sizes.some((s) => /^\d{1,3}$/.test(s.label))) {
+  const bare = sizes.filter((s) => /^\d{1,3}$/.test(s.label)).length;
+  if (lettered && bare > 0 && bare <= sizes.length - bare) {
     for (let i = sizes.length - 1; i >= 0; i--) if (/^\d{1,3}$/.test(sizes[i]!.label)) sizes.splice(i, 1);
   }
   if (sizes.length < 2) return null;
@@ -463,8 +467,13 @@ export function readPrintedPieces(lines: readonly GridLine[]): number | null {
         // it: "TOTAL PCS" over "224". The cell under the label, by position —
         // only for a *total* label: a column headed "Pieces" has a line's
         // quantity beneath it, not the order's.
+        // Not a column heading of a size grid ("Colour | S | M | L | Total
+        // Qty"): under that heading is the first row's total, and taken as the
+        // order's it steered the choice of reading and warned of a mismatch
+        // that was not there.
         const below = lines[li + 1];
-        if (below && below.page === l.page && /total/i.test(text)) {
+        const gridHeading = l.cells.filter((d) => isSizeLabel(d.text.trim())).length >= 2;
+        if (below && below.page === l.page && /total/i.test(text) && !gridHeading) {
           const centre = (c.x + c.end) / 2;
           const under = below.cells.find((d) => Math.abs((d.x + d.end) / 2 - centre) <= 40);
           const v = under ? pieces(under.text.trim().replace(/\s*(pcs|pieces|units)$/i, '')) : null;

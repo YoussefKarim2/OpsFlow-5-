@@ -190,3 +190,48 @@ describe('other grid layouts', () => {
     assert.deepEqual(b!.rows.map((r) => [r.colour, r.total]), [['As ordered', 48]]);
   });
 });
+
+describe('size headings a number after one letter, and mixed headings', () => {
+  const at = (y: number, ...cells: Array<[string, number]>): GridLine => ({
+    page: 1, y, cells: cells.map(([text, x]) => cell(text, x, x + Math.max(8, text.length * 5))),
+  });
+
+  test('waist and youth sizes W30 and Y10 are sizes; style codes W02 and M12 are not', () => {
+    for (const s of ['W30', 'W32', 'Y6', 'Y10', 'K4']) assert.ok(isSizeLabel(s), s);
+    for (const s of ['W01', 'W02', 'M12']) assert.ok(!isSizeLabel(s), s);
+  });
+
+  test('a grid headed W30 | W32 | W34 reads its quantities', () => {
+    const lines = [
+      at(10, ['Colour', 10], ['W30', 100], ['W32', 140], ['W34', 180], ['Qty', 220]),
+      at(24, ['Indigo', 10], ['10', 100], ['20', 140], ['30', 180], ['60', 225]),
+    ];
+    assert.equal(gridsToOrder(readSizeGrids(lines))?.totalQty, 60);
+  });
+
+  test('a grid headed Y6 | Y8 | Y10 | Y12 reads its quantities', () => {
+    const lines = [
+      at(10, ['Colour', 10], ['Y6', 100], ['Y8', 140], ['Y10', 180], ['Y12', 220]),
+      at(24, ['Navy', 10], ['10', 100], ['20', 140], ['30', 180], ['40', 225]),
+    ];
+    assert.equal(gridsToOrder(readSizeGrids(lines))?.totalQty, 100);
+  });
+
+  test('numbers that outnumber the lettered sizes are sizes: 4 | 6 | 8 | XS', () => {
+    const lines = [
+      at(10, ['Colour', 10], ['4', 100], ['6', 140], ['8', 180], ['XS', 220], ['Qty', 260]),
+      at(24, ['Navy', 10], ['10', 100], ['20', 140], ['30', 180], ['40', 225], ['100', 262]),
+    ];
+    assert.equal(gridsToOrder(readSizeGrids(lines))?.totalQty, 100);
+  });
+
+  test('a "Total Qty" column heading is not the order\'s printed total', () => {
+    const lines = [
+      at(10, ['Colour', 10], ['S', 100], ['M', 140], ['L', 180], ['Total Qty', 220]),
+      at(24, ['Navy', 10], ['10', 100], ['20', 140], ['30', 180], ['60', 225]),
+      at(38, ['Red', 10], ['5', 100], ['5', 140], ['5', 180], ['15', 225]),
+      at(52, ['Total pcs: 75', 10]),
+    ];
+    assert.equal(readPrintedPieces(lines), 75);
+  });
+});

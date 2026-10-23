@@ -127,3 +127,20 @@ describe('the Pulse production order through the PDF reader', () => {
     assert.equal(result.fields.poNumber, 'IMPORT-TEST-0002');
   });
 });
+
+describe('a block size line that is not a piece count', () => {
+  test('is named as a problem rather than read as 1.2 or 26 pcs', () => {
+    const lines = [
+      line(700, 1, '16 PCS', '01. T-Shirt - Navy'),
+      line(688, 1, 'Size S', '1.200'),
+      line(676, 1, 'Size M', '2 x 6'),
+      line(664, 1, 'Size L', '16'),
+      line(652, 1, 'Total', '16 pcs'),
+    ];
+    const [b] = readStyleBlocks(lines);
+    assert.deepEqual(b!.rows[0]!.cells, { L: 16 });
+    assert.equal(b!.rows[0]!.total, 16);
+    assert.equal(b!.problems.length, 2);
+    assert.ok(b!.problems.every((p) => /not a piece count/.test(p)));
+  });
+});

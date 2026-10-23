@@ -101,13 +101,14 @@ const MIN_HEADER_COLUMNS = 2;
  */
 export function findHeaderCandidates(sheet: ExcelJS.Worksheet): number[] {
   const limit = Math.min(sheet.rowCount || MAX_SCAN_ROWS, 30);
+  const scanCols = Math.min(sheet.columnCount || MAX_SCAN_COLS, MAX_SCAN_COLS);
   const candidates: number[] = [];
 
   for (let r = 1; r <= limit; r++) {
     const row = sheet.getRow(r);
     const cells: Array<{ col: number; text: string }> = [];
 
-    for (let c = 1; c <= Math.min(sheet.columnCount || MAX_SCAN_COLS, MAX_SCAN_COLS); c++) {
+    for (let c = 1; c <= scanCols; c++) {
       const text = String(cellText(rawValue(row.getCell(c)))).trim();
       if (text) cells.push({ col: c, text });
     }
@@ -149,9 +150,16 @@ export function findHeaderCandidates(sheet: ExcelJS.Worksheet): number[] {
     // that one row alone the real header was discarded, the first item row
     // became the header, and its "144" and "3" became size columns. The best
     // of the next three rows is what the header is judged on.
+    //
+    // A blank row ends the look: the template's sparse row is *not* blank.
+    // Looking past a gap made every title line above a blank row a candidate
+    // ("ACME Sportswear | Purchase Order", then a gap, then the PO facts), and
+    // a title block of five such lines pushed the real header out of the five
+    // candidates tried — the order read as nothing.
     let populated = 0;
     for (let below = r + 1; below <= Math.min(r + 3, sheet.rowCount || MAX_SCAN_ROWS); below++) {
       const next = sheet.getRow(below);
+      if (rowIsBlank(next, scanCols)) break;
       const count = cells.filter((x) => {
         const v = rawValue(next.getCell(x.col));
         return v != null && String(cellText(v)).trim() !== '';
@@ -167,6 +175,14 @@ export function findHeaderCandidates(sheet: ExcelJS.Worksheet): number[] {
     if (populated >= Math.max(2, Math.ceil(cells.length * 0.15))) candidates.push(r);
   }
   return candidates;
+}
+
+/** Nothing in any of the row's first `cols` cells. */
+function rowIsBlank(row: ExcelJS.Row, cols: number): boolean {
+  for (let c = 1; c <= cols; c++) {
+    if (String(cellText(rawValue(row.getCell(c)))).trim() !== '') return false;
+  }
+  return true;
 }
 
 /** "Proforma invoice" in the first forty rows of a sheet names the document. */
@@ -301,8 +317,19 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
       const text = String(cellText(rawValue(row.getCell(c)))).trim().toLowerCase();
       if (text) filled.push({ text, c });
     }
-    if (filled.length !== sequenceTexts.length || sequenceTexts.length === 0) continue;
-    if (filled.every((f, k) => f.text === sequenceTexts[k])) repeats.set(r, mappingFor(filled.map((f) => f.c)));
+    // The headings in a run, with anything else on the row beside them: a
+    // block's own title or a page number on its header row ("… | Qty | | Block
+    // 2") made it no repeat, and the first block's total ended the read with
+    // the later blocks unread and nothing said. A lone heading has to stand
+    // alone, or any row naming it would do.
+    const n = sequenceTexts.length;
+    if (n === 0 || filled.length < n || (n < 2 && filled.length !== n)) continue;
+    for (let at = 0; at + n <= filled.length; at++) {
+      if (sequenceTexts.every((t, k) => filled[at + k]!.text === t)) {
+        repeats.set(r, mappingFor(filled.slice(at, at + n).map((f) => f.c)));
+        break;
+      }
+    }
   }
   const lastRepeat = repeats.size > 0 ? Math.max(...repeats.keys()) : 0;
 
@@ -314,14 +341,22 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
   const read = (row: ExcelJS.Row, m: Array<number | null>): unknown[] => m.map((c) => (c == null ? null : rawValue(row.getCell(c))));
   const isFilled = (v: unknown) => v != null && String(cellText(v)).trim() !== '';
 
+  // Each table beside the first ends on its own: it may run longer than the
+  // first, or carry on past the first's total. Read only on the first's rows,
+  // a right-hand table lost every row the left-hand one did not have.
+  const sideEnded = sideMappings.map(() => false);
+  let primaryEnded = false;
+
   for (let r = headerRowIndex + 1; r <= last; r++) {
     const repeat = repeats.get(r);
     if (repeat) { mapping = repeat; blankRun = 0; continue; }
     const row = sheet.getRow(r);
-    const values = read(row, mapping);
+    const values = primaryEnded ? [] : read(row, mapping);
     const populated = values.filter(isFilled).length;
+    const sides = sideMappings.map((m, k) => (sideEnded[k] ? null : read(row, m)));
+    const sideFilled = sides.some((side) => side != null && side.some(isFilled));
 
-    if (populated === 0) {
+    if (populated === 0 && !sideFilled) {
       // A gap is normal in a hand-maintained sheet; ten in a row is the end.
       if (++blankRun >= 10) break;
       // A gap and then a title — one cell of words, "Bill of materials" — is
@@ -333,22 +368,28 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
     }
     blankRun = 0;
 
-    // A totals row is a summary of the data, not part of it. Importing it
-    // doubles the order. Judged by the row's first *filled* cell, not column
-    // A: a table that starts in column B has its "Total" label there, and
-    // reading the blank A cell let the totals through as one more colour.
-    // With another block of the same table still to come, it is skipped
-    // rather than ending the read.
-    const firstFilled = values.find(isFilled);
-    if (isTotalsLabel(firstFilled)) { if (r < lastRepeat) continue; break; }
-
-    rows.push(values);
-    sideMappings.forEach((m, k) => {
-      const side = read(row, m);
-      if (side.filter(isFilled).length === 0) return;
-      if (isTotalsLabel(side.find(isFilled))) return;
+    sides.forEach((side, k) => {
+      if (!side || !side.some(isFilled)) return;
+      if (isTotalsLabel(side.find(isFilled))) { if (r >= lastRepeat) sideEnded[k] = true; return; }
       sideRows[k]!.push(side);
     });
+
+    if (populated > 0) {
+      // A totals row is a summary of the data, not part of it. Importing it
+      // doubles the order. Judged by the row's first *filled* cell, not column
+      // A: a table that starts in column B has its "Total" label there, and
+      // reading the blank A cell let the totals through as one more colour.
+      // With another block of the same table still to come, it is skipped
+      // rather than ending the read.
+      const firstFilled = values.find(isFilled);
+      if (isTotalsLabel(firstFilled)) {
+        if (r < lastRepeat) continue;
+        primaryEnded = true;
+      } else {
+        rows.push(values);
+      }
+    }
+    if (primaryEnded && sideEnded.every(Boolean)) break;
   }
 
   for (const side of sideRows) rows.push(...side);
@@ -528,11 +569,16 @@ function buildLongMatrix(ctx: BuildContext, opts: { sizeFromColour?: boolean } =
   let skipped = 0;
   let unsized = 0;
   let example: { text: string; colour: string; size: string } | null = null;
+  // An ERP export prints the style once, on the first row of its group, and
+  // leaves it blank below. Those rows belong to the style above them: named
+  // " — Navy" they pooled the same colour of every style into one row.
+  let lastStyle = '';
 
   for (const row of ctx.table.rows) {
     const text = String(cellText(row[colorCol])).trim();
     const qty = toNumber(row[qtyCol]);
-    const style = styleCol == null ? '' : String(cellText(row[styleCol])).trim();
+    const style = styleCol == null ? '' : String(cellText(row[styleCol])).trim() || lastStyle;
+    lastStyle = style;
 
     // A row with nothing in the colour, size or quantity cells is not a row
     // that was skipped — it is the vendor number, a spacer, a note. Only a

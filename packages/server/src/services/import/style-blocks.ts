@@ -21,7 +21,7 @@
  */
 
 import type { GridBlock, GridLine, GridRow } from './size-grid.js';
-import { isSizeLabel } from './size-grid.js';
+import { isSizeLabel, pieces } from './size-grid.js';
 
 /** "01. T-Shirt / Short Sleeve - Navy", with or without a piece count before it. */
 const TITLE = /^(\d{1,3})\.\s+(.+)$/;
@@ -38,7 +38,7 @@ function splitTitle(text: string): { style: string; colour: string | null } {
 }
 
 export function readStyleBlocks(lines: readonly GridLine[]): GridBlock[] {
-  type Open = { style: string; colour: string | null; cells: Record<string, number>; sizes: string[]; printed: number | null; number: string };
+  type Open = { style: string; colour: string | null; cells: Record<string, number>; sizes: string[]; printed: number | null; number: string; unread: string[] };
   const blocks: GridBlock[] = [];
   let open: Open | null = null;
   const seen = new Set<string>();
@@ -55,6 +55,9 @@ export function readStyleBlocks(lines: readonly GridLine[]): GridBlock[] {
       const problems: string[] = [];
       if (open.printed != null && open.printed !== total) {
         problems.push(`${open.number}. ${open.style}${open.colour ? ` ${open.colour}` : ''}: the sizes add up to ${total} pcs but the block says ${open.printed}.`);
+      }
+      for (const u of open.unread) {
+        problems.push(`${open.number}. ${open.style}${open.colour ? ` ${open.colour}` : ''}: ${u} is not a piece count and was not read.`);
       }
       blocks.push({ style: open.style, styleCode: null, sizes: open.sizes.filter((s) => (open!.cells[s] ?? 0) > 0), rows: [row], printedTotal: open.printed, problems });
     }
@@ -73,7 +76,7 @@ export function readStyleBlocks(lines: readonly GridLine[]): GridBlock[] {
       const { style, colour } = splitTitle(m[2]!);
       const before = cells[cells.indexOf(titleCell) - 1];
       const pm = before ? PIECES.exec(before) : null;
-      open = { style, colour, cells: {}, sizes: [], printed: pm && pm[2] ? Number(pm[1]) : null, number: m[1]! };
+      open = { style, colour, cells: {}, sizes: [], printed: pm && pm[2] ? Number(pm[1]) : null, number: m[1]!, unread: [] };
       continue;
     }
     if (!open) continue;
@@ -83,9 +86,13 @@ export function readStyleBlocks(lines: readonly GridLine[]): GridBlock[] {
     const sm = SIZE_LINE.exec(label);
     if (sm && value != null) {
       const size = sm[1]!.trim();
-      const n = Number(value.replace(/[^\d.]/g, ''));
-      if (!isSizeLabel(size) || !Number.isFinite(n)) continue;
+      // A whole piece count as printed, or the line is not read: stripping
+      // every non-digit made "1.200" 1.2 pcs and "2 x 6" 26. A line not read
+      // is named on the review, and the block is still read.
+      const n = pieces(value.replace(/\s*(pcs|pieces|units)$/i, ''));
+      if (!isSizeLabel(size)) continue;
       if (!open.sizes.includes(size)) open.sizes.push(size);
+      if (n == null) { open.unread.push(`size ${size} "${value}"`); continue; }
       if (n > 0) open.cells[size] = (open.cells[size] ?? 0) + n;
       continue;
     }
