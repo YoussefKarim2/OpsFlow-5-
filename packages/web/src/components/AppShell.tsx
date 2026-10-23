@@ -117,7 +117,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                     )
                   }
                 >
-                  <item.icon className={clsx('h-4 w-4 shrink-0', compact && 'lg:h-5 lg:w-5')} />
+                  <item.icon className={clsx('h-4 w-4 shrink-0', compact && 'lg:h-[22px] lg:w-[22px]')} />
                   <span className={clsx('truncate', compact && 'lg:sr-only')}>{item.label}</span>
                 </NavLink>
               ))}
