@@ -25,7 +25,9 @@ import {
 export function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState('hassona@soccertex.biz');
+  // Empty, so the browser's saved sign-in for this device fills it, not a
+  // fixed account that every device would otherwise start with.
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -58,10 +60,10 @@ export function LoginPage() {
           <form onSubmit={submit} className="space-y-3 p-5">
             {error && <ErrorNote error={new Error(error)} />}
             <Field label="Email">
-              <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="input" required autoFocus />
+              <input type="email" name="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} className="input" required autoFocus />
             </Field>
             <Field label="Password">
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="input" required />
+              <input type="password" name="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} className="input" required />
             </Field>
             <button type="submit" disabled={busy} className="btn-primary w-full">
               {busy ? 'Signing in…' : 'Sign in'}
