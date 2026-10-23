@@ -30,7 +30,7 @@ import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, Valida
 import { logActivity } from '../services/activity-service.js';
 import {
   INVOICE_INCLUDE, PROFILE_ID, assertDraft, assertIssuable, assertStillDraft, buildCombinedDocument, defaultCoverNote,
-  baseDescription, getCompanyProfile, invoiceToDto, invoiceToListRow, isStale, lineToDto, loadInvoice, loadOrderForBuild, partsOf, pickDefaults, qtyPerOrder,
+  carriedRates, getCompanyProfile, invoiceToDto, invoiceToListRow, isStale, lineToDto, loadInvoice, loadOrderForBuild, partsOf, pickDefaults, qtyPerOrder,
   profileToDto, sourcesOf, toBuildOrder, toBuildPackingList, toBuildShipment, withAllocatedNumber,
 } from '../services/invoice-service.js';
 
@@ -409,7 +409,8 @@ invoicesRouter.put('/:id', requirePermission('invoice:write'), asyncHandler(asyn
       const pos = rows.map((r) => (r.orderRef as { poNumber?: string } | null)?.poNumber ?? r.order.poNumber);
       const shares = qtyPerOrder(body.lines.map((l) => ({ kind: l.kind, description: l.description, quantity: l.quantity ?? null })), pos);
       for (const [i, r] of rows.entries()) {
-        await tx.invoiceOrder.update({ where: { id: r.id }, data: { qty: shares[i] ?? 0 } });
+        // By invoice and order, not row id: a rebuild in the meantime replaces the rows.
+        await tx.invoiceOrder.updateMany({ where: { invoiceId: existing.id, orderId: r.orderId }, data: { qty: shares[i] ?? 0 } });
       }
     }
     return tx.invoice.findUniqueOrThrow({ where: { id: existing.id }, include: INVOICE_INCLUDE });
@@ -441,13 +442,11 @@ invoicesRouter.post('/:id/rebuild', requirePermission('invoice:write'), asyncHan
 
   const { parts, doc } = await buildFor(existing.kind, partsOf(existing));
   const first = parts[0]!;
-  // A rate typed on a line the order still has no price for, found by the
-  // line's description, or by it without its "(PO x)" when the PO was renamed
-  // or the document went from several orders to one.
-  const typed = existing.lines.filter((l) => l.kind === InvoiceLineKind.ITEM && l.unitPrice != null);
-  const exactRate = new Map(typed.map((l) => [l.description, Number(l.unitPrice!.toString())] as const));
-  const baseRate = new Map(typed.map((l) => [baseDescription(l.description), Number(l.unitPrice!.toString())] as const));
-  const typedRate = { get: (d: string) => exactRate.get(d) ?? baseRate.get(baseDescription(d)) };
+  const typedRate = carriedRates(
+    existing.lines.filter((l) => l.kind === InvoiceLineKind.ITEM && l.unitPrice != null)
+      .map((l) => ({ description: l.description, unitPrice: Number(l.unitPrice!.toString()) })),
+    parts.map((p) => p.loaded.poNumber),
+  );
   const extras = existing.lines.filter((l) => l.kind === InvoiceLineKind.EXTRA);
   const lines = [
     ...doc.lines.map((l) => ({ ...l, unitPrice: l.unitPrice ?? typedRate.get(l.description) ?? null })),

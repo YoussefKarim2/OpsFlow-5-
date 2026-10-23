@@ -357,6 +357,27 @@ export interface CombinedDocument extends BuiltDocument {
 export const baseDescription = (d: string): string => d.replace(/\s*\(PO [^()]+\)$/, '');
 
 /**
+ * Rates typed on a draft's goods lines, to carry onto the same lines when it
+ * is rebuilt: found by the line's description, or by it without its "(PO x)"
+ * when that PO was renamed or the document went from several orders to one.
+ * Only a line whose PO is gone, or that carried none, is matched that loosely:
+ * split POs share a base description, and one PO's price must not fill
+ * another PO's line that has none.
+ */
+export function carriedRates(
+  typed: readonly { description: string; unitPrice: number }[],
+  poNumbers: readonly string[],
+): { get: (description: string) => number | undefined } {
+  const current = new Set(poNumbers);
+  const poOf = (d: string) => /\(PO ([^()]+)\)$/.exec(d.trim())?.[1];
+  const exact = new Map(typed.map((l) => [l.description, l.unitPrice] as const));
+  const base = new Map(typed
+    .filter((l) => { const po = poOf(l.description); return po === undefined || !current.has(po); })
+    .map((l) => [baseDescription(l.description), l.unitPrice] as const));
+  return { get: (d) => exact.get(d) ?? base.get(baseDescription(d)) };
+}
+
+/**
  * Each order's pieces on a document's goods lines, in the order given. A line
  * belongs to the PO its description ends with; on a one-order document every
  * line is that order's, and a line typed without a PO counts on the first.

@@ -7,7 +7,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeInvoiceTotals, issueBlockers, type CompanyProfileDto } from '@opsflow/shared';
 import {
-  PROFORMA_VALID_DAYS, baseDescription, buildCombinedDocument, buildInvoiceDocument, qtyPerOrder, defaultCoverNote, manifestFingerprint,
+  PROFORMA_VALID_DAYS, baseDescription, buildCombinedDocument, carriedRates, buildInvoiceDocument, qtyPerOrder, defaultCoverNote, manifestFingerprint,
   type BuildOrder, type BuildPackingList, type BuildShipment,
 } from './invoice-service.js';
 
@@ -341,5 +341,23 @@ describe('each order\'s share of a shared document', () => {
     assert.ok(doc.warnings.some((w) => w.startsWith('PO P2 has its own billing address')));
     const same = buildCombinedDocument({ kind: 'PROFORMA', profile, parts: [{ order: order(), packingList: null, shipment: null }, { order: order({ id: 'o2', poNumber: 'P2' }), packingList: null, shipment: null }] });
     assert.ok(!same.warnings.some((w) => w.includes('billing address')));
+  });
+});
+
+describe('carriedRates', () => {
+  test('a split PO with no price does not take its sibling PO\'s rate', () => {
+    const rates = carriedRates([{ description: 'Shirt — Navy (PO 1001)', unitPrice: 5 }], ['1001', '1002']);
+    assert.equal(rates.get('Shirt — Navy (PO 1001)'), 5);
+    assert.equal(rates.get('Shirt — Navy (PO 1002)'), undefined);
+  });
+
+  test('a renamed PO keeps the rate typed under its old number', () => {
+    const rates = carriedRates([{ description: 'Shirt — Navy (PO 1001)', unitPrice: 5 }], ['1001A', '1002']);
+    assert.equal(rates.get('Shirt — Navy (PO 1001A)'), 5);
+  });
+
+  test('one order to several, and several to one', () => {
+    assert.equal(carriedRates([{ description: 'Shirt — Navy', unitPrice: 4 }], ['1001', '1002']).get('Shirt — Navy (PO 1001)'), 4);
+    assert.equal(carriedRates([{ description: 'Shirt — Navy (PO 1002)', unitPrice: 6 }], ['1001']).get('Shirt — Navy'), 6);
   });
 });

@@ -271,6 +271,7 @@ function NewDocumentDialog({ preset, presetKind, candidates, onClose }: {
   const setChoice = (id: string, patch: Partial<SourceChoice>) =>
     setChoices((c) => ({ ...c, [id]: { ...(c[id] ?? { packingListId: null, shipmentId: null }), ...patch } }));
 
+  const qc = useQueryClient();
   const create = useMutation({
     mutationFn: () => api.invoices.create({
       kind,
@@ -278,6 +279,9 @@ function NewDocumentDialog({ preset, presetKind, candidates, onClose }: {
     }),
     onSuccess: (res) => {
       toast.success(`${res.data.number} built from PO ${res.data.orders.map((o) => o.poNumber).join(', ')}`);
+      // Otherwise "Ready to invoice" still offers these orders for a minute.
+      void qc.invalidateQueries({ queryKey: ['invoices'] });
+      void qc.invalidateQueries({ queryKey: ['invoice-candidates'] });
       onClose();
       navigate(`/invoices/${res.data.id}`);
     },

@@ -712,7 +712,7 @@ ordersRouter.delete('/:id', requireSuperAdmin, asyncHandler(async (req, res) => 
   }
   const shared = docs.filter((d) => d._count.orders > 1);
   if (shared.length > 0) {
-    throw new ConflictError(`PO ${order.poNumber} is on draft ${shared.map((d) => d.number).join(', ')} together with other orders. Delete that draft, or build it again without this order, first.`);
+    throw new ConflictError(`PO ${order.poNumber} is on draft ${shared.map((d) => d.number).join(', ')} together with other orders. Delete that draft first, then build a new one for the other orders.`);
   }
 
   const files = await prisma.attachment.findMany({
