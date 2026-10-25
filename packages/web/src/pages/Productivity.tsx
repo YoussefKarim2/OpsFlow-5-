@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
-  ComposedChart, Bar, Line, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea, Cell,
+  ComposedChart, Line, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea,
 } from 'recharts';
 import { ChevronLeft, ChevronRight, ChevronDown, ArrowRight, TrendingUp, TrendingDown, Minus, Check } from 'lucide-react';
 import {
@@ -13,11 +13,14 @@ import {
 } from '@opsflow/shared';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
-import { Card, CardHeader, StatTile, Spinner, ErrorNote, EmptyState, useToast, clsx } from '../components/ui';
+import { Card, CardHeader, StatTile, Spinner, ErrorNote, EmptyState, TabStrip, useToast, clsx } from '../components/ui';
 import { ComboSelect } from '../components/ComboSelect';
 
 /**
- * Factory productivity — Phase 1.
+ * Factory productivity — four headline numbers, then Overview, Orders,
+ * Workers and Quality & delivery tabs (simplified 2026-10-25).
+ *
+ * Phase 1.
  *
  * Everything on this screen is read from records that already exist on the
  * orders: production entries, quality audits and cutting records. There is no
@@ -96,7 +99,7 @@ export function ProductivityPage() {
         <div>
           <h1 className="text-xl font-semibold text-ink-900">Productivity</h1>
           <p className="mt-0.5 text-sm text-ink-500">
-            What the factory produced, from the records on each order. A day nobody logged is shown as not recorded, never as zero.
+            How much the factory made, from the production recorded on each order.
           </p>
         </div>
       </div>
@@ -139,27 +142,43 @@ export function ProductivityPage() {
           </div>
         )}
 
-        <label className="ml-auto flex items-center gap-1.5 text-xs text-ink-600">
-          Primary operation
-          <ComboSelect className="input !py-1 text-xs" value={primary}
-            onChange={(e) => update({ primary: e.target.value === PRIMARY_OPERATION ? null : e.target.value })}>
-            {PRODUCTION_OPERATIONS.map((o) => <option key={o} value={o}>{opLabel(o)}</option>)}
-          </ComboSelect>
-        </label>
       </div>
 
       {isLoading && <Spinner label="Adding up the production records…" />}
       {error && <ErrorNote error={error} onRetry={refetch} />}
-      {data && <ProductivityBody data={data} />}
+      {data && (
+        <ProductivityBody
+          data={data}
+          view={VIEWS.find((v) => v.key === params.get('view'))?.key ?? 'overview'}
+          onView={(v) => update({ view: v === 'overview' ? null : v })}
+          primary={primary}
+          onPrimary={(o) => update({ primary: o === PRIMARY_OPERATION ? null : o })}
+        />
+      )}
     </div>
   );
 }
 
 // ── Body ────────────────────────────────────────────────────────────────────
 
-function ProductivityBody({ data }: { data: ProductivityDto }) {
+/** The page's four views, so each question has one place and the page is not one long scroll. */
+const VIEWS = [
+  { key: 'overview', label: 'Overview' },
+  { key: 'orders', label: 'Orders' },
+  { key: 'workers', label: 'Workers' },
+  { key: 'quality', label: 'Quality & delivery' },
+] as const;
+type View = (typeof VIEWS)[number]['key'];
+
+function ProductivityBody({ data, view, onView, primary, onPrimary }: {
+  data: ProductivityDto;
+  view: View;
+  onView: (v: View) => void;
+  primary: ProductionOperation;
+  onPrimary: (o: ProductionOperation) => void;
+}) {
   const out = data.output;
-  const label = opLabel(data.primaryOperation);
+  const f = data.overview;
   const [openDay, setOpenDay] = useState<string | null>(null);
 
   const recordsByDay = useMemo(() => {
@@ -172,227 +191,156 @@ function ProductivityBody({ data }: { data: ProductivityDto }) {
   }, [data.records]);
 
   const nothingAtAll = out.recordedDays === 0 && !data.quality?.summary.auditCount && !data.fabric?.summary.recordCount;
-
-  const visibleOps = PRODUCTION_OPERATIONS;
+  const rft = data.quality?.rft;
+  const delivery = data.delivery;
+  const ops = PRODUCTION_OPERATIONS;
 
   return (
     <>
-      <OverviewSection overview={data.overview} trend={data.overviewTrend} />
-      <LabourSection labour={data.labour} trend={data.efficiencyTrend} dayLogs={data.dayLogs} orders={data.orders} />
-      {(data.quality || data.delivery) && (
-        <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-          {data.quality && <RftCard rft={data.quality.rft} />}
-          {data.delivery && <DeliveryCard delivery={data.delivery} />}
-        </div>
-      )}
-      <NotMeasuredCard labour={data.labour} />
-
-      <div className="pt-1">
-        <h2 className="text-base font-semibold text-ink-900">{label} in detail</h2>
-        <p className="text-xs text-ink-500">The operation chosen as primary, with its own days, orders and records.</p>
-      </div>
-
-      {/* KPI tiles */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+      {/* The four numbers most people come for. */}
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile
-          label={`${label} output`}
+          label="Garments sewn"
           tone="accent"
-          value={out.primaryQty == null ? <Unrecorded /> : fmtNumber(out.primaryQty)}
-          sub={out.primaryQty == null
-            ? `No ${label.toLowerCase()} recorded on any day of this period`
-            : <>pcs over {out.primaryRecordedDays} recorded day{out.primaryRecordedDays === 1 ? '' : 's'} <TrendNote trend={data.totalTrend} what="total" /></>}
+          value={f.garmentsSewn == null ? <Unrecorded /> : fmtNumber(f.garmentsSewn)}
+          sub={f.garmentsSewn == null ? 'No sewing recorded in this period'
+            : <>on {f.sewnRecordedDays} day{f.sewnRecordedDays === 1 ? '' : 's'} <TrendNote trend={data.overviewTrend} what="rate" /></>}
         />
         <StatTile
-          label="Per recorded production day"
-          value={out.primaryAvgPerRecordedDay == null ? <Unrecorded /> : fmtNumber(out.primaryAvgPerRecordedDay)}
-          sub={out.primaryAvgPerRecordedDay == null
-            ? `Average ${label.toLowerCase()} on days with a ${label.toLowerCase()} record. Days without one are left out, not counted as zero.`
-            : <>{label} pcs per day, averaged over the {out.primaryRecordedDays} day{out.primaryRecordedDays === 1 ? '' : 's'} with a {label.toLowerCase()} record <TrendNote trend={data.trend} what="rate" /></>}
+          label="Garments packed"
+          tone="emerald"
+          value={f.garmentsPacked == null ? <Unrecorded /> : fmtNumber(f.garmentsPacked)}
+          sub={f.garmentsPacked == null ? 'No packing recorded in this period' : `on ${f.packedRecordedDays} day${f.packedRecordedDays === 1 ? '' : 's'}`}
         />
         <StatTile
-          label="Best day"
-          value={out.primaryPeakDay ? fmtNumber(out.primaryPeakDay.qty) : <Unrecorded />}
-          sub={out.primaryPeakDay ? `pcs on ${fmtDate(out.primaryPeakDay.date)}` : `No ${label.toLowerCase()} recorded`}
+          label="Right first time"
+          tone={rft?.rftPct == null ? 'neutral' : rft.rftPct >= 98 ? 'emerald' : rft.rftPct >= 90 ? 'amber' : 'red'}
+          value={rft?.rftPct == null ? <Unrecorded text="No inspections" /> : fmtPct(rft.rftPct, 0)}
+          sub={rft?.rftPct == null ? 'No quality inspection decided in this period' : `${rft.passedFirstTime} of ${rft.firstInspections} inspections passed first time`}
         />
         <StatTile
-          label="Days without a record"
-          tone={out.unrecordedDays > 0 && out.recordedDays > 0 ? 'amber' : 'neutral'}
-          value={fmtNumber(out.unrecordedDays)}
-          sub={`of ${out.calendarDays} calendar day${out.calendarDays === 1 ? '' : 's'}. Unknown, not zero.`}
+          label="On-time delivery"
+          tone={delivery?.onTimePct == null ? 'neutral' : delivery.onTimePct >= 98 ? 'emerald' : delivery.onTimePct >= 90 ? 'amber' : 'red'}
+          value={delivery?.onTimePct == null ? <Unrecorded text="No shipments" /> : fmtPct(delivery.onTimePct, 0)}
+          sub={delivery?.onTimePct == null ? 'Nothing shipped against a promised date' : `${delivery.onTime} on time, ${delivery.late} late`}
         />
-        {data.quality && (
-          <StatTile
-            label="Defects per 100 inspected"
-            tone={data.quality.summary.defectRatePct != null && data.quality.summary.defectRatePct > 2.5 ? 'red' : 'neutral'}
-            value={data.quality.summary.defectRatePct == null ? <Unrecorded text={defectReason(data.quality.summary.reason)} /> : fmtNumber(data.quality.summary.defectRatePct, { places: 1 })}
-            sub={defectSub(data.quality.summary)}
-          />
-        )}
-        {data.fabric && (
-          <StatTile
-            label="Fabric per piece cut"
-            value={data.fabric.summary.metresPerPiece == null ? <Unrecorded text={fabricReason(data.fabric.summary.reason)} /> : fmtNumber(data.fabric.summary.metresPerPiece, { places: 3, suffix: ' m' })}
-            sub={fabricSub(data.fabric.summary)}
-          />
-        )}
       </div>
 
-      {nothingAtAll ? (
+      <TabStrip tabs={VIEWS.map((v) => ({ key: v.key, label: v.label }))} active={view} onChange={onView} />
+
+      {nothingAtAll && view !== 'workers' ? (
         <Card>
           <EmptyState
             title="Nothing was recorded in this period"
-            detail="No production entries, quality audits or cutting records carry a date in this range. Production is logged on each order's Production tab."
+            detail="Production is recorded on each order's Production tab. Try another week or month above."
           />
         </Card>
-      ) : (
+      ) : view === 'overview' ? (
         <>
-          {/* Chart */}
+          <OverviewSection overview={f} />
           <Card>
             <CardHeader
-              title={`${label} output by day`}
-              subtitle={`Shaded days have no production record of any kind. ${out.recordedDays} of ${out.calendarDays} days recorded.`}
+              title="Day by day"
+              subtitle={`Pieces at each stage on the ${out.recordedDays} day${out.recordedDays === 1 ? '' : 's'} with production. Click a day to see the orders.`}
             />
-            <div className="h-64 px-2 pb-2">
-              <ResponsiveContainer width="100%" height="100%">
-                <ComposedChart data={out.days} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-                  <XAxis dataKey="date" tickFormatter={(d: string) => fmtDateShort(d)} tick={{ fontSize: 11, fill: '#65758d' }} axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={24} />
-                  <YAxis tick={{ fontSize: 11, fill: '#65758d' }} axisLine={false} tickLine={false} width={48} tickFormatter={(v: number) => v.toLocaleString()} />
-                  <Tooltip
-                    cursor={{ fill: '#f1f5f9' }}
-                    content={({ active, payload }) => {
-                      const d = active && payload && payload[0]?.payload as ProductivityDto['output']['days'][number] | undefined;
-                      if (!d) return null;
-                      return (
-                        <div className="rounded-md border border-ink-200 bg-white px-3 py-2 text-xs shadow-panel">
-                          <p className="font-medium text-ink-900">{fmtDate(d.date)}</p>
-                          {!d.recorded ? <p className="italic text-ink-500">No production recorded</p> : (
-                            <ul className="mt-1 space-y-0.5">
-                              {PRODUCTION_OPERATIONS.filter((o) => d.byOperation[o] != null).map((o) => (
-                                <li key={o} className={clsx('flex justify-between gap-4', o === data.primaryOperation && 'font-semibold')}>
-                                  <span>{opLabel(o)}</span><span className="tnum">{fmtNumber(d.byOperation[o])}</span>
-                                </li>
-                              ))}
-                              {d.primary == null && <li className="italic text-ink-500">{label} not recorded</li>}
-                            </ul>
-                          )}
-                        </div>
-                      );
-                    }}
-                  />
-                  {out.days.filter((d) => !d.recorded).map((d) => (
-                    <ReferenceArea key={d.date} x1={d.date} x2={d.date} fill="#e2e8f0" fillOpacity={0.6} strokeOpacity={0} />
-                  ))}
-                  <Bar dataKey="primary" radius={[3, 3, 0, 0]} maxBarSize={36} isAnimationActive={false}>
-                    {out.days.map((d) => <Cell key={d.date} fill={d.recorded ? '#2563eb' : 'transparent'} />)}
-                  </Bar>
-                </ComposedChart>
-              </ResponsiveContainer>
-            </div>
-          </Card>
-
-          <div className="grid grid-cols-1 gap-5 xl:grid-cols-3">
-            {/* By day */}
-            <Card className="xl:col-span-2">
-              <CardHeader title="By day" subtitle="Click a day to see which orders the output came from." />
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="border-b border-ink-200 bg-ink-50">
-                    <tr>
-                      <th className="th">Date</th>
-                      {visibleOps.map((o) => (
-                        <th key={o} className={clsx('th text-right', o === data.primaryOperation && 'text-accent-700')}>{opLabel(o)}</th>
-                      ))}
-                      <th className="th text-right">Orders</th>
-                      <th className="th" />
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-ink-100">
-                    {out.days.map((d) => {
-                      const open = openDay === d.date;
-                      const rows = recordsByDay.get(d.date) ?? [];
-                      return (
-                        <DayRow key={d.date} day={d} open={open} rows={rows} primary={data.primaryOperation} ops={visibleOps}
-                          onToggle={() => setOpenDay(open ? null : d.date)} />
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-
-            {/* By operation */}
-            <Card>
-              <CardHeader title="By operation" subtitle="Totals over the days each was recorded" />
-              <div className="overflow-x-auto">
+            <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="border-b border-ink-200 bg-ink-50">
-                  <tr><th className="th">Operation</th><th className="th text-right">Pieces</th><th className="th text-right">Days</th><th className="th text-right">Avg/day</th></tr>
+                  <tr>
+                    <th className="th">Date</th>
+                    {ops.map((o) => <th key={o} className="th text-right">{opLabel(o)}</th>)}
+                    <th className="th text-right">Orders</th>
+                    <th className="th" />
+                  </tr>
                 </thead>
                 <tbody className="divide-y divide-ink-100">
-                  {out.byOperation.filter((o) => visibleOps.includes(o.operation)).map((o) => (
-                    <tr key={o.operation} className={clsx(o.operation === data.primaryOperation && 'bg-accent-50/40')}>
-                      <td className="td font-medium">{opLabel(o.operation)}</td>
-                      <td className="td text-right"><Qty value={o.qty} /></td>
-                      <td className="td tnum text-right">{o.recordedDays}</td>
-                      <td className="td text-right"><Qty value={o.avgPerRecordedDay} /></td>
+                  {out.days.filter((d) => d.recorded).map((d) => {
+                    const open = openDay === d.date;
+                    return (
+                      <DayRow key={d.date} day={d} open={open} rows={recordsByDay.get(d.date) ?? []} primary={data.primaryOperation} ops={ops}
+                        onToggle={() => setOpenDay(open ? null : d.date)} />
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </>
+      ) : view === 'orders' ? (
+        <Card>
+          <div className="card-header flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-semibold text-ink-900">Orders that made something</h3>
+              <p className="text-xs text-ink-500">{data.orders.length} order{data.orders.length === 1 ? '' : 's'} in this period</p>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-ink-600">
+              <span className="whitespace-nowrap">Sort by</span>
+              <ComboSelect aria-label="Sort by stage" className="input !py-1 text-xs" value={primary}
+                onChange={(e) => onPrimary(e.target.value as ProductionOperation)}>
+                {ops.map((o) => <option key={o} value={o}>{opLabel(o)}</option>)}
+              </ComboSelect>
+            </div>
+          </div>
+          {data.orders.length === 0 ? <EmptyState title="No order recorded production in this period" /> : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="border-b border-ink-200 bg-ink-50">
+                  <tr>
+                    <th className="th">PO</th><th className="th">Order</th><th className="th">Client</th>
+                    {ops.map((o) => <th key={o} className={clsx('th text-right', o === data.primaryOperation && 'text-accent-700')}>{opLabel(o)}</th>)}
+                    <th className="th" />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-ink-100">
+                  {data.orders.map((o) => (
+                    <tr key={o.orderId} className="hover:bg-ink-50/60">
+                      <td className="td font-medium"><Link to={`/orders/${o.orderId}?tab=production`} className="text-accent-700 hover:underline">{o.poNumber}</Link></td>
+                      <td className="td">{o.orderName}</td>
+                      <td className="td text-xs text-ink-600">{o.clientName}</td>
+                      {ops.map((op) => (
+                        <td key={op} className={clsx('td text-right', op === data.primaryOperation && 'font-medium')}><Qty value={o.byOperation[op]} /></td>
+                      ))}
+                      <td className="td text-right"><Link to={`/orders/${o.orderId}?tab=production`} className="btn-secondary btn-sm">Open <ArrowRight className="h-3 w-3" /></Link></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-              </div>
-            </Card>
+            </div>
+          )}
+        </Card>
+      ) : view === 'workers' ? (
+        <LabourSection labour={data.labour} trend={data.efficiencyTrend} dayLogs={data.dayLogs} />
+      ) : (
+        <>
+          {(data.quality || data.fabric) && (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {data.quality && (
+                <StatTile
+                  label="Defects per 100 inspected"
+                  tone={data.quality.summary.defectRatePct != null && data.quality.summary.defectRatePct > 2.5 ? 'red' : 'neutral'}
+                  value={data.quality.summary.defectRatePct == null ? <Unrecorded text={defectReason(data.quality.summary.reason)} /> : fmtNumber(data.quality.summary.defectRatePct, { places: 1 })}
+                  sub={defectSub(data.quality.summary)}
+                />
+              )}
+              {data.fabric && (
+                <StatTile
+                  label="Fabric per piece cut"
+                  value={data.fabric.summary.metresPerPiece == null ? <Unrecorded text={fabricReason(data.fabric.summary.reason)} /> : fmtNumber(data.fabric.summary.metresPerPiece, { places: 3, suffix: ' m' })}
+                  sub={fabricSub(data.fabric.summary)}
+                />
+              )}
+            </div>
+          )}
+          <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+            {data.quality && <RftCard rft={data.quality.rft} />}
+            {data.delivery && <DeliveryCard delivery={data.delivery} />}
           </div>
-
-          {/* By order */}
-          <Card>
-            <CardHeader title="By order" subtitle={`${data.orders.length} order${data.orders.length === 1 ? '' : 's'} with a production record in this period`} />
-            {data.orders.length === 0 ? <EmptyState title="No order recorded production in this period" /> : (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="border-b border-ink-200 bg-ink-50">
-                    <tr>
-                      <th className="th">PO</th><th className="th">Order</th><th className="th">Client</th><th className="th">Factory</th>
-                      <th className="th text-right text-accent-700">{label}</th>
-                      {visibleOps.filter((o) => o !== data.primaryOperation).map((o) => <th key={o} className="th text-right">{opLabel(o)}</th>)}
-                      <th className="th text-right">Days</th><th className="th" />
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-ink-100">
-                    {data.orders.map((o) => (
-                      <tr key={o.orderId} className="hover:bg-ink-50/60">
-                        <td className="td font-medium"><Link to={`/orders/${o.orderId}?tab=production`} className="text-accent-700 hover:underline">{o.poNumber}</Link></td>
-                        <td className="td">{o.orderName}</td>
-                        <td className="td text-xs text-ink-600">{o.clientName}</td>
-                        <td className="td text-xs text-ink-600">{o.factoryName ?? '—'}</td>
-                        <td className="td text-right font-medium"><Qty value={o.primary} /></td>
-                        {visibleOps.filter((op) => op !== data.primaryOperation).map((op) => (
-                          <td key={op} className="td text-right"><Qty value={o.byOperation[op]} /></td>
-                        ))}
-                        <td className="td tnum text-right">{o.recordedDays}</td>
-                        <td className="td text-right"><Link to={`/orders/${o.orderId}?tab=production`} className="btn-secondary btn-sm">Open <ArrowRight className="h-3 w-3" /></Link></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </Card>
-
           <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
             {data.quality && <QualityCard quality={data.quality} />}
             {data.fabric && <FabricCard fabric={data.fabric} />}
           </div>
         </>
       )}
-
-      <Card>
-        <CardHeader title="Not shown on this page" subtitle="Figures the records cannot support yet, rather than estimates" />
-        <ul className="divide-y divide-ink-100 text-sm">
-          <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Marker efficiency by period.</span> <span className="text-ink-600">Markers are a plan with no date, so they cannot be placed in a day, week or month. Each order's Cutting &amp; Marker tab shows them.</span></li>
-          <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Output by line.</span> <span className="text-ink-600">The line on a production record is free text, so the same line can appear under several spellings. It is shown per order on the Production tab.</span></li>
-        </ul>
-      </Card>
     </>
   );
 }
@@ -404,58 +352,19 @@ function ProductivityBody({ data }: { data: ProductivityDto }) {
 // through one operation and a garment passes through several, so a sum across
 // stages would count one garment up to five times.
 
-function OverviewSection({ overview: f, trend }: { overview: FactoryOverview; trend: Trend }) {
+function OverviewSection({ overview: f }: { overview: FactoryOverview }) {
   const recordedStages = f.stages.filter((s) => s.recorded);
   const chartData = f.days.map((d) => ({ date: d.date, recorded: d.recorded, ...d.byOperation }));
 
   return (
     <section className="space-y-4">
-      <div>
-        <h2 className="text-base font-semibold text-ink-900">Overall factory productivity</h2>
-        <p className="text-xs text-ink-500">
-          Every production record in this period, across all orders. Stages are the same garments counted at each step, so they are shown side by side and never added together.
-        </p>
-      </div>
-
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatTile
-          label="Garments sewn"
-          tone="accent"
-          value={f.garmentsSewn == null ? <Unrecorded /> : fmtNumber(f.garmentsSewn)}
-          sub={f.garmentsSewn == null
-            ? 'Unique output. No sewing recorded on any day of this period.'
-            : <>unique garments made, over {f.sewnRecordedDays} day{f.sewnRecordedDays === 1 ? '' : 's'} with a sewing record <TrendNote trend={trend} what="rate" /></>}
-        />
-        <StatTile
-          label="Garments packed"
-          tone="emerald"
-          value={f.garmentsPacked == null ? <Unrecorded /> : fmtNumber(f.garmentsPacked)}
-          sub={f.garmentsPacked == null
-            ? 'Finished goods. No packing recorded in this period.'
-            : `finished goods, over ${f.packedRecordedDays} day${f.packedRecordedDays === 1 ? '' : 's'} with a packing record. The same garments as sewn, counted at the last stage.`}
-        />
-        <StatTile
-          label="Days with a record"
-          tone={f.unrecordedDays > 0 && f.recordedDays > 0 ? 'amber' : 'neutral'}
-          value={<>{fmtNumber(f.recordedDays)}<span className="text-base font-normal text-ink-400"> / {f.calendarDays}</span></>}
-          sub={f.unrecordedDays === 0
-            ? 'Every day of the period has at least one production record.'
-            : `${f.unrecordedDays} day${f.unrecordedDays === 1 ? '' : 's'} with no record of any operation. Unknown, not zero.`}
-        />
-        <StatTile
-          label="Orders active"
-          value={fmtNumber(f.activeOrders)}
-          sub={`${fmtNumber(f.recordCount)} production record${f.recordCount === 1 ? '' : 's'} across ${f.operationsRecorded.length} of ${f.stages.length} operations`}
-        />
-      </div>
-
       <div className="grid grid-cols-1 gap-5 xl:grid-cols-5">
         <Card className="xl:col-span-3">
           <CardHeader
-            title="Daily trend by stage"
+            title="Pieces per day"
             subtitle={recordedStages.length === 0
-              ? 'No production record of any operation in this period.'
-              : `One line per recorded operation. Shaded days have no record of any kind; a gap in a line is a day that operation was not recorded.`}
+              ? 'No production recorded in this period.'
+              : `One line per stage. Grey days have nothing recorded: ${f.recordedDays} of ${f.calendarDays} days recorded.`}
           />
           {recordedStages.length === 0 ? <EmptyState title="Nothing recorded in this period" /> : (
             <div className="h-64 px-2 pb-2">
@@ -501,7 +410,7 @@ function OverviewSection({ overview: f, trend }: { overview: FactoryOverview; tr
         </Card>
 
         <Card className="xl:col-span-2">
-          <CardHeader title="Pieces through each stage" subtitle="In manufacturing order. Not totalled: it is the same garment at each stage." />
+          <CardHeader title="Pieces at each stage" subtitle="The same garments counted at each step, so they are not added up." />
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="border-b border-ink-200 bg-ink-50">
@@ -527,9 +436,6 @@ function OverviewSection({ overview: f, trend }: { overview: FactoryOverview; tr
               </tbody>
             </table>
           </div>
-          <p className="border-t border-ink-100 px-4 py-2 text-xs text-ink-500">
-            Cutting counts panels, printing and embroidery count decorated panels, sewing counts garments made, packing counts garments boxed. Adding the rows would count one garment several times, so there is no total row.
-          </p>
         </Card>
       </div>
 
@@ -544,73 +450,45 @@ function OverviewSection({ overview: f, trend }: { overview: FactoryOverview; tr
 // is the denominator, entered here one row per day; the SAM lives on each
 // order's Details tab.
 
-function LabourSection({ labour: l, trend, dayLogs, orders }: {
-  labour: LabourSummary; trend: Trend; dayLogs: ProductivityDayLogDto[]; orders: ProductivityDto['orders'];
+function LabourSection({ labour: l, trend, dayLogs }: {
+  labour: LabourSummary; trend: Trend; dayLogs: ProductivityDayLogDto[];
 }) {
-  const noSam = orders.filter((o) => l.ordersWithoutSam.includes(o.orderId));
   const effTone = l.efficiencyPct == null ? 'neutral' : l.efficiencyPct >= 75 ? 'emerald' : l.efficiencyPct >= 50 ? 'amber' : 'red';
   return (
     <section className="space-y-4">
-      <div>
-        <h2 className="text-base font-semibold text-ink-900">Labour productivity</h2>
-        <p className="text-xs text-ink-500">
-          Line efficiency is the standard minutes the floor produced (garments sewn × each style's SAM) over the minutes it attended (operators + helpers × minutes worked), lost time not deducted. A day counts only when its sheet is filled and every garment sewn has a SAM.
-        </p>
-      </div>
-
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile
-          label="Line efficiency"
-          tone={effTone}
-          value={l.efficiencyPct == null ? <Unrecorded text={labourReason(l)} /> : fmtPct(l.efficiencyPct, 1)}
-          sub={l.efficiencyPct == null ? labourSub(l) : <>
-            {fmtNumber(l.producedMinutes)} produced min over {fmtNumber(l.attendedMinutes)} attended, {l.countedDays} of {l.sewingDays} sewing day{l.sewingDays === 1 ? '' : 's'} counted. Trade benchmark 75%.
-            <TrendNote trend={trend} what="rate" unit="pct" />
-          </>}
-        />
-        <StatTile
-          label="Standard hours produced"
-          value={l.producedSah == null ? <Unrecorded /> : fmtNumber(l.producedSah, { places: 1 })}
-          sub={l.producedSah == null ? 'SAH: garments sewn × SAM ÷ 60, on the counted days' : `SAH on the ${l.countedDays} counted day${l.countedDays === 1 ? '' : 's'}, with ${fmtNumber(l.avgManpower, { places: 1 })} people on average`}
-        />
-        <StatTile
-          label="Garments per operator-day"
+          label="Garments per worker per day"
           value={l.piecesPerOperatorDay == null ? <Unrecorded /> : fmtNumber(l.piecesPerOperatorDay, { places: 1 })}
-          sub={l.piecesPerOperatorDay == null ? 'Needs the operator count on a day with sewing' : 'Garments sewn ÷ operator-days, on days with both. Needs no SAM.'}
+          sub={l.piecesPerOperatorDay == null ? 'Fill in the operators on the day sheet below' : 'Garments sewn ÷ operators, on the days filled in below'}
         />
         <StatTile
-          label="Garments per machine-day"
+          label="Garments per machine per day"
           value={l.piecesPerMachineDay == null ? <Unrecorded /> : fmtNumber(l.piecesPerMachineDay, { places: 1 })}
-          sub={l.piecesPerMachineDay == null ? 'Needs the machines running on a day with sewing' : 'Garments sewn ÷ machine-days, on days with both.'}
+          sub={l.piecesPerMachineDay == null ? 'Fill in the machines on the day sheet below' : 'Garments sewn ÷ machines running'}
         />
+        {/* Only when there is a figure: it needs each style's standard minutes,
+            which new orders no longer carry, and an empty tile only confuses. */}
+        {l.efficiencyPct != null && (
+          <StatTile
+            label="Line efficiency"
+            tone={effTone}
+            value={fmtPct(l.efficiencyPct, 1)}
+            sub={<>{l.countedDays} of {l.sewingDays} sewing day{l.sewingDays === 1 ? '' : 's'} counted. Target 75%. <TrendNote trend={trend} what="rate" unit="pct" /></>}
+          />
+        )}
+        {l.producedSah != null && (
+          <StatTile
+            label="Standard hours produced"
+            value={fmtNumber(l.producedSah, { places: 1 })}
+            sub={`on ${l.countedDays} day${l.countedDays === 1 ? '' : 's'}, ${fmtNumber(l.avgManpower, { places: 1 })} people on average`}
+          />
+        )}
       </div>
-
-      {noSam.length > 0 && (
-        <div className="rounded-md border border-amber-200 bg-amber-50/60 px-4 py-2.5 text-xs text-amber-800">
-          <span className="font-medium">No SAM on {noSam.length} order{noSam.length === 1 ? '' : 's'} that sewed in this period:</span>{' '}
-          {noSam.map((o, i) => (
-            <span key={o.orderId}>{i > 0 && ', '}<Link to={`/orders/${o.orderId}`} className="underline">{o.poNumber}</Link></span>
-          ))}
-          . Line efficiency needs each order's standard minutes per garment, which is no longer entered on Order Details, so those days are not counted.
-        </div>
-      )}
 
       <DayLogSheet labour={l} dayLogs={dayLogs} />
     </section>
   );
-}
-
-function labourReason(l: LabourSummary): string {
-  return l.reason === 'NO_SEWING' ? 'No sewing' : l.reason === 'NO_LOGS' ? 'No day sheet' : 'Incomplete';
-}
-function labourSub(l: LabourSummary): string {
-  if (l.reason === 'NO_SEWING') return 'No sewing recorded in this period, so there is no output to measure.';
-  if (l.reason === 'NO_LOGS') return `${l.sewingDays} sewing day${l.sewingDays === 1 ? '' : 's'}, none with a day sheet. Fill in the people and minutes below.`;
-  const parts: string[] = [];
-  if (l.excluded.noLog) parts.push(`${l.excluded.noLog} without a sheet`);
-  if (l.excluded.logIncomplete) parts.push(`${l.excluded.logIncomplete} with operators or minutes missing`);
-  if (l.excluded.samMissing) parts.push(`${l.excluded.samMissing} with garments that have no SAM`);
-  return `${l.sewingDays} sewing day${l.sewingDays === 1 ? '' : 's'}: ${parts.join(', ')}.`;
 }
 
 /** The daily sheet: one row per day of the period, saved a row at a time. */
@@ -621,10 +499,10 @@ function DayLogSheet({ labour, dayLogs }: { labour: LabourSummary; dayLogs: Prod
   return (
     <Card>
       <CardHeader
-        title="Factory day sheet"
+        title="Day sheet"
         subtitle={editable
-          ? 'Who was on the floor and for how long, one row per day. Output is not entered here: it comes from the production records.'
-          : 'Who was on the floor and for how long. Recording production is needed to edit it.'}
+          ? 'Fill in who worked each day. The garments sewn come from the production records.'
+          : 'Who worked each day. You need permission to record production to edit it.'}
       />
       <div className="overflow-x-auto">
         <table className="w-full">
@@ -636,9 +514,6 @@ function DayLogSheet({ labour, dayLogs }: { labour: LabourSummary; dayLogs: Prod
               <th className="th text-right">Helpers</th>
               <th className="th text-right">Minutes/person</th>
               <th className="th text-right">Machines</th>
-              <th className="th text-right">Produced min</th>
-              <th className="th text-right">Efficiency</th>
-              <th className="th">Counted</th>
               {editable && <th className="th" />}
             </tr>
           </thead>
@@ -680,23 +555,14 @@ function DayLogRow({ day, log, editable }: { day: LabourSummary['days'][number];
     <input type="number" min={0} max={max} value={form[k]} onChange={(e) => setForm({ ...form, [k]: e.target.value })}
       className="input !w-20 !py-0.5 text-right text-xs" placeholder="—" />
   ) : <Qty value={log ? log[k] : null} />;
-  const excludedWhy = day.excluded === 'NO_SEWING' ? 'no sewing' : day.excluded === 'NO_LOG' ? 'no sheet'
-    : day.excluded === 'LOG_INCOMPLETE' ? 'operators or minutes missing' : day.excluded === 'SAM_MISSING' ? 'a garment has no SAM' : null;
   return (
-    <tr className={clsx(day.sewn == null && 'text-ink-400', day.excluded == null && 'bg-emerald-50/30')}>
+    <tr className={clsx(day.sewn == null && 'text-ink-400')}>
       <td className="td whitespace-nowrap font-medium">{fmtDate(day.date)}</td>
       <td className="td text-right"><Qty value={day.sewn} /></td>
       <td className="td text-right">{cell('operators', 5000)}</td>
       <td className="td text-right">{cell('helpers', 5000)}</td>
       <td className="td text-right">{cell('workingMinutes', 1440)}</td>
       <td className="td text-right">{cell('machinesRunning', 5000)}</td>
-      <td className="td text-right"><Qty value={day.producedMinutes} /></td>
-      <td className="td text-right font-medium"><Qty value={day.efficiencyPct} places={1} suffix="%" /></td>
-      <td className="td text-xs">
-        {day.excluded == null
-          ? <span className="chip bg-emerald-50 text-emerald-700 ring-emerald-500/20">Counted</span>
-          : <span className="text-ink-400">{excludedWhy}</span>}
-      </td>
       {editable && (
         <td className="td text-right">
           <button className="btn-secondary btn-sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
@@ -711,7 +577,7 @@ function DayLogRow({ day, log, editable }: { day: LabourSummary['days'][number];
 function RftCard({ rft }: { rft: RftSummary }) {
   return (
     <Card>
-      <CardHeader title="Right first time" subtitle="Audits that passed on their first inspection, over first inspections decided. Re-inspections are the consequence of a fail, so they are neither." />
+      <CardHeader title="Right first time" subtitle="Inspections that passed the first time." />
       <div className="grid gap-3 p-4 sm:grid-cols-3">
         <StatTile
           label="Right first time"
@@ -729,7 +595,7 @@ function RftCard({ rft }: { rft: RftSummary }) {
 function DeliveryCard({ delivery: d }: { delivery: DeliverySummary }) {
   return (
     <Card>
-      <CardHeader title="Delivery" subtitle="Shipments that left in this period, against the date promised, and how much was cut for what was shipped." />
+      <CardHeader title="Delivery" subtitle="Shipments that left in this period, against the date promised." />
       <div className="grid gap-3 p-4 sm:grid-cols-3">
         <StatTile
           label="On-time delivery"
@@ -748,22 +614,6 @@ function DeliveryCard({ delivery: d }: { delivery: DeliverySummary }) {
             : `Pieces cut ÷ pieces shipped to date, over ${d.cutToShipOrders} order${d.cutToShipOrders === 1 ? '' : 's'}${d.cutToShipExcluded ? `, ${d.cutToShipExcluded} without a cut figure` : ''}. 1.000 is perfect; a part-shipped order reads high until it ships out.`}
         />
       </div>
-    </Card>
-  );
-}
-
-function NotMeasuredCard({ labour }: { labour: LabourSummary }) {
-  return (
-    <Card>
-      <CardHeader title="Not measured yet" subtitle="Figures the records cannot support, and what each would need" />
-      <ul className="divide-y divide-ink-100 text-sm">
-        <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Labour cost per minute and per garment.</span> <span className="text-ink-600">Needs the floor's daily wage bill. Set against the attended minutes above it gives cost per minute; against produced minutes, the labour cost of each garment.</span></li>
-        <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Daily running cost and margin.</span> <span className="text-ink-600">Needs a daily factory cost. The daily cost on an order's costing sheet is a typed input for that one order, not a record of a day.</span></li>
-        <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Lost time and on-standard efficiency.</span> <span className="text-ink-600">Needs the minutes lost to breakdowns, waiting and line setting each day. The efficiency above is the overall figure, which the trade reports without deducting them.</span></li>
-        {labour.reason != null && (
-          <li className="px-4 py-2.5"><span className="font-medium text-ink-800">Line efficiency for this period.</span> <span className="text-ink-600">{labourSub(labour)}</span></li>
-        )}
-      </ul>
     </Card>
   );
 }
@@ -923,12 +773,9 @@ function Unrecorded({ text = 'Not recorded' }: { text?: string }) {
 }
 
 function TrendNote({ trend, what, unit = 'number' }: { trend: Trend; what: 'total' | 'rate'; unit?: 'number' | 'pct' }) {
-  if (trend.changePct == null) {
-    const why = trend.reason === 'NO_PREVIOUS' ? 'nothing recorded in the period before'
-      : trend.reason === 'PREVIOUS_ZERO' ? 'the period before recorded zero'
-      : null;
-    return why ? <span className="block text-ink-400">No comparison: {why}.</span> : null;
-  }
+  // Nothing to compare with is left unsaid: "no comparison" under a number
+  // reads as a problem when it is only an absence.
+  if (trend.changePct == null) return null;
   const up = trend.changePct > 0, flat = Math.abs(trend.changePct) < 0.5;
   const Icon = flat ? Minus : up ? TrendingUp : TrendingDown;
   return (
