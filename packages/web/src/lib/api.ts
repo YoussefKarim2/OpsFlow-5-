@@ -855,6 +855,7 @@ export const api = {
     setMatrix: (id: string, ledger: string, cells: Array<{ orderColorId: string; orderSizeId: string; qty: number }>) =>
       put<OrderDetailDto>(`/orders/${id}/matrix`, { ledger, cells }),
     generateCut: (id: string) => post<OrderDetailDto>(`/orders/${id}/matrix/generate-cut`),
+    addSize: (id: string, name: string) => post<{ data: OrderDetailDto }>(`/orders/${id}/sizes`, { name }),
     fillFromDocument: (id: string) =>
       post<{ pieces: number; cut: number; fileName: string; warnings: string[] }>(`/orders/${id}/matrix/from-document`),
     enterGrid: (id: string, grid: { sizes: string[]; rows: Array<{ color: string; cells: Record<string, number> }> }) =>

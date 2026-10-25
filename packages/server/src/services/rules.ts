@@ -260,7 +260,7 @@ export function assertValidPercentage(value: number, label: string, max = 0.5): 
   if (value < 0) throw new ValidationError(`${label} cannot be negative.`);
   if (value > max) {
     throw new ValidationError(
-      `${label} of ${(value * 100).toFixed(1)}% looks wrong (maximum ${(max * 100).toFixed(0)}%). Enter it as a fraction, e.g. 0.05 for 5%.`,
+      `${label} of ${(value * 100).toFixed(1)}% looks wrong (maximum ${(max * 100).toFixed(0)}%).`,
     );
   }
 }

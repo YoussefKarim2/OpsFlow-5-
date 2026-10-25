@@ -13,7 +13,8 @@ import { authenticate, requirePermission, requireSuperAdmin, currentUser } from 
 import { asyncHandler } from '../util/async-handler.js';
 import { BadRequestError, ConflictError, NotFoundError, ValidationError } from '../errors.js';
 import { fillMainOrderFromDocuments } from '../services/fill-main-order.js';
-import { writeOrderMatrix } from '../services/import/committer.js';
+import { upsertRefSize, writeOrderMatrix } from '../services/import/committer.js';
+import { orderSizes } from '../services/import/po-lines.js';
 import {
   getOrderDetail, listOrders, refreshOrderCache, ORDER_INCLUDE,
   buildOrderSummary, toTaskDto, deriveOrder,
@@ -557,6 +558,46 @@ ordersRouter.post('/:id/matrix/enter', requirePermission('order:edit'), asyncHan
   });
   await refreshOrderCache(order.id);
   res.json({ pieces: written, cut });
+}));
+
+/**
+ * Add a size to an order's Main Order grid — a size the PO did not list, or one
+ * the customer added later. It joins the grid empty, in wearing order among the
+ * sizes already there, and is filled in on the grid like any other.
+ */
+const addSizeSchema = z.object({ name: z.string().trim().min(1, 'Name the size.').max(40) });
+
+ordersRouter.post('/:id/sizes', requirePermission('order:edit'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const { name } = addSizeSchema.parse(req.body ?? {});
+  const order = await prisma.order.findUnique({
+    where: { id: req.params.id },
+    select: { id: true, sizes: { select: { id: true, position: true, size: { select: { name: true } } } } },
+  });
+  if (!order) throw new NotFoundError('Order');
+  const same = (a: string) => a.trim().toLowerCase() === name.toLowerCase();
+  if (order.sizes.some((s) => same(s.size.name))) throw new ConflictError(`Size ${name} is already on this order.`);
+
+  await prisma.$transaction(async (tx) => {
+    const sizeId = await upsertRefSize(tx, name, order.sizes.length);
+    const added = await tx.orderSize.create({ data: { orderId: order.id, sizeId, position: order.sizes.length } });
+    // Re-number every column in wearing order, so XS lands before S rather
+    // than after the last size. Rows refer to sizes by id; nothing else moves.
+    const current = [...order.sizes, { id: added.id, position: order.sizes.length, size: { name } }]
+      .sort((a, b) => a.position - b.position);
+    const sorted = orderSizes(current.map((s) => s.size.name));
+    for (const s of current) {
+      await tx.orderSize.update({ where: { id: s.id }, data: { position: sorted.indexOf(s.size.name) } });
+    }
+  });
+
+  await logActivity({
+    orderId: order.id, actorId: actor.id, actorName: actor.name,
+    action: 'QUANTITIES_UPDATED', summary: `added size ${name} to the Main Order`,
+    entityType: 'OrderSize', entityId: order.id, meta: { size: name },
+  });
+  await refreshOrderCache(order.id);
+  res.status(201).json({ data: await orderDetailFor(req, order.id) });
 }));
 
 /** The order's total for one ledger, for before/after comparison. */

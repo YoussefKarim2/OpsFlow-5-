@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Wand2, Save, FileSearch } from 'lucide-react';
+import { Wand2, Save, FileSearch, Plus } from 'lucide-react';
 import {
   QtyLedger, LEDGER_LABEL, buildMatrix, fmtNumber, fmtDate,
   ledgerTotal, computeCutOrderQty, computeCuttableQty,
@@ -158,6 +158,18 @@ export function QuantityTab({
       void qc.invalidateQueries({ queryKey: ['order', order.id] });
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not save the cut allowance.'),
+  });
+
+  /** A size being added to the Main Order grid; null while the box is closed. */
+  const [newSize, setNewSize] = useState<string | null>(null);
+  const addSize = useMutation({
+    mutationFn: (name: string) => api.orders.addSize(order.id, name),
+    onSuccess: () => {
+      setNewSize(null);
+      setError(null);
+      for (const k of ['matrix', 'order', 'order-steps']) void qc.invalidateQueries({ queryKey: [k, order.id] });
+    },
+    onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not add the size.'),
   });
 
   /** Null until the date is touched, so the order's own value stays authoritative. */
@@ -427,6 +439,35 @@ export function QuantityTab({
                 {!pctDirty && 'Regenerate'} to bring them back in line.
               </p>
             ) : null}
+          </div>
+        )}
+
+        {/* A size the PO did not list, or one the customer added later: it
+            joins the grid empty, in wearing order, and is filled in below. */}
+        {ledger === QtyLedger.ORDER && can('order:edit') && matrix.sizes.length > 0 && (
+          <div className="flex flex-wrap items-center justify-end gap-2 border-b border-ink-100 px-4 py-2">
+            {newSize === null ? (
+              <button onClick={() => setNewSize('')} className="btn-secondary btn-sm">
+                <Plus className="h-3.5 w-3.5" /> Add size
+              </button>
+            ) : (
+              <form
+                className="flex items-center gap-2"
+                onSubmit={(e) => { e.preventDefault(); if (newSize.trim()) addSize.mutate(newSize.trim()); }}
+              >
+                <input
+                  autoFocus value={newSize} maxLength={40} placeholder="e.g. 3XL, Youth M, 128"
+                  aria-label="New size"
+                  onChange={(e) => setNewSize(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Escape') setNewSize(null); }}
+                  className="input w-44 !py-1 text-sm"
+                />
+                <button type="submit" disabled={!newSize.trim() || addSize.isPending} className="btn-primary btn-sm">
+                  {addSize.isPending ? 'Adding…' : 'Add'}
+                </button>
+                <button type="button" onClick={() => setNewSize(null)} className="btn-secondary btn-sm">Cancel</button>
+              </form>
+            )}
           </div>
         )}
 

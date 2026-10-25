@@ -180,7 +180,7 @@ async function upsertRefColor(tx: Prisma.TransactionClient, name: string, positi
   return created.id;
 }
 
-async function upsertRefSize(tx: Prisma.TransactionClient, name: string, position: number): Promise<string> {
+export async function upsertRefSize(tx: Prisma.TransactionClient, name: string, position: number): Promise<string> {
   const clean = name.trim();
   const existing = await tx.refSize.findFirst({ where: { name: { equals: clean, mode: 'insensitive' } } });
   if (existing) return existing.id;

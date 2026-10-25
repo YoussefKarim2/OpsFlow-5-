@@ -40,7 +40,8 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
     // reported the whole cost as a loss.
     pricePerPieceUsd: order.pricePerPieceUsd == null ? '' : String(order.pricePerPieceUsd),
     samMinutes: order.samMinutes == null ? '' : String(order.samMinutes),
-    cutPercentage: order.cutPercentage,
+    // Typed as a percentage (5), stored as a fraction (0.05).
+    cutPercentText: percentText(order.cutPercentage),
     accessoryPercentage: order.accessoryPercentage,
     poDate: order.poDate?.slice(0, 10) ?? '',
     internalPoDate: order.internalPoDate?.slice(0, 10) ?? '',
@@ -59,10 +60,10 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
   const save = useMutation({
     mutationFn: () =>
       api.orders.update(order.id, {
-        ...form,
+        ...withoutKey(form, 'cutPercentText'),
         pricePerPieceUsd: form.pricePerPieceUsd === '' ? null : Number(form.pricePerPieceUsd),
         samMinutes: form.samMinutes === '' ? null : Number(form.samMinutes),
-        cutPercentage: Number(form.cutPercentage),
+        cutPercentage: Number(form.cutPercentText) / 100,
         accessoryPercentage: Number(form.accessoryPercentage),
         notes: {
           general: form.notes.general ?? '', spread: form.notes.spread ?? '',
@@ -167,22 +168,15 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
               options={(lookups?.users ?? []).map((u) => ({ id: u.id, name: u.name }))}
               onChange={(v) => setForm({ ...form, coordinatorId: v })} display={order.coordinator?.name}
               hint="Who owns this order. Anyone may still open it." />
-            <Picker label="Outside work manager" editing={editing} value={form.outsideWorkManagerId}
-              options={(lookups?.users ?? []).map((u) => ({ id: u.id, name: u.name }))}
-              onChange={(v) => setForm({ ...form, outsideWorkManagerId: v })} display={order.outsideWorkManager?.name} />
             <Edit label="Price in US$" editing={editing} type="number" step="0.01" value={form.pricePerPieceUsd}
               onChange={(v) => setForm({ ...form, pricePerPieceUsd: v })}
               display={order.pricePerPieceUsd != null ? `$${order.pricePerPieceUsd.toFixed(2)}` : null} />
-            <Edit label="SAM (minutes per garment)" editing={editing} type="number" step="0.001" value={form.samMinutes}
-              onChange={(v) => setForm({ ...form, samMinutes: v })}
-              display={order.samMinutes != null ? `${order.samMinutes} min` : null}
-              hint="Standard allowed minutes to sew one piece, from the time study. Needed for line efficiency on the Productivity page." />
             <Select label="Method of shipping" editing={editing} value={form.shippingMethod} options={values.SHIPPING_METHOD?.map((v) => v.value) ?? []}
               onChange={(v) => setForm({ ...form, shippingMethod: v })} display={order.shippingMethod} />
-            <Edit label="Cut percentage" editing={editing} type="number" step="0.01" value={String(form.cutPercentage)}
-              onChange={(v) => setForm({ ...form, cutPercentage: Number(v) })}
-              display={`${(order.cutPercentage * 100).toFixed(1)}%`}
-              hint="A fraction — 0.05 means 5%. Drives the cut order." />
+            <Edit label="Cut percentage (%)" editing={editing} type="number" step="0.1" value={form.cutPercentText}
+              onChange={(v) => setForm({ ...form, cutPercentText: v })}
+              display={`${percentText(order.cutPercentage)}%`}
+              hint="Type the percentage: 5 means 5%. Drives the cut order." />
             <Select label="Fabric" editing={editing} value={form.fabric} options={values.FABRIC?.map((v) => v.value) ?? []}
               onChange={(v) => setForm({ ...form, fabric: v })} display={order.fabric} />
             <Select label="Fit" editing={editing} value={form.fit} options={values.FIT?.map((v) => v.value) ?? []}
@@ -245,6 +239,15 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
   );
 }
 
+
+/** The form without a field that exists only on screen. */
+function withoutKey<T extends object, K extends keyof T>(o: T, k: K): Omit<T, K> {
+  const { [k]: _omit, ...rest } = o;
+  return rest;
+}
+
+/** A stored fraction as the percentage a person types: 0.05 → "5", 0.025 → "2.5". */
+const percentText = (fraction: number): string => String(Number((fraction * 100).toFixed(4)));
 
 function Edit({
   label, editing, value, onChange, display, type = 'text', step, hint,
