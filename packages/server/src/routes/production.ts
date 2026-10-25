@@ -8,7 +8,7 @@ import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
 import { requiredDate } from '../util/form-input.js';
-import { NotFoundError } from '../errors.js';
+import { NotFoundError, ValidationError } from '../errors.js';
 import { ORDER_INCLUDE, deriveOrder, refreshOrderCache } from '../services/order-service.js';
 import { logAndNotify, logActivity } from '../services/activity-service.js';
 import { assertValidQuantity, assertProductionWithinReason } from '../services/rules.js';
@@ -123,6 +123,60 @@ productionRouter.post('/:orderId', requirePermission('production:write'), asyncH
       qty: record.qty, line: record.line, team: record.team, notes: record.notes,
     },
     analytics: derivedAfter.production,
+  });
+}));
+
+/**
+ * Correct a production entry: a wrong figure, day, stage, line or team. The
+ * same checks as recording one, with the entry's own old figure taken out of
+ * the order's total first, so correcting 450 to 405 is never refused for
+ * "exceeding" what it replaces.
+ */
+const recordPatchSchema = recordSchema.partial().extend({
+  line: z.string().nullable().optional(),
+  team: z.string().nullable().optional(),
+});
+
+productionRouter.patch('/record/:id', requirePermission('production:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const input = recordPatchSchema.parse(req.body ?? {});
+  const record = await prisma.productionRecord.findUnique({ where: { id: req.params.id } });
+  if (!record) throw new NotFoundError('Production record');
+
+  const qty = input.qty ?? record.qty;
+  const operation = input.operation ?? record.operation;
+  assertValidQuantity(qty, 'Production quantity');
+  if (qty <= 0) throw new ValidationError('Pieces must be above 0. To take the entry out, remove it instead.');
+  if (operation === 'SEWING') {
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: record.orderId }, include: ORDER_INCLUDE });
+    const d = deriveOrder(order);
+    const without = d.production.producedQty - (record.operation === 'SEWING' ? record.qty : 0);
+    assertProductionWithinReason(without + qty, d.totals[QtyLedger.ORDER] ?? 0, d.totals[QtyLedger.CUT] ?? 0);
+  }
+
+  const updated = await prisma.productionRecord.update({
+    where: { id: record.id },
+    data: {
+      qty, operation,
+      ...(input.date ? { date: new Date(input.date) } : {}),
+      ...(input.line !== undefined ? { line: input.line?.trim() || null } : {}),
+      ...(input.team !== undefined ? { team: input.team?.trim() || null } : {}),
+      ...(input.notes !== undefined ? { notes: input.notes } : {}),
+    },
+  });
+  await logActivity({
+    orderId: record.orderId, actorId: actor.id, actorName: actor.name,
+    action: 'PRODUCTION_UPDATED',
+    summary: `corrected a production entry: ${record.qty.toLocaleString()} pcs ${record.operation.toLowerCase()} → ${updated.qty.toLocaleString()} pcs ${updated.operation.toLowerCase()}`,
+    entityType: 'ProductionRecord', entityId: record.id,
+    meta: { before: { qty: record.qty, operation: record.operation, date: record.date.toISOString() }, after: { qty: updated.qty, operation: updated.operation, date: updated.date.toISOString() } },
+  });
+  await refreshOrderCache(record.orderId);
+  res.json({
+    record: {
+      id: updated.id, date: updated.date.toISOString(), operation: updated.operation,
+      qty: updated.qty, line: updated.line, team: updated.team, notes: updated.notes,
+    },
   });
 }));
 

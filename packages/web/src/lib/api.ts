@@ -977,6 +977,7 @@ export const api = {
       byLine: Array<{ line: string; qty: number; days: number; avgPerDay: number | null }>;
     }>(`/production/${orderId}`),
     record: (orderId: string, body: unknown) => post<unknown>(`/production/${orderId}`, body),
+    update: (recordId: string, body: unknown) => patch<unknown>(`/production/record/${recordId}`, body),
     remove: (recordId: string) => del(`/production/record/${recordId}`),
   },
 

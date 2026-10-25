@@ -4,7 +4,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import {
   ComposedChart, Line, Legend, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea,
 } from 'recharts';
-import { ChevronLeft, ChevronRight, ChevronDown, ArrowRight, TrendingUp, TrendingDown, Minus, Check } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ArrowRight, TrendingUp, TrendingDown, Minus, Check } from 'lucide-react';
 import {
   fmtDate, fmtDateShort, fmtNumber, fmtPct,
   PRODUCTION_OPERATIONS, PRIMARY_OPERATION, periodRange, shiftDay, daysInRange, isDayKey,
@@ -15,6 +15,7 @@ import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { Card, CardHeader, StatTile, Spinner, ErrorNote, EmptyState, TabStrip, useToast, clsx } from '../components/ui';
 import { ComboSelect } from '../components/ComboSelect';
+import { AnalysisCharts, ProductionRecords, opLabel, OP_COLOR } from './productivity/parts';
 
 /**
  * Factory productivity — four headline numbers, then Overview, Orders,
@@ -40,14 +41,6 @@ function localToday(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function opLabel(op: string): string {
-  return op.charAt(0) + op.slice(1).toLowerCase();
-}
-
-/** One colour per operation, so a stage reads the same in every chart. */
-const OP_COLOR: Record<ProductionOperation, string> = {
-  CUTTING: '#0ea5e9', PRINTING: '#a855f7', EMBROIDERY: '#ec4899', SEWING: '#2563eb', PACKING: '#16a34a',
-};
 
 export function ProductivityPage() {
   const [params, setParams] = useSearchParams();
@@ -164,6 +157,7 @@ export function ProductivityPage() {
 /** The page's four views, so each question has one place and the page is not one long scroll. */
 const VIEWS = [
   { key: 'overview', label: 'Overview' },
+  { key: 'records', label: 'Records' },
   { key: 'orders', label: 'Orders' },
   { key: 'workers', label: 'Workers' },
   { key: 'quality', label: 'Quality & delivery' },
@@ -179,17 +173,6 @@ function ProductivityBody({ data, view, onView, primary, onPrimary }: {
 }) {
   const out = data.output;
   const f = data.overview;
-  const [openDay, setOpenDay] = useState<string | null>(null);
-
-  const recordsByDay = useMemo(() => {
-    const m = new Map<string, ProductivityDto['records']>();
-    for (const r of data.records) {
-      const k = r.date.slice(0, 10);
-      (m.get(k) ?? m.set(k, []).get(k)!).push(r);
-    }
-    return m;
-  }, [data.records]);
-
   const nothingAtAll = out.recordedDays === 0 && !data.quality?.summary.auditCount && !data.fabric?.summary.recordCount;
   const rft = data.quality?.rft;
   const delivery = data.delivery;
@@ -228,7 +211,7 @@ function ProductivityBody({ data, view, onView, primary, onPrimary }: {
 
       <TabStrip tabs={VIEWS.map((v) => ({ key: v.key, label: v.label }))} active={view} onChange={onView} />
 
-      {nothingAtAll && view !== 'workers' ? (
+      {nothingAtAll && view !== 'workers' && view !== 'records' ? (
         <Card>
           <EmptyState
             title="Nothing was recorded in this period"
@@ -237,35 +220,11 @@ function ProductivityBody({ data, view, onView, primary, onPrimary }: {
         </Card>
       ) : view === 'overview' ? (
         <>
+          <AnalysisCharts data={data} />
           <OverviewSection overview={f} />
-          <Card>
-            <CardHeader
-              title="Day by day"
-              subtitle={`Pieces at each stage on the ${out.recordedDays} day${out.recordedDays === 1 ? '' : 's'} with production. Click a day to see the orders.`}
-            />
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="border-b border-ink-200 bg-ink-50">
-                  <tr>
-                    <th className="th">Date</th>
-                    {ops.map((o) => <th key={o} className="th text-right">{opLabel(o)}</th>)}
-                    <th className="th text-right">Orders</th>
-                    <th className="th" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-ink-100">
-                  {out.days.filter((d) => d.recorded).map((d) => {
-                    const open = openDay === d.date;
-                    return (
-                      <DayRow key={d.date} day={d} open={open} rows={recordsByDay.get(d.date) ?? []} primary={data.primaryOperation} ops={ops}
-                        onToggle={() => setOpenDay(open ? null : d.date)} />
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </Card>
         </>
+      ) : view === 'records' ? (
+        <ProductionRecords data={data} defaultDate={data.range.to < localToday() ? data.range.to : localToday()} />
       ) : view === 'orders' ? (
         <Card>
           <div className="card-header flex flex-wrap items-center justify-between gap-2">
@@ -358,10 +317,10 @@ function OverviewSection({ overview: f }: { overview: FactoryOverview }) {
 
   return (
     <section className="space-y-4">
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-5">
-        <Card className="xl:col-span-3">
+      <div>
+        <Card>
           <CardHeader
-            title="Pieces per day"
+            title="Every stage, day by day"
             subtitle={recordedStages.length === 0
               ? 'No production recorded in this period.'
               : `One line per stage. Grey days have nothing recorded: ${f.recordedDays} of ${f.calendarDays} days recorded.`}
@@ -409,34 +368,6 @@ function OverviewSection({ overview: f }: { overview: FactoryOverview }) {
           )}
         </Card>
 
-        <Card className="xl:col-span-2">
-          <CardHeader title="Pieces at each stage" subtitle="The same garments counted at each step, so they are not added up." />
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead className="border-b border-ink-200 bg-ink-50">
-                <tr><th className="th">Stage</th><th className="th text-right">Pieces</th><th className="th text-right">Days</th><th className="th text-right">Avg/day</th><th className="th">Data</th></tr>
-              </thead>
-              <tbody className="divide-y divide-ink-100">
-                {f.stages.map((st) => (
-                  <tr key={st.operation} className={clsx(!st.recorded && 'text-ink-400')}>
-                    <td className="td font-medium">
-                      <span className="mr-1.5 inline-block h-2 w-2 rounded-full align-middle" style={{ background: st.recorded ? OP_COLOR[st.operation] : '#cbd5e1' }} />
-                      {opLabel(st.operation)}
-                    </td>
-                    <td className="td text-right"><Qty value={st.qty} /></td>
-                    <td className="td tnum text-right">{st.recorded ? st.recordedDays : ''}</td>
-                    <td className="td text-right"><Qty value={st.avgPerRecordedDay} /></td>
-                    <td className="td text-xs">
-                      {st.recorded
-                        ? <span className="chip bg-emerald-50 text-emerald-700 ring-emerald-500/20">Recorded</span>
-                        : <span className="chip bg-ink-100 text-ink-500 ring-ink-500/20">Not recorded</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
       </div>
 
     </section>
@@ -619,66 +550,6 @@ function DeliveryCard({ delivery: d }: { delivery: DeliverySummary }) {
 }
 
 // ── Pieces ──────────────────────────────────────────────────────────────────
-
-function DayRow({ day, rows, open, primary, ops, onToggle }: {
-  day: ProductivityDto['output']['days'][number];
-  rows: ProductivityDto['records'];
-  open: boolean;
-  primary: ProductionOperation;
-  ops: readonly ProductionOperation[];
-  onToggle: () => void;
-}) {
-  return (
-    <>
-      <tr
-        className={clsx('cursor-pointer hover:bg-ink-50/60', !day.recorded && 'bg-ink-50/40 text-ink-500', open && 'bg-accent-50/40')}
-        onClick={day.recorded ? onToggle : undefined}
-        title={day.recorded ? undefined : 'No production record of any kind on this day'}
-      >
-        <td className="td whitespace-nowrap font-medium">
-          {fmtDate(day.date)}
-          {!day.recorded && <span className="ml-2 text-2xs font-normal italic text-ink-400">not recorded</span>}
-        </td>
-        {ops.map((o) => (
-          <td key={o} className={clsx('td text-right', o === primary && day.byOperation[o] != null && 'font-semibold')}>
-            <Qty value={day.byOperation[o]} />
-          </td>
-        ))}
-        <td className="td tnum text-right">{day.recorded ? day.orderCount : ''}</td>
-        <td className="td text-right">
-          {day.recorded && <ChevronDown className={clsx('inline h-3.5 w-3.5 text-ink-400 transition-transform', open && 'rotate-180')} />}
-        </td>
-      </tr>
-      {open && (
-        <tr>
-          <td colSpan={ops.length + 3} className="bg-ink-50/60 px-4 py-2">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-left text-2xs uppercase tracking-wider text-ink-500">
-                  <th className="py-1 pr-3">PO</th><th className="py-1 pr-3">Order</th><th className="py-1 pr-3">Operation</th>
-                  <th className="py-1 pr-3 text-right">Pieces</th><th className="py-1 pr-3">Line</th><th className="py-1 pr-3">Team</th><th />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-ink-100">
-                {rows.map((r) => (
-                  <tr key={r.id}>
-                    <td className="py-1 pr-3 font-medium">{r.poNumber}</td>
-                    <td className="py-1 pr-3">{r.orderName}</td>
-                    <td className="py-1 pr-3"><span className="chip bg-ink-100 text-ink-700 ring-ink-500/20">{opLabel(r.operation)}</span></td>
-                    <td className="py-1 pr-3 tnum text-right">{fmtNumber(r.qty)}</td>
-                    <td className="py-1 pr-3">{r.line || '—'}</td>
-                    <td className="py-1 pr-3">{r.team || '—'}</td>
-                    <td className="py-1 text-right"><Link to={`/orders/${r.orderId}?tab=production`} className="text-accent-700 hover:underline">Open</Link></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </td>
-        </tr>
-      )}
-    </>
-  );
-}
 
 function QualityCard({ quality }: { quality: NonNullable<ProductivityDto['quality']> }) {
   const s = quality.summary;
