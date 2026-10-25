@@ -6,7 +6,8 @@
  * In the template, column C ("Item Sort / Dep.") picks a department from
  * Data-Base!AE, and column D ("Item") is a dropdown of `INDIRECT(C)`: the named
  * range for that department — Press = Data-Base!AH, Production = AI, Packing =
- * AJ. Yoko has no named range, so its item is typed. Units come from AL.
+ * AJ. Yoko has no named range; it is offered its two parts, collar and cuffs.
+ * Units come from AL.
  *
  * Fabric is the template's separate fabric section above the accessories; it
  * is kept here as a department so a fabric line reads the same way.
@@ -19,10 +20,14 @@
 export const BOM_DEPARTMENTS = ['Fabric', 'Yoko', 'Press', 'Production', 'Packing'] as const;
 export type BomDepartment = (typeof BOM_DEPARTMENTS)[number];
 
-/** The template's dropdown lists. Yoko and Fabric have none: their items are typed. */
+/**
+ * The template's dropdown lists. Fabric's is the factory's fabric list, which
+ * is reference data an administrator edits, so the editor fills it in from
+ * /lookups rather than from here.
+ */
 export const BOM_DEPARTMENT_ITEMS: Record<BomDepartment, readonly string[]> = {
   Fabric: [],
-  Yoko: [],
+  Yoko: ['Yoko Collar', 'Yoko Cuffs'],
   Press: ['Logo', 'Badge', 'Sponser', 'Size', 'Number', 'Authantic Bdge'],
   // "zipper" sits under the list on the Data-Base sheet, one row below the
   // named range's end; it is the factory's own addition, so it is offered.

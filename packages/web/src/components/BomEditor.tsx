@@ -64,15 +64,18 @@ const parse = (t: string): number | null => {
 /** Typed, but not something a number can be read from — "." or "-" alone. */
 const unreadable = (t: string): boolean => t.trim() !== '' && parse(t) == null;
 
-const inList = (department: BomDepartment | null, item: string) =>
-  bomItemsFor(department).some((x) => x.toLowerCase() === item.trim().toLowerCase());
+/** The items a department offers: the template's list, or for Fabric the factory's fabric list. */
+type ItemsFor = (department: BomDepartment | null) => readonly string[];
 
-const toDraft = (r: BomRowDto): RowDraft => {
+const inList = (itemsFor: ItemsFor, department: BomDepartment | null, item: string) =>
+  itemsFor(department).some((x) => x.toLowerCase() === item.trim().toLowerCase());
+
+const toDraft = (r: BomRowDto, itemsFor: ItemsFor = bomItemsFor): RowDraft => {
   const department = bomDepartmentOf(r.item, r.category);
   return {
   ...r,
   department,
-  typed: bomItemsFor(department).length === 0 || (r.item.trim() !== '' && !inList(department, r.item)),
+  typed: itemsFor(department).length === 0 || (r.item.trim() !== '' && !inList(itemsFor, department, r.item)),
   requiredQty: r.requiredQty ? String(r.requiredQty) : '',
   issuedQty: text(r.issuedQty),
   unitPriceUsd: text(r.unitPriceUsd),
@@ -119,12 +122,14 @@ function fromDraft(d: RowDraft): BomRowDto {
 }
 
 export function BomEditor({
-  orderId, initial, itemTypes, colors = [], units = [], sizeLabels = [], onSaved,
+  orderId, initial, itemTypes, fabrics = [], colors = [], units = [], sizeLabels = [], onSaved,
 }: {
   orderId: string;
   initial: BomRowDto[];
   /** `RefValue` rows of kind BOM_ITEM_TYPE, from /lookups. */
   itemTypes: string[];
+  /** The factory's fabric list (`RefValue` kind FABRIC), offered under Fabric. */
+  fabrics?: string[];
   /** The factory's colour list, for the colour column. */
   colors?: string[];
   /** Units of measure — Met., Pcs, Kg. — for the unit column. */
@@ -134,7 +139,8 @@ export function BomEditor({
   onSaved?: () => void;
 }) {
   const qc = useQueryClient();
-  const [rows, setRows] = useState<RowDraft[]>(() => initial.map(toDraft));
+  const itemsFor: ItemsFor = (d) => (d === 'Fabric' ? fabrics : bomItemsFor(d));
+  const [rows, setRows] = useState<RowDraft[]>(() => initial.map((r) => toDraft(r, itemsFor)));
   const [expanded, setExpanded] = useState<number | null>(null);
 
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -164,12 +170,12 @@ export function BomEditor({
   /** Choosing a department narrows the item list, as the template's INDIRECT dropdown does. */
   const setDepartment = (i: number, department: BomDepartment | null) => {
     const r = rows[i]!;
-    const keep = department == null || bomItemsFor(department).length === 0 || inList(department, r.item);
+    const keep = department == null || itemsFor(department).length === 0 || inList(itemsFor, department, r.item);
     const item = keep ? r.item : '';
     setRow(i, {
       department,
       item,
-      typed: department == null || bomItemsFor(department).length === 0,
+      typed: department == null || itemsFor(department).length === 0,
       category: department ? bomCategoryFor(department, item) : r.category,
     });
   };
@@ -270,11 +276,11 @@ export function BomEditor({
                           aria-label="Item"
                           className={clsx('input border-transparent bg-transparent', !r.item.trim() && 'ring-1 ring-red-400')}
                           value={r.item}
-                          list={bomItemsFor(r.department).length > 0 ? `bom-items-${r.department}` : 'bom-item-types'}
+                          list={itemsFor(r.department).length > 0 ? `bom-items-${r.department}` : 'bom-item-types'}
                           placeholder={r.department === 'Yoko' ? 'Yoko collar, Yoko cuffs…' : r.department === 'Fabric' ? 'Main fabric, Rib…' : 'Type the item…'}
                           onChange={(e) => setItem(i, e.target.value, true)}
                         />
-                        {bomItemsFor(r.department).length > 0 && (
+                        {itemsFor(r.department).length > 0 && (
                           <button type="button" className="shrink-0 text-2xs text-accent-700 hover:underline" title="Pick from the list"
                             onClick={() => setItem(i, '', false)}>List</button>
                         )}
@@ -284,11 +290,11 @@ export function BomEditor({
                         allowCustom
                         aria-label="Item"
                         className={clsx('input border-transparent bg-transparent', !r.item.trim() && 'ring-1 ring-red-400')}
-                        value={r.item ? bomItemsFor(r.department).find((x) => x.toLowerCase() === r.item.trim().toLowerCase()) ?? r.item : ''}
+                        value={r.item ? itemsFor(r.department).find((x) => x.toLowerCase() === r.item.trim().toLowerCase()) ?? r.item : ''}
                         onChange={(e) => (e.target.value === OTHER_ITEM ? setItem(i, '', true) : setItem(i, e.target.value, false))}
                       >
                         <option value="">Choose…</option>
-                        {bomItemsFor(r.department).map((x) => <option key={x} value={x}>{x}</option>)}
+                        {itemsFor(r.department).map((x) => <option key={x} value={x}>{x}</option>)}
                         <option value={OTHER_ITEM}>Other (type it)…</option>
                       </ComboSelect>
                     )}
@@ -468,7 +474,7 @@ export function BomEditor({
       </datalist>
       {BOM_DEPARTMENTS.map((d) => (
         <datalist key={d} id={`bom-items-${d}`}>
-          {bomItemsFor(d).map((x) => <option key={x} value={x} />)}
+          {itemsFor(d).map((x) => <option key={x} value={x} />)}
         </datalist>
       ))}
       <datalist id="bom-size-labels">

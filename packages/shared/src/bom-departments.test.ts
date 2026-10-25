@@ -6,7 +6,7 @@ test('each department offers the template list', () => {
   assert.deepEqual(bomItemsFor('Production').slice(0, 7), ['Washing Inst.', 'Elastic', 'Tie Cord', 'Thread', 'Tape', 'Sponge', 'Side Woven']);
   assert.ok(bomItemsFor('Press').includes('Sponser'));
   assert.ok(bomItemsFor('Packing').includes('Carton'));
-  assert.deepEqual(bomItemsFor('Yoko'), []);
+  assert.deepEqual(bomItemsFor('Yoko'), ['Yoko Collar', 'Yoko Cuffs']);
 });
 
 test('a saved line reads back to its department', () => {

@@ -94,6 +94,7 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
               orderId={order.id}
               initial={rows}
               itemTypes={(lookups?.values?.BOM_ITEM_TYPE ?? []).map((v) => v.value)}
+              fabrics={(lookups?.values?.FABRIC ?? []).map((v) => v.value)}
               colors={(lookups?.colors ?? []).map((c) => c.name)}
               units={(lookups?.values?.UNIT ?? []).map((v) => v.value)}
               sizeLabels={(lookups?.sizes ?? []).map((s) => s.name)}
