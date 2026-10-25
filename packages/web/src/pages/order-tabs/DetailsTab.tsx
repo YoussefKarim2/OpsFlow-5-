@@ -10,7 +10,7 @@ import { Save, Pencil } from 'lucide-react';
 import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { Card, CardHeader, Field, FreeText, ErrorNote, clsx } from '../../components/ui';
+import { Card, CardHeader, FreeText, ErrorNote, clsx } from '../../components/ui';
 import { ComboSelect } from '../../components/ComboSelect';
 
 export function DetailsTab({ order }: { order: OrderDetailDto }) {
@@ -241,47 +241,6 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
         </Card>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader title="Addresses" />
-          <div className="grid gap-4 p-4">
-            <div>
-              <p className="label">Shipping address</p>
-              <div className="rounded border border-ink-200 bg-ink-50 px-3 py-2 text-sm leading-relaxed text-ink-800">
-                <FreeText text={order.client.shippingAddress} />
-              </div>
-            </div>
-            <div>
-              <p className="label">Billing address</p>
-              <div className="rounded border border-ink-200 bg-ink-50 px-3 py-2 text-sm leading-relaxed text-ink-800">
-                <FreeText text={order.client.billingAddress} />
-              </div>
-            </div>
-          </div>
-        </Card>
-
-        <Card>
-          <CardHeader title="Notes" subtitle="Read by the departments they concern" />
-          <div className="grid gap-3 p-4">
-            {(['general', 'spread', 'cut', 'packing', 'external'] as const).map((k) => (
-              <Field key={k} label={k.charAt(0).toUpperCase() + k.slice(1)}>
-                {editing ? (
-                  <textarea
-                    value={form.notes[k] ?? ''} rows={2}
-                    onChange={(e) => setForm({ ...form, notes: { ...form.notes, [k]: e.target.value } })}
-                    className="input"
-                    dir="auto"
-                  />
-                ) : (
-                  <div className="min-h-[2rem] rounded border border-ink-200 bg-ink-50 px-3 py-2 text-sm text-ink-800">
-                    <FreeText text={order.notes[k]} />
-                  </div>
-                )}
-              </Field>
-            ))}
-          </div>
-        </Card>
-      </div>
     </div>
   );
 }
