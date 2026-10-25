@@ -57,9 +57,9 @@ const stateOf = (r: ReturnType<typeof deriveOrderSteps>, key: StageKey) =>
   r.steps.find((s) => s.key === key)!.state;
 
 describe('a reference page is not a task', () => {
-  test('the Database step never becomes the current step', () => {
-    // It sits at 17, between Actual Costing and Invoice. If it counted as work
-    // it would stop a coordinator between the two and ask them to do nothing.
+  test('the History step never becomes the current step', () => {
+    // It sits last, after Invoice. If it counted as work it would hold a
+    // finished order open and ask a coordinator to do nothing.
     const r = deriveOrderSteps(fresh());
     for (const s of r.steps) {
       if (s.key === StageKey.DATABASE) assert.equal(s.isCurrent, false);
@@ -69,14 +69,14 @@ describe('a reference page is not a task', () => {
 
   test('it is left out of the progress denominator', () => {
     const r = deriveOrderSteps(fresh());
-    // Seventeen steps, less Database (reference) and less External Order (this
-    // order has no printing), leaves fifteen pieces of actual work.
-    assert.equal(r.steps.length, 17);
-    assert.equal(r.applicableCount, 15);
+    // Sixteen steps, less History (reference) and less External Order (this
+    // order has no printing), leaves fourteen pieces of actual work.
+    assert.equal(r.steps.length, 16);
+    assert.equal(r.applicableCount, 14);
 
-    // Declaring external work adds one back; Database never comes back.
+    // Declaring external work adds one back; History never comes back.
     const withPrinting = deriveOrderSteps(fresh({ externalWorkDeclared: true }));
-    assert.equal(withPrinting.applicableCount, 16);
+    assert.equal(withPrinting.applicableCount, 15);
   });
 
   test('opening it cannot move an order’s progress', () => {
@@ -85,12 +85,14 @@ describe('a reference page is not a task', () => {
 });
 
 describe('the step list matches the workbook', () => {
-  test('the workbook’s seventeen steps, in its own order', () => {
-    assert.equal(ORDER_STEPS.length, 17);
+  test('the sixteen steps, in order', () => {
+    // Seventeen until 2026-10-25, when the Database screen and the Progress
+    // Checklist were taken out and the change history became its own step.
+    assert.equal(ORDER_STEPS.length, 16);
     assert.deepEqual(
       ORDER_STEPS.map((s) => s.order),
-      Array.from({ length: 17 }, (_, i) => i + 1),
-      'step numbers must run 1..17 with no gaps or repeats',
+      Array.from({ length: 16 }, (_, i) => i + 1),
+      'step numbers must run 1..16 with no gaps or repeats',
     );
   });
 
@@ -120,14 +122,24 @@ describe('the step list matches the workbook', () => {
       StageKey.PACKING,
       StageKey.AUDIT,
       StageKey.ACTUAL_COSTING,
-      StageKey.DATABASE,
       StageKey.INVOICE,
-      // Last in the process: the checklist you tick off once the work is done.
-      StageKey.PROGRESS_STATUS,
+      // Last: the record of who changed what (DATABASE is the key it took over).
+      StageKey.DATABASE,
     ]);
   });
 
-  test('every one of the seventeen names the sheet it came from', () => {
+  test('the Database screen and the Progress Checklist are not steps', () => {
+    assert.equal(ORDER_STEPS.some((s) => s.key === StageKey.PROGRESS_STATUS), false);
+    assert.equal(ORDER_STEPS.some((s) => s.label === 'Database'), false);
+    assert.equal(STEP_BY_KEY[StageKey.DATABASE]?.label, 'History');
+  });
+
+  test('Quality Audit opens the inspection, History the change record', () => {
+    assert.equal(STEP_BY_KEY[StageKey.AUDIT]?.tab, 'quality');
+    assert.equal(STEP_BY_KEY[StageKey.DATABASE]?.tab, 'activity');
+  });
+
+  test('every step names the sheet it came from', () => {
     // The sheet name is how somebody checks a step against the workbook.
     for (const s of ORDER_STEPS) {
       assert.ok(s.sheetName.length > 1, `${s.key} does not name its sheet`);
@@ -409,7 +421,6 @@ describe('progress across the whole order', () => {
       stockRecorded: true,
       hasCosting: true, costLineCount: 12,
       shippedQty: 1972, shipmentBooked: true,
-      taskCounts: { [StageKey.PROGRESS_STATUS]: { total: 27, completed: 27, overdue: 0 } },
       overrides: {
         // The two steps that need a person.
         [StageKey.CUSTOM_INSTRUCTIONS]: { status: StageStatus.COMPLETED, completedAt: '2026-09-01', startedAt: null, notRequiredReason: null, notes: null },

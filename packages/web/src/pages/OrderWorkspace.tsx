@@ -44,9 +44,6 @@ import { StockTab } from './order-tabs/StockTab';
 import { ProformaTab } from './order-tabs/ProformaTab';
 import { StepRail, StepHeader } from './order-tabs/StepRail';
 import { DocumentsTab } from './order-tabs/DocumentsTab';
-import { ProgressStatusTab } from './order-tabs/ProgressStatusTab';
-import { OrderAuditTab } from './order-tabs/OrderAuditTab';
-import { DatabaseTab } from './order-tabs/DatabaseTab';
 import { InvoiceTab } from './order-tabs/InvoiceTab';
 
 /**
@@ -57,13 +54,19 @@ import { InvoiceTab } from './order-tabs/InvoiceTab';
  */
 type TabKey = OrderTabKey;
 
+const RETIRED_TABS: Record<string, TabKey> = {
+  approvals: 'external', audit: 'quality', database: 'activity', progress: 'tasks',
+};
+
 export function OrderWorkspacePage() {
   const { id = '' } = useParams();
   const [params, setParams] = useSearchParams();
-  // `approvals` was a tab until customer approvals were removed; links already
-  // sent in emails and notifications land on the outside-work screen instead.
+  // Screens that have gone, and where a link already sent in an email or a
+  // notification lands instead: approvals (removed with customer approvals),
+  // the old Audit section (its inspection is Quality, its history History),
+  // the Database screen and the Progress Checklist.
   const rawTab = params.get('tab');
-  const tab = ((rawTab === 'approvals' ? 'external' : rawTab) as TabKey) || 'overview';
+  const tab = ((rawTab && RETIRED_TABS[rawTab]) ?? rawTab as TabKey) || 'overview';
   const [showAllTabs, setShowAllTabs] = useState(false);
   const { isSuperAdmin } = useAuth();
   const navigate = useNavigate();
@@ -131,7 +134,6 @@ export function OrderWorkspacePage() {
     { key: 'details',    label: 'Order Details' },
     { key: 'quantity',   label: 'Quantity' },
     { key: 'proforma',   label: 'Proforma Invoice' },
-    { key: 'progress',   label: 'Progress Status' },
     { key: 'tasks',      label: 'Workflow', badge: order.counts.overdueTasks, tone: 'red' },
     { key: 'cutting',    label: 'Cutting & Marker' },
     { key: 'materials',  label: 'Materials', badge: order.materials?.shortCount ?? 0, tone: 'red' },
@@ -142,13 +144,11 @@ export function OrderWorkspacePage() {
     { key: 'quality',    label: 'Quality' },
     { key: 'packing',    label: 'Packing' },
     { key: 'stock',      label: 'Stock' },
-    { key: 'audit',      label: 'Audit' },
     { key: 'costing',    label: 'Costing' },
-    { key: 'database',   label: 'Database' },
     { key: 'invoice',    label: 'Invoice' },
     { key: 'shipping',   label: 'Shipping' },
     { key: 'documents',  label: 'Documents', badge: order.counts.attachments },
-    { key: 'activity',   label: 'Activity' },
+    { key: 'activity',   label: 'History' },
   ];
 
   return (
@@ -315,9 +315,6 @@ export function OrderWorkspacePage() {
           {tab === 'quality'      && <QualityTab order={order} />}
           {(tab === 'packing' || tab === 'shipping') && <PackingTab order={order} focus={tab} />}
           {tab === 'stock'        && <StockTab order={order} />}
-          {tab === 'progress'     && <ProgressStatusTab order={order} steps={steps} onJump={setTab} />}
-          {tab === 'audit'        && <OrderAuditTab order={order} />}
-          {tab === 'database'     && <DatabaseTab orderId={order.id} />}
           {tab === 'invoice'      && <InvoiceTab order={order} />}
           {tab === 'costing'      && <CostingTab order={order} />}
           {tab === 'documents'    && <DocumentsTab orderId={order.id} />}

@@ -191,7 +191,7 @@ export const ORDER_TAB_KEYS = [
   'cutting', 'materials', 'bom', 'instructions', 'external',
   'production', 'quality', 'packing', 'stock',
   'shipping', 'costing', 'documents', 'activity',
-  'database', 'progress', 'audit', 'invoice',
+  'invoice',
 ] as const;
 export type OrderTabKey = (typeof ORDER_TAB_KEYS)[number];
 
@@ -471,7 +471,7 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
       'How many were checked, accepted and rejected',
       'The defects found, and the result',
     ],
-    tab: 'audit',
+    tab: 'quality',
     isDoneWhen: (c) => has(c.auditCount) && c.auditPassed && !c.openQualityFailure,
     missing: (c) => {
       if (!has(c.auditCount)) return 'Record the inspection';
@@ -499,28 +499,8 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
     hasStarted: (c) => c.hasCosting,
   },
   {
-    key: StageKey.DATABASE,
-    order: 15,
-    sheetName: 'Data-Base',
-    label: 'Database',
-    purpose:
-      'Where this order came from and how it is stored — the identifiers you need when ' +
-      'something has to be traced, checked or reported.',
-    department: Department.ADMIN,
-    whatYouEnter: ['Nothing — this is reference information about the order itself'],
-    tab: 'database',
-    /**
-     * Informational. It has no work in it, so it is never the current step and
-     * never counts towards progress — an order is not 6% finished because
-     * somebody opened its metadata page. The workbook's own `Data-Base` sheet
-     * is the same: a reference the other sheets read, not a task.
-     */
-    informational: true,
-    missing: () => null,
-  },
-  {
     key: StageKey.INVOICE,
-    order: 16,
+    order: 15,
     sheetName: 'Invoice',
     label: 'Invoice & Shipment',
     purpose: 'Booking the shipment and invoicing the customer.',
@@ -535,30 +515,25 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
     hasStarted: (c) => c.shipmentBooked || has(c.shippedQty),
   },
   {
-    key: StageKey.PROGRESS_STATUS,
-    order: 17,
-    sheetName: 'Progress Status',
-    label: 'Progress Checklist',
+    key: StageKey.DATABASE,
+    order: 16,
+    sheetName: 'Data-Base',
+    label: 'History',
     purpose:
-      'The factory’s own task list for this order — twenty-seven jobs, each with a department ' +
-      'and the information it needs.',
-    department: Department.COORDINATOR,
-    whatYouEnter: [
-      'Tick each job as your department finishes it',
-      'The time it actually took',
-    ],
-    tab: 'progress',
-    isDoneWhen: (c) => {
-      const t = c.taskCounts[StageKey.PROGRESS_STATUS];
-      return !!t && t.total > 0 && t.completed >= t.total;
-    },
-    missing: (c) => {
-      const t = c.taskCounts[StageKey.PROGRESS_STATUS];
-      if (!t || t.total === 0) return 'The task list has not been created for this order yet';
-      const left = t.total - t.completed;
-      return left > 0 ? `${left} job${left === 1 ? '' : 's'} still open` : null;
-    },
-    hasStarted: (c) => (c.taskCounts[StageKey.PROGRESS_STATUS]?.completed ?? 0) > 0,
+      'Who changed what on this order, and when — every edit with the value it had before, ' +
+      'and the raw field-level trail behind it.',
+    department: Department.ADMIN,
+    whatYouEnter: ['Nothing — every change is recorded automatically'],
+    tab: 'activity',
+    /**
+     * Informational. It has no work in it, so it is never the current step and
+     * never counts towards progress. It took over the workbook's `Data-Base`
+     * key (a reference page too) when the Database screen and the Progress
+     * Checklist were taken out of the routine and the change history moved
+     * out of Quality Audit into a section of its own, last.
+     */
+    informational: true,
+    missing: () => null,
   },
 ];
 

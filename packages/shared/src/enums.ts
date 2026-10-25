@@ -90,6 +90,8 @@ export const STAGE_META: Record<
   MAIN_ORDER:           { order: 3,  label: 'Main Order',               weight: 4,  group: 'ORDER' },
   PROFORMA_INVOICE:     { order: 4,  label: 'Proforma Invoice',         weight: 2,  group: 'ORDER' },
   EXTERNAL_ORDER:       { order: 9,  label: 'External Order',           weight: 8,  group: 'PRODUCTION' },
+  /// No longer a step of the routine (taken out 2026-10-25); kept for the
+  /// stage rows and the one workflow task that still belong to it.
   PROGRESS_STATUS:      { order: 17,  label: 'Progress Status',          weight: 1,  group: 'ORDER' },
   CUT_ORDER:            { order: 6,  label: 'Cut Order',                weight: 6,  group: 'MATERIALS' },
   LAYING_FABRIC:        { order: 7,  label: 'Laying Fabric',            weight: 8,  group: 'MATERIALS' },
@@ -100,10 +102,10 @@ export const STAGE_META: Record<
   PRODUCTION_FOLLOW_UP: { order: 11, label: 'Production Follow-up',     weight: 23, group: 'PRODUCTION' },
   AUDIT:                { order: 13, label: 'Audit',                    weight: 10, group: 'DELIVERY' },
   ACTUAL_COSTING:       { order: 14, label: 'Actual Costing',           weight: 4,  group: 'DELIVERY' },
-  /// Reference, not work: weight 0 so opening it cannot move an order's
-  /// progress. It is step 17 because the workbook's menu puts it there.
-  DATABASE:             { order: 15, label: 'Database',                 weight: 0,  group: 'ORDER' },
-  INVOICE:              { order: 16, label: 'Invoice',                  weight: 3,  group: 'DELIVERY' },
+  /// The History step (the change record), last in the routine. Reference,
+  /// not work: weight 0 so opening it cannot move an order's progress.
+  DATABASE:             { order: 16, label: 'History',                  weight: 0,  group: 'ORDER' },
+  INVOICE:              { order: 15, label: 'Invoice',                  weight: 3,  group: 'DELIVERY' },
   /// Not one of the eighteen. The workbook has no "completed" sheet; this is
   /// the terminal state an order reaches, kept because OrderStatus and the
   /// gate engine both refer to it.
