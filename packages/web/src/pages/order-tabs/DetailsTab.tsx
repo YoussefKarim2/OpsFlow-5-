@@ -42,7 +42,7 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
     samMinutes: order.samMinutes == null ? '' : String(order.samMinutes),
     // Typed as a percentage (5), stored as a fraction (0.05).
     cutPercentText: percentText(order.cutPercentage),
-    accessoryPercentage: order.accessoryPercentage,
+    accessoryPercentText: percentText(order.accessoryPercentage),
     poDate: order.poDate?.slice(0, 10) ?? '',
     internalPoDate: order.internalPoDate?.slice(0, 10) ?? '',
     productionSample: order.productionSample,
@@ -60,11 +60,11 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
   const save = useMutation({
     mutationFn: () =>
       api.orders.update(order.id, {
-        ...withoutKey(form, 'cutPercentText'),
+        ...withoutKeys(form, ['cutPercentText', 'accessoryPercentText']),
         pricePerPieceUsd: form.pricePerPieceUsd === '' ? null : Number(form.pricePerPieceUsd),
         samMinutes: form.samMinutes === '' ? null : Number(form.samMinutes),
         cutPercentage: Number(form.cutPercentText) / 100,
-        accessoryPercentage: Number(form.accessoryPercentage),
+        accessoryPercentage: Number(form.accessoryPercentText) / 100,
         notes: {
           general: form.notes.general ?? '', spread: form.notes.spread ?? '',
           cut: form.notes.cut ?? '', packing: form.notes.packing ?? '',
@@ -183,9 +183,10 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
               onChange={(v) => setForm({ ...form, fit: v })} display={order.fit} />
             <Select label="Block pattern" editing={editing} value={form.blockPattern} options={values.BLOCK_PATTERN?.map((v) => v.value) ?? []}
               onChange={(v) => setForm({ ...form, blockPattern: v })} display={order.blockPattern} />
-            <Edit label="Accessory percentage" editing={editing} type="number" step="0.01" value={String(form.accessoryPercentage)}
-              onChange={(v) => setForm({ ...form, accessoryPercentage: Number(v) })}
-              display={`${(order.accessoryPercentage * 100).toFixed(1)}%`} />
+            <Edit label="Accessory percentage (%)" editing={editing} type="number" step="0.1" value={form.accessoryPercentText}
+              onChange={(v) => setForm({ ...form, accessoryPercentText: v })}
+              display={`${percentText(order.accessoryPercentage)}%`}
+              hint="Type the percentage: 5 means 5%." />
             <Edit label="Promised shipping" editing={editing} type="date" value={form.promisedShippingDate}
               onChange={(v) => setForm({ ...form, promisedShippingDate: v })} display={fmtDate(order.promisedShippingDate)} />
           </div>
@@ -240,9 +241,10 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
 }
 
 
-/** The form without a field that exists only on screen. */
-function withoutKey<T extends object, K extends keyof T>(o: T, k: K): Omit<T, K> {
-  const { [k]: _omit, ...rest } = o;
+/** The form without the fields that exist only on screen. */
+function withoutKeys<T extends object, K extends keyof T>(o: T, keys: readonly K[]): Omit<T, K> {
+  const rest = { ...o };
+  for (const k of keys) delete rest[k];
   return rest;
 }
 
