@@ -57,14 +57,28 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
     notes: { ...order.notes },
   });
 
+  /**
+   * A percentage as typed, as the stored fraction, or the reason it cannot be
+   * saved. Blank is refused rather than read as 0%, which would cut with no
+   * allowance; and a figure under 1 is refused because it is almost always the
+   * old fraction habit (0.05 meaning 5%), which would store 0.05%.
+   */
+  const percentField = (label: string, text: string): number => {
+    const v = Number(text);
+    if (text.trim() === '' || !Number.isFinite(v)) throw new Error(`${label}: type a percentage, e.g. 5 for 5%.`);
+    if (v > 0 && v < 1) throw new Error(`${label} of ${text}% is under 1%. Type the percentage itself: 5 means 5%.`);
+    // Four places, as the column stores it: 5.8 / 100 is 0.057999… otherwise.
+    return Number((v / 100).toFixed(4));
+  };
+
   const save = useMutation({
     mutationFn: () =>
       api.orders.update(order.id, {
         ...withoutKeys(form, ['cutPercentText', 'accessoryPercentText']),
         pricePerPieceUsd: form.pricePerPieceUsd === '' ? null : Number(form.pricePerPieceUsd),
         samMinutes: form.samMinutes === '' ? null : Number(form.samMinutes),
-        cutPercentage: Number(form.cutPercentText) / 100,
-        accessoryPercentage: Number(form.accessoryPercentText) / 100,
+        cutPercentage: percentField('Cut percentage', form.cutPercentText),
+        accessoryPercentage: percentField('Accessory percentage', form.accessoryPercentText),
         notes: {
           general: form.notes.general ?? '', spread: form.notes.spread ?? '',
           cut: form.notes.cut ?? '', packing: form.notes.packing ?? '',
@@ -75,7 +89,7 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
       setEditing(false); setError(null);
       void qc.invalidateQueries({ queryKey: ['order', order.id] });
     },
-    onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not save.'),
+    onError: (e) => setError(e instanceof ApiError || e instanceof Error ? e.message : 'Could not save.'),
   });
 
   const editable = can('order:edit');

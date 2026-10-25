@@ -14,7 +14,7 @@ import { asyncHandler } from '../util/async-handler.js';
 import { BadRequestError, ConflictError, NotFoundError, ValidationError } from '../errors.js';
 import { fillMainOrderFromDocuments } from '../services/fill-main-order.js';
 import { upsertRefSize, writeOrderMatrix } from '../services/import/committer.js';
-import { orderSizes } from '../services/import/po-lines.js';
+import { orderSizes, splitColourSize } from '../services/import/po-lines.js';
 import {
   getOrderDetail, listOrders, refreshOrderCache, ORDER_INCLUDE,
   buildOrderSummary, toTaskDto, deriveOrder,
@@ -367,7 +367,9 @@ ordersRouter.patch('/:id', requirePermission('order:edit'), asyncHandler(async (
   // The allowance is the cut order's third input, alongside the order quantity
   // and the finished stock. Moving it and leaving the sheet on the old figure
   // would be the same staleness the quantity grid guards against.
-  if (input.cutPercentage != null && Number(order.cutPercentage.toString()) !== input.cutPercentage) {
+  // Compared to the column's four places: 5.8 typed as a percent arrives as
+  // 0.057999…, and an exact comparison rewrote the cut order on every save.
+  if (input.cutPercentage != null && Math.abs(Number(order.cutPercentage.toString()) - input.cutPercentage) > 5e-5) {
     await refreshCutOrder(order.id);
   }
 
@@ -565,39 +567,71 @@ ordersRouter.post('/:id/matrix/enter', requirePermission('order:edit'), asyncHan
  * the customer added later. It joins the grid empty, in wearing order among the
  * sizes already there, and is filled in on the grid like any other.
  */
-const addSizeSchema = z.object({ name: z.string().trim().min(1, 'Name the size.').max(40) });
+const addSizeSchema = z.object({
+  name: z.string().transform((s) => s.trim().replace(/\s+/g, ' ')).pipe(z.string().min(1, 'Name the size.').max(40)),
+});
+
+/** One size's spellings reduced to one form: "S", "Small" and "ADULT SMALL" agree, as do "2XL" and "XXL". */
+const sizeKeys = (...names: Array<string | null | undefined>): string[] =>
+  names.filter((n): n is string => !!n?.trim()).flatMap((n) => {
+    const plain = n.trim().replace(/\s+/g, ' ').toLowerCase();
+    const canonical = splitColourSize(n).size?.toLowerCase();
+    return canonical && canonical !== plain ? [plain, canonical] : [plain];
+  });
 
 ordersRouter.post('/:id/sizes', requirePermission('order:edit'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   const { name } = addSizeSchema.parse(req.body ?? {});
-  const order = await prisma.order.findUnique({
-    where: { id: req.params.id },
-    select: { id: true, sizes: { select: { id: true, position: true, size: { select: { name: true } } } } },
-  });
-  if (!order) throw new NotFoundError('Order');
-  const same = (a: string) => a.trim().toLowerCase() === name.toLowerCase();
-  if (order.sizes.some((s) => same(s.size.name))) throw new ConflictError(`Size ${name} is already on this order.`);
+  const wanted = new Set(sizeKeys(name));
+  const exists = await prisma.order.findUnique({ where: { id: req.params.id }, select: { id: true } });
+  if (!exists) throw new NotFoundError('Order');
 
-  await prisma.$transaction(async (tx) => {
-    const sizeId = await upsertRefSize(tx, name, order.sizes.length);
-    const added = await tx.orderSize.create({ data: { orderId: order.id, sizeId, position: order.sizes.length } });
-    // Re-number every column in wearing order, so XS lands before S rather
-    // than after the last size. Rows refer to sizes by id; nothing else moves.
-    const current = [...order.sizes, { id: added.id, position: order.sizes.length, size: { name } }]
-      .sort((a, b) => a.position - b.position);
-    const sorted = orderSizes(current.map((s) => s.size.name));
-    for (const s of current) {
-      await tx.orderSize.update({ where: { id: s.id }, data: { position: sorted.indexOf(s.size.name) } });
+  const added = await prisma.$transaction(async (tx) => {
+    // One add at a time per order: the sizes are read, checked and
+    // re-numbered under the order's row lock, so two people adding at once
+    // cannot both pass the check or leave two columns on one position.
+    await tx.$queryRaw`SELECT id FROM orders WHERE id = ${exists.id} FOR UPDATE`;
+    const sizes = await tx.orderSize.findMany({
+      where: { orderId: exists.id }, orderBy: { position: 'asc' },
+      select: { id: true, sizeId: true, size: { select: { name: true, longName: true } } },
+    });
+    const same = sizes.find((s) => sizeKeys(s.size.name, s.size.longName).some((k) => wanted.has(k)));
+    if (same) {
+      throw new ConflictError(same.size.name.toLowerCase() === name.toLowerCase()
+        ? `Size ${same.size.name} is already on this order.`
+        : `${name} is already on this order as ${same.size.name}.`);
     }
+    // The factory's own spelling when it has one ("Small" → S), so the new
+    // column matches stock, packing and the size list everywhere else.
+    const known = (await tx.refSize.findMany({ select: { id: true, name: true, longName: true } }))
+      .find((r) => sizeKeys(r.name, r.longName).some((k) => wanted.has(k)));
+    const sizeId = known?.id ?? await upsertRefSize(tx, name, sizes.length);
+    const created = await tx.orderSize.create({
+      data: { orderId: exists.id, sizeId, position: sizes.length },
+      select: { id: true, size: { select: { name: true } } },
+    });
+    // In wearing order: before the first existing size it is worn smaller
+    // than (XS before S), the existing columns keeping their own order. Asked
+    // pair by pair, so one size nobody can rank (a customer's "Custom-Z")
+    // does not stop the rest being placed; a new size nobody can rank goes
+    // last. Rows refer to sizes by id, so nothing else moves.
+    const label = created.size.name;
+    const at = sizes.findIndex((s) => orderSizes([s.size.name, label])[0] === label);
+    const columns = sizes.map((s) => s.id);
+    columns.splice(at < 0 ? columns.length : at, 0, created.id);
+    for (const [position, id] of columns.entries()) {
+      await tx.orderSize.update({ where: { id }, data: { position } });
+    }
+    return created;
   });
 
   await logActivity({
-    orderId: order.id, actorId: actor.id, actorName: actor.name,
-    action: 'QUANTITIES_UPDATED', summary: `added size ${name} to the Main Order`,
-    entityType: 'OrderSize', entityId: order.id, meta: { size: name },
+    orderId: exists.id, actorId: actor.id, actorName: actor.name,
+    action: 'QUANTITIES_UPDATED', summary: `added size ${added.size.name} to the Main Order`,
+    entityType: 'OrderSize', entityId: added.id, meta: { size: added.size.name },
   });
-  await refreshOrderCache(order.id);
-  res.status(201).json({ data: await orderDetailFor(req, order.id) });
+  await refreshOrderCache(exists.id);
+  res.status(201).json({ data: await orderDetailFor(req, exists.id) });
 }));
 
 /** The order's total for one ledger, for before/after comparison. */

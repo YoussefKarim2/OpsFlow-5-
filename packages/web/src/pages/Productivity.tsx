@@ -589,9 +589,9 @@ function LabourSection({ labour: l, trend, dayLogs, orders }: {
         <div className="rounded-md border border-amber-200 bg-amber-50/60 px-4 py-2.5 text-xs text-amber-800">
           <span className="font-medium">No SAM on {noSam.length} order{noSam.length === 1 ? '' : 's'} that sewed in this period:</span>{' '}
           {noSam.map((o, i) => (
-            <span key={o.orderId}>{i > 0 && ', '}<Link to={`/orders/${o.orderId}?tab=details`} className="underline">{o.poNumber}</Link></span>
+            <span key={o.orderId}>{i > 0 && ', '}<Link to={`/orders/${o.orderId}`} className="underline">{o.poNumber}</Link></span>
           ))}
-          . Enter the standard minutes per garment on each order's Details tab and those days will count.
+          . Line efficiency needs each order's standard minutes per garment, which is no longer entered on Order Details, so those days are not counted.
         </div>
       )}
 

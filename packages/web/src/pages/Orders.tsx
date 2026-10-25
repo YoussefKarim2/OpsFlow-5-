@@ -98,7 +98,9 @@ export function OrdersPage() {
                 .filter(([value]) => value !== 'WAITING_APPROVAL')
                 .map(([value, label]) => ({ value, label }))} />
             <FilterSelect label="Stage" value={filters.stage} onChange={(v) => setFilter('stage', v)}
-              options={Object.entries(STAGE_META).sort((a, b) => a[1].order - b[1].order).map(([value, m]) => ({ value, label: m.label }))} />
+              // Not History: it is a reference step with no tasks, so no order is ever "at" it.
+              options={Object.entries(STAGE_META).filter(([value]) => value !== 'DATABASE')
+                .sort((a, b) => a[1].order - b[1].order).map(([value, m]) => ({ value, label: m.label }))} />
             <FilterSelect label="Factory" value={filters.factoryId} onChange={(v) => setFilter('factoryId', v)}
               options={(lookups?.factories ?? []).map((f) => ({ value: f.id, label: f.name }))} />
             <FilterSelect label="Shipping" value={filters.shippingMethod} onChange={(v) => setFilter('shippingMethod', v)}

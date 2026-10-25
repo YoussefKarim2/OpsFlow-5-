@@ -170,12 +170,14 @@ export function BomEditor({
   /** Choosing a department narrows the item list, as the template's INDIRECT dropdown does. */
   const setDepartment = (i: number, department: BomDepartment | null) => {
     const r = rows[i]!;
-    const keep = department == null || itemsFor(department).length === 0 || inList(itemsFor, department, r.item);
-    const item = keep ? r.item : '';
+    // An item not on the new department's list is kept as typed text rather
+    // than cleared: "Collar" moved to Yoko is still a collar.
+    const listed = department == null || itemsFor(department).length === 0 || inList(itemsFor, department, r.item);
+    const item = r.item;
     setRow(i, {
       department,
       item,
-      typed: department == null || itemsFor(department).length === 0,
+      typed: department == null || itemsFor(department).length === 0 || (!listed && item.trim() !== ''),
       category: department ? bomCategoryFor(department, item) : r.category,
     });
   };

@@ -90,7 +90,10 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
             }
           />
           <div className="p-4">
+            {/* Keyed on the lists arriving: the editor reads them once, when it
+                opens, to decide which lines are picked and which typed. */}
             <BomEditor
+              key={lookups ? 'ready' : 'loading'}
               orderId={order.id}
               initial={rows}
               itemTypes={(lookups?.values?.BOM_ITEM_TYPE ?? []).map((v) => v.value)}
