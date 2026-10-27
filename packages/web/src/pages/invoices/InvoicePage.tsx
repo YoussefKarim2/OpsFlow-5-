@@ -23,6 +23,7 @@ import { api, type InvoiceEditBody } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Card, ConfirmDialog, ErrorNote, Field, Num, Spinner, clsx, useToast } from '../../components/ui';
 import { InvoiceDocument } from '../../components/InvoiceDocument';
+import { ComboSelect } from '../../components/ComboSelect';
 
 interface LineDraft { kind: LineKind; description: string; size: string; quantity: string; unitPrice: string; amount: string }
 /**
@@ -80,7 +81,24 @@ function fromServer(inv: InvoiceDto): Draft {
  * sent as it is and refused by the server with its own sentence, rather than
  * quietly dropped so that the saved document differs from the preview.
  */
-function toBody(d: Draft): InvoiceEditBody {
+/**
+ * Whether the cartons are typed here. An invoice built from a packing list
+ * takes its cartons from it: they are shown, and changed on the Packing tab.
+ */
+const cartonsTyped = (inv: InvoiceDto) => inv.kind === 'PROFORMA' || !inv.orders.some((o) => o.packingListId);
+
+/** What would stop a save: a carton's pieces must be a whole number. */
+function cartonProblem(d: Draft): string | null {
+  for (const c of d.cartons) {
+    if (c.contents.length > 0) continue;
+    const t = c.pieces.trim();
+    if (t === '') return `Carton ${c.cartonNumber || '(no number)'}: enter its pieces.`;
+    if (!/^\d+$/.test(t)) return `Carton ${c.cartonNumber || '(no number)'}: pieces must be a whole number.`;
+  }
+  return null;
+}
+
+function toBody(d: Draft, inv: InvoiceDto): InvoiceEditBody {
   const nn = (s: string) => (s.trim() === '' ? null : s.trim());
   return {
     date: d.date || undefined, dueDate: d.dueDate || null, paymentTerms: nn(d.paymentTerms),
@@ -88,7 +106,8 @@ function toBody(d: Draft): InvoiceEditBody {
     customerReference: nn(d.customerReference), shipmentRef: nn(d.shipmentRef), shippedOn: d.shippedOn || null,
     coverNote: nn(d.coverNote), terms: nn(d.terms), bankDetails: nn(d.bankDetails), notes: nn(d.notes),
     lineLayout: d.lineLayout,
-    cartons: d.cartons.map((c) => ({
+    updatedAt: inv.updatedAt,
+    cartons: !cartonsTyped(inv) ? undefined : d.cartons.map((c) => ({
       cartonNumber: c.cartonNumber.trim(), cartonSize: nn(c.cartonSize), product: c.product.trim(), poNumber: c.poNumber,
       contents: c.contents, contentsText: c.contents.length > 0 ? null : nn(c.contentsText),
       pieces: cartonPieces(c), netKg: numOrNull(c.netKg), grossKg: numOrNull(c.grossKg),
@@ -164,7 +183,11 @@ export function InvoicePage() {
   const after = (msg: string) => () => { refresh(); setConfirm(null); toast.success(msg); };
 
   const save = useMutation({
-    mutationFn: (d: Draft) => api.invoices.update(id, toBody(d)),
+    mutationFn: (d: Draft) => {
+      const problem = cartonProblem(d);
+      if (problem) throw new Error(problem);
+      return api.invoices.update(id, toBody(d, inv!));
+    },
     // The saved copy is the new baseline, so the next refetch is not "a change".
     onSuccess: (res) => { dirtyRef.current = false; setDraft(fromServer(res.data)); after('Draft saved')(); },
     onError: (e) => toast.error(e),
@@ -237,7 +260,8 @@ export function InvoicePage() {
         <div className="ml-auto flex flex-wrap gap-2">
           {editable && (
             <>
-              <button className="btn-secondary btn-sm" disabled={rebuild.isPending} onClick={() => setConfirm('rebuild')} title="Read the order again: goods lines, cartons, reconciliation and letterhead">
+              <button className="btn-secondary btn-sm" disabled={rebuild.isPending || dirty} onClick={() => setConfirm('rebuild')}
+                title={dirty ? 'Save or undo your edits first: rebuilding reads the order again' : 'Read the order again: goods lines, cartons, reconciliation and letterhead'}>
                 <RefreshCw className={clsx('h-3.5 w-3.5', rebuild.isPending && 'animate-spin')} /> Rebuild from order
               </button>
               <button className="btn-secondary btn-sm" disabled={!dirty || save.isPending} onClick={() => save.mutate(draft)}>
@@ -369,14 +393,20 @@ export function InvoicePage() {
 
             <Card>
               <div className="card-header"><h3 className="card-title">Cartons</h3>
-                <div className="flex gap-1">
+                {cartonsTyped(inv) && <div className="flex gap-1">
                   <button type="button" className="btn-ghost btn-sm" onClick={() => fillCartons.mutate()} disabled={fillCartons.isPending}
                     title="Copy the cartons entered on the order's Packing tab">
                     <RefreshCw className="h-3.5 w-3.5" /> {fillCartons.isPending ? 'Copying…' : 'From packing list'}
                   </button>
                   <button type="button" className="btn-ghost btn-sm" onClick={addCarton}><Plus className="h-3.5 w-3.5" /> Carton</button>
-                </div>
+                </div>}
               </div>
+              {!cartonsTyped(inv) ? (
+                <p className="px-4 py-3 text-xs text-ink-600">
+                  {draft.cartons.length} carton{draft.cartons.length === 1 ? '' : 's'} from the order's packing list, as printed. To change them,
+                  edit the cartons on the order's Packing tab, then use <strong>Rebuild from order</strong>.
+                </p>
+              ) : (
               <div className="divide-y divide-ink-100">
                 {draft.cartons.length === 0 && (
                   <p className="px-4 py-3 text-xs text-ink-500">No cartons yet. Add them by hand, or copy them from the order's packing list. They print as a packing list under the document.</p>
@@ -389,6 +419,12 @@ export function InvoicePage() {
                       <button type="button" className="btn-ghost btn-sm text-red-600 hover:bg-red-50" aria-label="Remove carton"
                         onClick={() => setDraft({ ...draft, cartons: draft.cartons.filter((_, j) => j !== i) })}><Trash2 className="h-3.5 w-3.5" /></button>
                     </div>
+                    {inv.orders.length > 1 && (
+                      <ComboSelect aria-label="PO" className="input !py-1 text-xs" value={c.poNumber ?? ''} onChange={(e) => setCarton(i, { poNumber: e.target.value || undefined })}>
+                        <option value="">PO…</option>
+                        {inv.orders.map((o) => <option key={o.poNumber} value={o.poNumber}>{`PO ${o.poNumber} · ${o.orderName}`}</option>)}
+                      </ComboSelect>
+                    )}
                     <input className="input !py-1 text-xs" dir="auto" aria-label="Contents" placeholder="Contents, e.g. S × 10, M × 12"
                       value={c.contents.length > 0 ? contentsLabel(c) : c.contentsText}
                       onChange={(e) => setCarton(i, { contents: [], contentsText: e.target.value })} />
@@ -404,11 +440,17 @@ export function InvoicePage() {
                   </div>
                 ))}
               </div>
+              )}
               {draft.cartons.length > 0 && (
                 <div className="flex items-baseline justify-between border-t border-ink-200 bg-ink-50 px-4 py-2 text-sm">
                   <span className="font-medium text-ink-700">{draft.cartons.length} carton{draft.cartons.length === 1 ? '' : 's'}</span>
                   <span className="tnum font-semibold">{draft.cartons.reduce((a, c) => a + cartonPieces(c), 0).toLocaleString()} pcs</span>
                 </div>
+              )}
+              {draft.cartons.length > 0 && draft.cartons.reduce((a, c) => a + cartonPieces(c), 0) !== shown.totals.totalQty && (
+                <p className="border-t border-amber-200 bg-amber-50 px-4 py-2 text-2xs text-amber-800">
+                  The cartons hold {draft.cartons.reduce((a, c) => a + cartonPieces(c), 0).toLocaleString()} pcs; the goods lines bill {shown.totals.totalQty.toLocaleString()}. Check before issuing.
+                </p>
               )}
             </Card>
 

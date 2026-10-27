@@ -153,5 +153,16 @@ describe('summary layout', () => {
     assert.equal(mixed.unitPrice, 3); assert.equal(mixed.mixedRates, true); assert.equal(mixed.lineTotal, 60);
     const unpriced = summariseGoods([item('A', 10, null)], [{ poNumber: '1', orderName: 'O' }])[0]!;
     assert.equal(unpriced.quantity, 10); assert.equal(unpriced.unitPrice, null); assert.equal(unpriced.lineTotal, null);
+    // One line priced, one not: no rate × quantity that does not multiply out.
+    const partly = summariseGoods([item('Navy', 100, 5), item('Red', 50, null)], [{ poNumber: '1', orderName: 'O' }])[0]!;
+    assert.equal(partly.quantity, 150); assert.equal(partly.unitPrice, null); assert.equal(partly.lineTotal, null);
+  });
+
+  test('the summary amount is the same cents as the subtotal, on 4-decimal rates', () => {
+    for (const [q, p] of [[50, 0.1003], [1, 1.005], [1, 0.145], [333, 2.3335]] as const) {
+      const lines = [item('A', q, p)];
+      const row = summariseGoods(lines, [{ poNumber: '1', orderName: 'O' }])[0]!;
+      assert.equal(row.lineTotal, computeInvoiceTotals(lines).subtotal, `${q} × ${p}`);
+    }
   });
 });

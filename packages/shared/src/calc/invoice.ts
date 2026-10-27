@@ -291,7 +291,7 @@ export interface SummaryLine {
  * The goods lines reduced to one per order, for a summary document. A line
  * belongs to the order whose "(PO x)" it ends with; on a one-order document,
  * or for a line typed without a PO, it belongs to the first order. An order
- * none of whose lines is priced keeps a quantity and leaves rate and amount
+ * with any line not yet priced keeps its quantity and leaves rate and amount
  * blank, as a detailed line would.
  */
 export function summariseGoods(
@@ -309,17 +309,21 @@ export function summariseGoods(
     const g = groups[i]!;
     if (g.length === 0) return [];
     const qty = g.reduce((a, l) => a + (l.quantity ?? 0), 0);
-    const priced = g.filter((l) => l.quantity != null && l.unitPrice != null);
-    const cents = priced.reduce((a, l) => a + toCents((l.quantity ?? 0) * (l.unitPrice ?? 0)), 0);
-    const rates = new Set(priced.map((l) => l.unitPrice));
-    const pricedQty = priced.reduce((a, l) => a + (l.quantity ?? 0), 0);
+    // Each line's own total, the same exact cents the subtotal adds up, so the
+    // summary row can never be a cent off the total printed under it.
+    const totals = g.map((l) => lineTotal(l));
+    const allPriced = totals.every((t) => t != null);
+    const cents = allPriced ? totals.reduce((a, t) => a + toCents(t!), 0) : 0;
+    const rates = new Set(g.map((l) => l.unitPrice));
     return [{
       description: [o.orderName, o.styleNumber ? `Style ${o.styleNumber}` : null, orders.length > 1 ? `PO ${o.poNumber}` : null]
         .filter(Boolean).join(' · '),
       quantity: qty,
-      unitPrice: rates.size === 1 ? [...rates][0]! : pricedQty > 0 ? fromCents(cents) / pricedQty : null,
-      mixedRates: rates.size > 1,
-      lineTotal: priced.length ? fromCents(cents) : null,
+      // Until every line of the order has a rate, rate and amount stay blank:
+      // a partial figure next to the full quantity would not multiply out.
+      unitPrice: !allPriced ? null : rates.size === 1 ? [...rates][0]! : qty > 0 ? fromCents(cents) / qty : null,
+      mixedRates: allPriced && rates.size > 1,
+      lineTotal: allPriced ? fromCents(cents) : null,
     }];
   });
 }

@@ -167,6 +167,8 @@ export interface InvoiceEditBody {
   bankDetails?: string | null;
   notes?: string | null;
   lineLayout?: 'DETAILED' | 'SUMMARY';
+  /** The version the editor opened; a save on a newer one is refused. */
+  updatedAt?: string;
   /** A proforma's cartons, typed or copied from the packing list. Replaces the set. */
   cartons?: Array<{
     cartonNumber: string; cartonSize: string | null; product: string; poNumber?: string;
