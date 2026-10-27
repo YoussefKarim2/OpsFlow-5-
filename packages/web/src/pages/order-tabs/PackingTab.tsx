@@ -5,12 +5,13 @@ import { CartonSizes } from '../../components/CartonSizes';
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, PackageCheck, Truck } from 'lucide-react';
+import { Plus, PackageCheck, Truck, Trash2 } from 'lucide-react';
 import { fmtDate, fmtNumber, type OrderDetailDto } from '@opsflow/shared';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
+import { localToday } from '../../lib/local-today';
 import {
-  Card, CardHeader, StatTile, Num, Modal, Field, Spinner, ErrorNote, EmptyState, clsx,
+  Card, CardHeader, StatTile, Num, Modal, Field, Spinner, ErrorNote, EmptyState, clsx, useToast,
 } from '../../components/ui';
 import { AttachmentsPanel } from '../../components/Attachments';
 import { ComboSelect } from '../../components/ComboSelect';
@@ -37,16 +38,6 @@ interface Shipment {
 
 const SHIP_STATUSES = ['NOT_READY', 'READY', 'BOOKED', 'SHIPPED', 'DELIVERED'] as const;
 
-/**
- * Today as the person at the keyboard sees it. `toISOString()` is UTC, which in
- * Cairo is still yesterday until two or three in the morning.
- */
-function localToday(): string {
-  const d = new Date();
-  const pad = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
 const SHIP_TONE: Record<string, string> = {
   NOT_READY: 'bg-ink-100 text-ink-600 ring-ink-500/20',
   READY: 'bg-blue-50 text-blue-700 ring-blue-600/20',
@@ -60,6 +51,10 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
   const { can } = useAuth();
   const [addingCarton, setAddingCarton] = useState<string | null>(null);
   const [addingSizes, setAddingSizes] = useState<string | null>(null);
+  /** The carton waiting on Remove / Keep. One at a time, like the records table. */
+  const [removingCarton, setRemovingCarton] = useState<string | null>(null);
+  const toast = useToast();
+  const failed = (fallback: string) => (e: unknown) => toast.error(e instanceof ApiError ? e.message : fallback);
   const [editingCarton, setEditingCarton] = useState<{ id: string; number: string; lines: Array<{ orderSizeId: string | null; qty: number }> } | null>(null);
   const [shipping, setShipping] = useState(false);
 
@@ -82,7 +77,23 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
   });
 
   const createList = useMutation({ mutationFn: () => api.packing.createList(order.id), onSuccess: invalidate });
-  const approve = useMutation({ mutationFn: (id: string) => api.packing.approve(id), onSuccess: invalidate });
+  // A refusal — already approved, nothing to approve — is said, not swallowed;
+  // either way the list is reloaded, since a 409 means it changed underneath.
+  const approve = useMutation({
+    mutationFn: (id: string) => api.packing.approve(id),
+    onSuccess: () => { toast.success('Packing list approved'); invalidate(); },
+    onError: (e) => { failed('Could not approve the packing list.')(e); invalidate(); },
+  });
+  const reopen = useMutation({
+    mutationFn: (id: string) => api.packing.reopen(id),
+    onSuccess: () => { toast.success('Packing list reopened for changes'); invalidate(); },
+    onError: failed('Could not reopen the packing list.'),
+  });
+  const removeCarton = useMutation({
+    mutationFn: (id: string) => api.packing.removeCarton(id),
+    onSuccess: () => { setRemovingCarton(null); toast.success('Carton removed'); invalidate(); },
+    onError: failed('Could not remove the carton.'),
+  });
 
   if (lists.isLoading || shipments.isLoading) return <Spinner />;
 
@@ -154,7 +165,25 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
                     </>
                   )}
                   {can('packing:approve') && !l.approved && l.cartons.length > 0 && (
-                    <button onClick={() => approve.mutate(l.id)} className="btn-primary btn-sm">Approve</button>
+                    <button
+                      onClick={() => approve.mutate(l.id)}
+                      disabled={approve.isPending}
+                      className="btn-primary btn-sm"
+                    >
+                      {approve.isPending && approve.variables === l.id ? 'Approving…' : 'Approve'}
+                    </button>
+                  )}
+                  {/* Approval locks the cartons; reopening is how a wrong one
+                      is put right. Refused while an issued invoice uses it. */}
+                  {can('packing:approve') && l.approved && (
+                    <button
+                      onClick={() => reopen.mutate(l.id)}
+                      disabled={reopen.isPending}
+                      className="btn-secondary btn-sm"
+                      title="Take the list back to review so its cartons can be changed"
+                    >
+                      Reopen
+                    </button>
                   )}
                 </div>
               </div>
@@ -170,7 +199,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
                       <th className="th text-right">Qty</th>
                       <th className="th text-right">GW (kg)</th>
                       <th className="th text-right">NW (kg)</th>
-                      <th className="th w-16" />
+                      <th className="th w-32" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-ink-100">
@@ -189,24 +218,45 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
                         <td className="td text-right"><Num value={c.qty} /></td>
                         <td className="td text-right"><Num value={c.grossWeightKg} places={2} fallback="—" /></td>
                         <td className="td text-right"><Num value={c.netWeightKg} places={2} fallback="—" /></td>
-                        <td className="td text-right">
-                          {can('packing:write') && !l.approved && (
-                            <button
-                              className="btn-ghost btn-sm"
-                              title="Set the sizes inside this carton"
-                              onClick={() => setEditingCarton({
-                                id: c.id,
-                                number: c.cartonNumber,
-                                // A single-size carton has no lines; it opens on
-                                // its own size and quantity, not the first size
-                                // at zero, which saved would have unpacked it.
-                                lines: c.lines && c.lines.length > 0
-                                  ? c.lines.map((ln) => ({ orderSizeId: ln.orderSizeId, qty: ln.qty }))
-                                  : c.orderSizeId ? [{ orderSizeId: c.orderSizeId, qty: c.qty }] : [],
-                              })}
-                            >
-                              Sizes
-                            </button>
+                        <td className="td whitespace-nowrap text-right">
+                          {can('packing:write') && !l.approved && removingCarton === c.id && (
+                            <>
+                              <button
+                                className="btn-sm btn-danger"
+                                onClick={() => removeCarton.mutate(c.id)}
+                                disabled={removeCarton.isPending}
+                              >
+                                Remove
+                              </button>{' '}
+                              <button className="btn-secondary btn-sm" onClick={() => setRemovingCarton(null)}>Keep</button>
+                            </>
+                          )}
+                          {can('packing:write') && !l.approved && removingCarton !== c.id && (
+                            <>
+                              <button
+                                className="btn-ghost btn-sm"
+                                title="Set the sizes inside this carton"
+                                onClick={() => setEditingCarton({
+                                  id: c.id,
+                                  number: c.cartonNumber,
+                                  // A single-size carton has no lines; it opens on
+                                  // its own size and quantity, not the first size
+                                  // at zero, which saved would have unpacked it.
+                                  lines: c.lines && c.lines.length > 0
+                                    ? c.lines.map((ln) => ({ orderSizeId: ln.orderSizeId, qty: ln.qty }))
+                                    : c.orderSizeId ? [{ orderSizeId: c.orderSizeId, qty: c.qty }] : [],
+                                })}
+                              >
+                                Sizes
+                              </button>
+                              <button
+                                className="btn-ghost btn-sm text-ink-400 hover:text-red-600"
+                                title="Remove this carton and take its pieces off the packed count"
+                                onClick={() => setRemovingCarton(c.id)}
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            </>
                           )}
                         </td>
                       </tr>
@@ -294,6 +344,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
       />
       <SizeGridModal
         listId={addingSizes}
+        existingNumbers={packingLists.find((l) => l.id === addingSizes)?.cartons.map((c) => c.cartonNumber) ?? []}
         order={order}
         onClose={() => setAddingSizes(null)}
         onDone={() => { setAddingSizes(null); invalidate(); }}
@@ -533,9 +584,10 @@ function ShipmentModal({
  * only name a size the order was actually sold in.
  */
 function SizeGridModal({
-  listId, order, onClose, onDone,
+  listId, existingNumbers, order, onClose, onDone,
 }: {
-  listId: string | null; order: OrderDetailDto; onClose: () => void; onDone: () => void;
+  listId: string | null; existingNumbers: readonly string[];
+  order: OrderDetailDto; onClose: () => void; onDone: () => void;
 }) {
   const { data: matrix } = useQuery({
     queryKey: ['matrix', order.id],
@@ -560,6 +612,7 @@ function SizeGridModal({
           orderId={order.id}
           colors={colors}
           sizes={sizes}
+          existingNumbers={existingNumbers}
           onDone={onDone}
         />
       )}

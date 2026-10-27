@@ -8,7 +8,9 @@
  *
  * Rows here become cartons, saved together. The carton numbers auto-fill from a
  * prefix because they are almost always sequential, and stay editable because
- * sometimes they are not.
+ * sometimes they are not. They continue from the cartons already on the list:
+ * starting at 001 every time gave a second grid the first grid's numbers, and
+ * the server now refuses a number the list already has.
  */
 
 import { useState } from 'react';
@@ -18,6 +20,23 @@ import { api } from '../lib/api';
 import { Num, ErrorNote } from './ui';
 import { ComboSelect } from './ComboSelect';
 
+/**
+ * The first number this grid hands out: after every carton already on the list,
+ * and after the highest one already numbered with this prefix, whichever is
+ * further — so a list of eight cartons continues at 009.
+ */
+function firstNumber(prefix: string, existing: readonly string[]): number {
+  const escaped = prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(`^${escaped}(\\d+)$`, 'i');
+  const highest = existing.reduce((m, n) => {
+    const hit = pattern.exec(n.trim());
+    return hit ? Math.max(m, Number(hit[1])) : m;
+  }, 0);
+  return Math.max(existing.length, highest) + 1;
+}
+
+const numberFor = (prefix: string, n: number) => `${prefix}${String(n).padStart(3, '0')}`;
+
 interface GridRow {
   cartonNumber: string;
   orderColorId: string;
@@ -26,26 +45,29 @@ interface GridRow {
 }
 
 export function PackingSizeGrid({
-  listId, orderId, colors, sizes, onDone,
+  listId, orderId, colors, sizes, existingNumbers = [], onDone,
 }: {
   listId: string;
   orderId: string;
+  /** The carton numbers already on this list, so new ones continue after them. */
+  existingNumbers?: readonly string[];
   colors: Array<{ id: string; name: string }>;
   sizes: Array<{ id: string; name: string }>;
   onDone?: () => void;
 }) {
   const qc = useQueryClient();
   const [prefix, setPrefix] = useState('CTN-');
-  const [rows, setRows] = useState<GridRow[]>(
+  const [rows, setRows] = useState<GridRow[]>(() => {
+    const start = firstNumber('CTN-', existingNumbers);
     // One row per size is the shape of the job: a packing list is usually every
     // size of one colour, so starting empty would mean the same click N times.
-    sizes.map((s, i) => ({
-      cartonNumber: `CTN-${String(i + 1).padStart(3, '0')}`,
+    return sizes.map((s, i) => ({
+      cartonNumber: numberFor('CTN-', start + i),
       orderColorId: colors[0]?.id ?? '',
       orderSizeId: s.id,
       qty: 0,
-    })),
-  );
+    }));
+  });
 
   const save = useMutation({
     mutationFn: () => api.packing.addCartons(listId, rows.filter((r) => r.qty > 0)),
@@ -63,7 +85,8 @@ export function PackingSizeGrid({
 
   const renumber = (p: string) => {
     setPrefix(p);
-    setRows((rs) => rs.map((r, i) => ({ ...r, cartonNumber: `${p}${String(i + 1).padStart(3, '0')}` })));
+    const start = firstNumber(p, existingNumbers);
+    setRows((rs) => rs.map((r, i) => ({ ...r, cartonNumber: numberFor(p, start + i) })));
   };
 
   const packed = rows.filter((r) => r.qty > 0);
@@ -80,7 +103,7 @@ export function PackingSizeGrid({
           type="button"
           className="btn-ghost btn-sm"
           onClick={() => setRows([...rows, {
-            cartonNumber: `${prefix}${String(rows.length + 1).padStart(3, '0')}`,
+            cartonNumber: numberFor(prefix, firstNumber(prefix, existingNumbers) + rows.length),
             orderColorId: colors[0]?.id ?? '', orderSizeId: sizes[0]?.id ?? '', qty: 0,
           }])}
         >

@@ -230,6 +230,14 @@ export function AnalysisCharts({ data }: { data: ProductivityDto }) {
 
 interface RecordDraft { date: string; operation: ProductionOperation; qty: string; line: string; team: string }
 
+/**
+ * Zero is a real answer — the line ran and made nothing — and the shared
+ * production calc counts it as a day worked, so it is accepted here as on the
+ * order's own tab. Only blanks, negatives and fractions are refused.
+ */
+const isPieceCount = (v: string): boolean => v.trim() !== '' && Number.isInteger(Number(v)) && Number(v) >= 0;
+const PIECES_RULE = 'Pieces must be a whole number, 0 or more.';
+
 const errorText = (e: unknown, fallback: string) => (e instanceof ApiError || e instanceof Error ? e.message : fallback);
 
 export function ProductionRecords({ data, defaultDate }: { data: ProductivityDto; defaultDate: string }) {
@@ -237,9 +245,13 @@ export function ProductionRecords({ data, defaultDate }: { data: ProductivityDto
   const editable = can('production:write');
   const qc = useQueryClient();
   const toast = useToast();
+  // Everything that reads the order's production: its tab, its step rail and
+  // the order itself, as well as this page.
   const refresh = (orderId: string) => {
     void qc.invalidateQueries({ queryKey: ['productivity'] });
     void qc.invalidateQueries({ queryKey: ['order', orderId] });
+    void qc.invalidateQueries({ queryKey: ['production', orderId] });
+    void qc.invalidateQueries({ queryKey: ['order-steps', orderId] });
   };
 
   const [adding, setAdding] = useState(false);
@@ -264,7 +276,7 @@ export function ProductionRecords({ data, defaultDate }: { data: ProductivityDto
     mutationFn: () => {
       const qty = Number(draft.qty);
       if (!orderId) throw new Error('Choose the order.');
-      if (!Number.isInteger(qty) || qty <= 0) throw new Error('Pieces must be a whole number above 0.');
+      if (!isPieceCount(draft.qty)) throw new Error(PIECES_RULE);
       return api.production.record(orderId, {
         date: draft.date, operation: draft.operation, qty,
         line: draft.line.trim() || undefined, team: draft.team.trim() || undefined,
@@ -347,7 +359,7 @@ function RecordFields({ draft, onChange }: { draft: RecordDraft; onChange: (d: R
         </ComboSelect>
       </label>
       <label className="flex flex-col text-xs text-ink-600">Pieces
-        <input type="number" min={1} step={1} className="input mt-0.5 !w-24 !py-1 text-right text-sm" value={draft.qty}
+        <input type="number" min={0} step={1} className="input mt-0.5 !w-24 !py-1 text-right text-sm" value={draft.qty}
           onChange={(e) => onChange({ ...draft, qty: e.target.value })} />
       </label>
       <label className="flex flex-col text-xs text-ink-600">Line
@@ -372,7 +384,7 @@ function RecordRow({ record: r, editable, onChanged }: {
   const save = useMutation({
     mutationFn: () => {
       const qty = Number(draft.qty);
-      if (!Number.isInteger(qty) || qty <= 0) throw new Error('Pieces must be a whole number above 0.');
+      if (!isPieceCount(draft.qty)) throw new Error(PIECES_RULE);
       return api.production.update(r.id, {
         date: draft.date, operation: draft.operation, qty, line: draft.line.trim() || null, team: draft.team.trim() || null,
       });

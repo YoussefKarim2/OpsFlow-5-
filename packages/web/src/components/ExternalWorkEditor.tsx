@@ -71,16 +71,19 @@ export function ExternalWorkEditor({
   const [defaults, setDefaults] = useState({ factoryId: '', returnDate: '' });
 
   const save = useMutation({
+    // A field emptied here is sent as null, which the server clears; undefined
+    // would mean "not mentioned" and leave the old value in place, so a factory
+    // or return date once set could never be taken off.
     mutationFn: () => api.external.saveOperations(orderId, rows.map((r) => ({
       id: r.id,
       operationType: r.operationType,
       operationSort: r.operationSort || undefined,
-      externalFactoryId: r.externalFactoryId || undefined,
-      externalReference: r.externalReference || undefined,
+      externalFactoryId: r.externalFactoryId || null,
+      externalReference: r.externalReference?.trim() || null,
       qty: r.qty,
       unitPriceUsd: r.unitPriceUsd ?? undefined,
-      expectedReturnDate: r.expectedReturnDate || undefined,
-      notes: r.notes || undefined,
+      expectedReturnDate: r.expectedReturnDate || null,
+      notes: r.notes?.trim() || null,
       colorIds: [],
     }))),
     onSuccess: () => {
