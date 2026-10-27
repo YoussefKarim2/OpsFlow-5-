@@ -18,7 +18,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  deriveCostLines, bomGroupFor, bomSourceRef, sourceRefCovers, visibleDerivedLines,
+  deriveCostLines, bomGroupFor, bomSourceRef, bomRefItemId, sourceRefCovers, visibleDerivedLines,
   type DerivableInputs,
 } from './costing-derive.js';
 
@@ -195,6 +195,26 @@ describe('editing or removing one derived row', () => {
     assert.ok(!sourceRefCovers(bomSourceRef('FABRIC', 'f1'), bomSourceRef('FABRIC', 'f10')));
     assert.ok(sourceRefCovers('external:PRINTING', 'external:PRINTING'));
     assert.ok(!sourceRefCovers('external:PRINT', 'external:PRINTING'));
+  });
+
+  test('a row edited before its category changed stays claimed afterwards', () => {
+    // The costing saved `bom:ACCESSORY:a1`; the line has since become a LABEL.
+    // Matching on the category brought the derived row back beside the edited
+    // copy, and the neck labels were costed twice.
+    const kept = visibleDerivedLines(lines, ['bom:ACCESSORY:a1'], []);
+    assert.deepEqual(labels(kept), ['Jersey', 'Printing', 'Rib']);
+    const hidden = visibleDerivedLines(lines, [], ['bom:TRIM:f2']);
+    assert.deepEqual(labels(hidden), ['Jersey', 'Neck label', 'Printing']);
+  });
+
+  test('the row id is read whole, and nothing else is a BOM row reference', () => {
+    assert.equal(bomRefItemId(bomSourceRef('FABRIC', 'f1')), 'f1');
+    assert.equal(bomRefItemId('bom:FABRIC:a:b'), 'a:b');
+    assert.equal(bomRefItemId('bom:FABRIC'), null);
+    assert.equal(bomRefItemId('bom:FABRIC:'), null);
+    assert.equal(bomRefItemId('external:PRINTING'), null);
+    assert.ok(!sourceRefCovers('bom:FABRIC:f1', 'external:f1'));
+    assert.ok(!sourceRefCovers('bom:FABRIC:f1', 'bom:FABRIC:f10'));
   });
 
   test('nothing claimed or hidden leaves every line', () => {

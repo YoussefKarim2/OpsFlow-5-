@@ -30,11 +30,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, Cloud, CloudOff, Download, Lock, Pencil, Plus, Printer, Trash2 } from 'lucide-react';
 import {
   computeCosting, rowCost, applyRowEdit, sanitiseOverrides, visibleDerivedLines, outsideWorkKind, editableText,
+  bomRefItemId,
   fmtMoney, fmtNumber, fmtPct, NOT_CALCULATED,
   type CostLineInput, type CostingResult, type OrderDetailDto,
   type OverrideKey, type RowField,
 } from '@opsflow/shared';
-import { api, type CostLineDto, type CostingDto } from '../lib/api';
+import { api, ApiError, type CostLineDto, type CostingDto } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import {
   CostCell, CostField, NumberCell, StoredField, TextCell, type FieldTone,
@@ -86,7 +87,12 @@ interface RowDraft {
  */
 const AUTOSAVE_DELAY_MS = 1200;
 
-type SaveState = 'clean' | 'pending' | 'saving' | 'saved' | 'error';
+/**
+ * `conflict`: somebody else saved this costing after it was loaded here. The
+ * server refused the save, and autosave stops — retrying would only be refused
+ * again, and the person needs to see the other version before deciding.
+ */
+type SaveState = 'clean' | 'pending' | 'saving' | 'saved' | 'error' | 'conflict';
 
 const numText = (v: number | null | undefined): string => (v == null ? '' : String(v));
 
@@ -153,8 +159,11 @@ function overridesFrom(record: CostingDto | null): Record<string, string> {
 function rowsFrom(record: CostingDto | null, derived: CostLineDto[]): RowDraft[] {
   const manual = (record?.lines ?? []).filter((l) => l.source === 'MANUAL');
   // The plan lives on the bill of materials, not on the costing, so it is
-  // matched back on by where the row came from rather than stored twice.
-  const planned = new Map(derived.map((d) => [d.sourceRef ?? '', d.estimatedQty ?? null]));
+  // matched back on by where the row came from rather than stored twice —
+  // a BOM row by its line id alone, so an edited row keeps its plan after the
+  // line's category changes.
+  const planKey = (ref: string) => bomRefItemId(ref) ?? ref;
+  const planned = new Map(derived.map((d) => [planKey(d.sourceRef ?? ''), d.estimatedQty ?? null]));
   const live = visibleDerivedLines(
     derived.map((d) => ({ ...d, sourceRef: d.sourceRef ?? '' })),
     manual.map((l) => l.sourceRef),
@@ -173,7 +182,7 @@ function rowsFrom(record: CostingDto | null, derived: CostLineDto[]): RowDraft[]
     unitPrice: numText(l.unitPriceUsd),
     cost: numText(rowCost({ quantity: l.quantity, unitPriceUsd: l.unitPriceUsd })),
     derivedField: l.quantity != null && l.unitPriceUsd != null ? 'cost' : null,
-    estimatedQty: l.estimatedQty ?? (l.sourceRef ? planned.get(l.sourceRef) : null) ?? null,
+    estimatedQty: l.estimatedQty ?? (l.sourceRef ? planned.get(planKey(l.sourceRef)) : null) ?? null,
     sourceRef: l.sourceRef ?? null,
     derived: l.source !== 'MANUAL',
   }));
@@ -197,10 +206,29 @@ export function ActualCostingSheet({ order }: { order: OrderDetailDto }) {
       </div>
     );
   }
-  return <CostingSheet order={order} c={order.costing} />;
+  return <ReloadableCostingSheet order={order} c={order.costing} />;
 }
 
-function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult }) {
+/**
+ * The sheet, remounted from the server's copy when a save was refused because
+ * somebody else had changed the costing. A remount, rather than resetting the
+ * draft in place, because the draft lives in half a dozen pieces of state and
+ * one forgotten among them is how the stale copy would come back.
+ */
+function ReloadableCostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult }) {
+  const qc = useQueryClient();
+  const [generation, setGeneration] = useState(0);
+  const reload = async () => {
+    await Promise.all([
+      qc.refetchQueries({ queryKey: ['costing', order.id] }),
+      qc.invalidateQueries({ queryKey: ['order', order.id] }),
+    ]);
+    setGeneration((g) => g + 1);
+  };
+  return <CostingSheet key={generation} order={order} c={c} onReload={reload} />;
+}
+
+function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: CostingResult; onReload: () => Promise<void> }) {
   const { can } = useAuth();
   const qc = useQueryClient();
 
@@ -235,6 +263,14 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
   const inFlightRef = useRef(false);
   /** The draft as it was when the in-flight save was sent. */
   const sentRef = useRef('');
+  /**
+   * The server's version this draft was edited from: taken from the record
+   * when the draft adopts it, and from each save's answer. Sent with every
+   * save so one made over somebody else's newer copy is refused.
+   */
+  const versionRef = useRef<string | null>(record?.updatedAt ?? null);
+  /** Set once a save is refused as stale; nothing more is sent from this copy. */
+  const staleRef = useRef(false);
 
   // Re-seed when the server's copy actually changes — including when the user
   // switches to a different order, which replaces the data without remounting.
@@ -244,11 +280,11 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
   // whatever the coordinator was in the middle of typing.
   const serverState = JSON.stringify([
     order.id, storedFrom(record), overridesFrom(record),
-    rowsFrom(record, derivedLines), record?.hiddenCostRefs ?? [],
+    rowsFrom(record, derivedLines), record?.hiddenCostRefs ?? [], record?.updatedAt ?? null,
   ]);
   useEffect(() => {
-    const [, s, o, r, h] = JSON.parse(serverState) as
-      [string, Stored, Record<string, string>, RowDraft[], string[]];
+    const [, s, o, r, h, version] = JSON.parse(serverState) as
+      [string, Stored, Record<string, string>, RowDraft[], string[], string | null];
     const fromServer = JSON.stringify([s, o, r, h]);
     setBaseline(fromServer);
 
@@ -263,6 +299,10 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
     // cannot interrupt them, because by definition they have stopped typing.
     const idle = currentRef.current === sentRef.current;
     if (editingRef.current && !idle) return;
+    // The draft is now the server's copy, so its version is the server's too.
+    // Not before: a draft kept over a newer copy must still name the old one,
+    // so its save is refused instead of overwriting the newer copy.
+    versionRef.current = version;
     // A count that is not a whole number was never sent, so the server's copy
     // still holds the old one. Keep what was typed on screen, marked, rather
     // than silently putting the old figure back under the person's cursor.
@@ -295,6 +335,7 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
       notes: stored.notes || null,
       overrides: over,
       hiddenCostRefs: hidden,
+      expectedUpdatedAt: versionRef.current,
       // Rows the derivation should stop producing: everything somebody has
       // touched or added. A row still marked derived is left to it, so it goes
       // on following the bill of materials.
@@ -309,21 +350,29 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
           sourceRef: r.sourceRef,
         })),
     }),
-    onSuccess: () => {
+    onSuccess: (saved) => {
       // The draft as it was when this request left. Anything typed since is
       // still unsaved, and the effect below will notice and send it.
+      versionRef.current = saved.updatedAt;
       setBaseline(sentRef.current);
       setSaveState('saved');
       void qc.invalidateQueries({ queryKey: ['costing', order.id] });
       void qc.invalidateQueries({ queryKey: ['order', order.id] });
     },
-    onError: () => setSaveState('error'),
+    onError: (e) => {
+      if (e instanceof ApiError && e.status === 409) {
+        staleRef.current = true;
+        setSaveState('conflict');
+        return;
+      }
+      setSaveState('error');
+    },
     onSettled: () => { inFlightRef.current = false; },
   });
 
-  /** Send the draft, unless one is already on its way. */
+  /** Send the draft, unless one is already on its way or this copy is out of date. */
   const saveNow = () => {
-    if (inFlightRef.current) return;
+    if (inFlightRef.current || staleRef.current) return;
     inFlightRef.current = true;
     sentRef.current = currentRef.current;
     setSaveState('saving');
@@ -342,7 +391,7 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
    * stops the last edit being the one that goes missing.
    */
   useEffect(() => {
-    if (!editable || !dirty) return;
+    if (!editable || !dirty || staleRef.current) return;
     setSaveState((prev) => (prev === 'saving' ? prev : 'pending'));
     const timer = setTimeout(() => saveRef.current(), AUTOSAVE_DELAY_MS);
     return () => clearTimeout(timer);
@@ -533,7 +582,7 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
           is different is that there is nothing to press afterwards: changes are
           written a moment after the typing stops, and the indicator says so. */}
       <div className="no-print flex items-center justify-end gap-3">
-        <SaveState state={saveState} dirty={dirty} onRetry={() => saveNow()} />
+        <SaveState state={saveState} dirty={dirty} onRetry={() => saveNow()} onReload={() => void onReload()} />
         <button
           type="button"
           className="btn-secondary btn-sm"
@@ -855,10 +904,21 @@ function CostingSheet({ order, c }: { order: OrderDetailDto; c: CostingResult })
  * outstanding or has failed.
  */
 function SaveState({
-  state, dirty, onRetry,
+  state, dirty, onRetry, onReload,
 }: {
-  state: SaveState; dirty: boolean; onRetry: () => void;
+  state: SaveState; dirty: boolean; onRetry: () => void; onReload: () => void;
 }) {
+  if (state === 'conflict') {
+    // Not quiet: what is on screen is no longer what is stored, and nothing
+    // typed from here on will be saved.
+    return (
+      <span role="alert" className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-2xs text-red-800">
+        <CloudOff className="h-3.5 w-3.5 shrink-0" />
+        Changed by someone else — not saved.
+        <button type="button" className="font-semibold underline" onClick={onReload}>Reload</button>
+      </span>
+    );
+  }
   if (state === 'error') {
     return (
       <button className="flex items-center gap-1.5 text-2xs font-medium text-red-700" onClick={onRetry}>
