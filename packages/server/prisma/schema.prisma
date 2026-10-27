@@ -448,6 +448,9 @@ model Task {
   status             TaskStatus    @default(NOT_STARTED)
   priority           Priority      @default(MEDIUM)
   dueDate            DateTime?
+  /// True once somebody set the due date by hand. Re-planning after the
+  /// order's dates move leaves those alone; null is "never edited".
+  dueDateManual      Boolean?
   startedAt          DateTime?
   completedAt        DateTime?
   notes              String?

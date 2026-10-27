@@ -13,7 +13,7 @@ import {
 } from '@opsflow/shared';
 import { assertTaskCompletable } from './rules.js';
 import { logActivity, notify, recipientsFor } from './activity-service.js';
-import { NotFoundError } from '../errors.js';
+import { ConflictError, NotFoundError } from '../errors.js';
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
@@ -132,6 +132,107 @@ async function resolveAssignees(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Following the order
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The departments whose tasks belong to a person named on the order, by the
+ * order field that names them — the same two `resolveAssignees` honours.
+ */
+export const NAMED_OWNER_DEPARTMENT = {
+  coordinatorId: 'COORDINATOR',
+  outsideWorkManagerId: 'EXTERNAL_OPS',
+} as const satisfies Record<string, Department>;
+
+/**
+ * Hand a department's open tasks from the person who was named on the order
+ * to the person named now.
+ *
+ * The tasks were assigned once, when the order was created, and changing the
+ * coordinator afterwards left every coordinator task with the old one: the new
+ * owner saw nothing in My Tasks, the old one kept being chased. Only tasks
+ * still with the old person move — one somebody reassigned by hand has an
+ * owner chosen on purpose — and completed tasks keep who did them. Clearing
+ * the name moves nothing: an unowned task is a task nobody does.
+ */
+export async function reassignOpenTasks(
+  db: Db,
+  opts: { orderId: string; department: Department; fromId: string | null; toId: string | null },
+): Promise<number> {
+  if (!opts.toId || opts.fromId === opts.toId) return 0;
+  // `updateMany`, which the audit middleware does not intercept: one activity
+  // line from the caller says it, rather than an announcement per task.
+  const moved = await db.task.updateMany({
+    where: {
+      orderId: opts.orderId,
+      department: opts.department,
+      status: { not: 'COMPLETED' },
+      assigneeId: opts.fromId,
+    },
+    data: { assigneeId: opts.toId },
+  });
+  return moved.count;
+}
+
+/**
+ * Re-plan the due dates of an order's open tasks after its dates moved.
+ *
+ * The schedule is spread between the PO date and the promised shipping date
+ * (`planDueDate`), and was worked out once, at creation. Moving either date
+ * left every task on the old plan — overdue against a shipping date that had
+ * been pushed back, or comfortable against one brought forward. A due date
+ * somebody set by hand is theirs and is left alone, as are completed tasks
+ * and corrective actions, which are due the day after the failed audit rather
+ * than on the plan. Returns how many tasks moved.
+ */
+export async function replanTaskDueDates(
+  db: Db,
+  opts: { orderId: string; poDate: Date; promisedShippingDate: Date },
+): Promise<number> {
+  const tasks = await db.task.findMany({
+    where: {
+      orderId: opts.orderId,
+      status: { not: 'COMPLETED' },
+      isCorrectiveAction: false,
+      // Null is "never edited by hand" — every task from before the flag.
+      OR: [{ dueDateManual: null }, { dueDateManual: false }],
+    },
+    select: { id: true, sequence: true, dueDate: true },
+  });
+
+  // One write per sequence group, since every task in a group shares a date.
+  const bySequence = new Map<number, { due: Date; ids: string[] }>();
+  for (const t of tasks) {
+    const due = planDueDate(t.sequence, opts.poDate, opts.promisedShippingDate);
+    if (t.dueDate?.getTime() === due.getTime()) continue;
+    const group = bySequence.get(t.sequence) ?? { due, ids: [] };
+    group.ids.push(t.id);
+    bySequence.set(t.sequence, group);
+  }
+
+  let moved = 0;
+  for (const { due, ids } of bySequence.values()) {
+    const r = await db.task.updateMany({ where: { id: { in: ids } }, data: { dueDate: due } });
+    moved += r.count;
+  }
+  return moved;
+}
+
+/**
+ * Whether this person may work a task — start it or complete it: its
+ * assignee, anyone in the responsible department, or anyone who can assign
+ * tasks (coordinator, admin).
+ */
+export function mayWorkTask(
+  task: { assigneeId: string | null; department: string },
+  actor: { id: string; department: string | null; permissions: readonly string[] },
+): boolean {
+  return task.assigneeId === actor.id
+    || task.department === actor.department
+    || actor.permissions.includes('task:assign');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Transitions
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -143,12 +244,15 @@ export interface CompleteTaskInput {
   actualMinutes?: number | null;
 }
 
+const ALREADY_COMPLETED = 'This task is already completed.';
+
 export async function completeTask(db: PrismaClient, input: CompleteTaskInput) {
   const task = await db.task.findUnique({
     where: { id: input.taskId },
     include: { order: { select: { id: true, poNumber: true, coordinatorId: true } } },
   });
   if (!task) throw new NotFoundError('Task');
+  if (task.status === 'COMPLETED') throw new ConflictError(ALREADY_COMPLETED);
 
   // Refuses if the prerequisite information is missing — see rules.ts.
   await assertTaskCompletable(db, task);
@@ -156,6 +260,17 @@ export async function completeTask(db: PrismaClient, input: CompleteTaskInput) {
   // One transaction, so a corrective-action task can never be marked done while
   // the audit it answers still says its corrective action is open.
   return db.$transaction(async (tx) => {
+    // Completing is done once. Two people pressing Complete together (or one
+    // double click) both passed the check above, and the second completion
+    // re-ran everything below: a second activity line, the next group told
+    // twice that it was their turn. Under the task's row lock the status is
+    // read again, so only the first one through does any of it. The write
+    // stays an `update` so the audit trail still records the completion.
+    await tx.$queryRaw`SELECT id FROM tasks WHERE id = ${task.id} FOR UPDATE`;
+    const current = await tx.task.findUnique({ where: { id: task.id }, select: { status: true } });
+    if (!current) throw new NotFoundError('Task');
+    if (current.status === 'COMPLETED') throw new ConflictError(ALREADY_COMPLETED);
+
     const updated = await tx.task.update({
       where: { id: task.id },
       data: {
@@ -253,9 +368,17 @@ async function notifyNextGroup(
   }
 }
 
+/**
+ * Start a task. A completed task is not started again: that put it back to
+ * In progress while it kept its completion date and who completed it, so it
+ * read as done and not done at once. Reopening is its own action.
+ */
 export async function startTask(db: PrismaClient, taskId: string, actorId: string, actorName: string) {
   const task = await db.task.findUnique({ where: { id: taskId } });
   if (!task) throw new NotFoundError('Task');
+  if (task.status === 'COMPLETED') {
+    throw new ConflictError('This task is already completed. Reopen it first if the work is not finished.');
+  }
 
   const updated = await db.task.update({
     where: { id: taskId },

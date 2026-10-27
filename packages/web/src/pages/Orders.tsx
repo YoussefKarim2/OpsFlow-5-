@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { Filter, X, AlertTriangle } from 'lucide-react';
@@ -16,6 +16,19 @@ export function OrdersPage() {
   const [search, setSearch] = useState(params.get('search') ?? '');
   const [showFilters, setShowFilters] = useState(false);
   const debounced = useDebounced(search, 300);
+
+  // A new search starts on its first page. Left on page 4 of the old results,
+  // a search with one page of matches showed an empty list.
+  const lastSearch = useRef(debounced);
+  useEffect(() => {
+    if (lastSearch.current === debounced) return;
+    lastSearch.current = debounced;
+    if (params.has('page')) {
+      const next = new URLSearchParams(params);
+      next.delete('page');
+      setParams(next, { replace: true });
+    }
+  }, [debounced, params, setParams]);
 
   const filters = {
     search: debounced,

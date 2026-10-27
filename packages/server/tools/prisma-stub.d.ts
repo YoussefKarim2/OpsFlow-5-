@@ -343,6 +343,7 @@ declare module '@prisma/client' {
     status: TaskStatus;
     priority: Priority;
     dueDate: Date | null;
+    dueDateManual: boolean | null;
     startedAt: Date | null;
     completedAt: Date | null;
     notes: string | null;

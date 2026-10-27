@@ -20,9 +20,9 @@
 import { ChangeCategory, NotificationPriority, type AlertSeverity } from '@opsflow/shared';
 import { prisma } from '../../db.js';
 import { config } from '../../config.js';
-import { ORDER_INCLUDE, deriveOrder } from '../order-service.js';
+import { ORDER_INCLUDE, deriveOrder, type FullOrder } from '../order-service.js';
 import { announceChange } from '../change-service.js';
-import { alertSnapshot } from './alert-policy.js';
+import { alertSnapshot, alertEntityId, alertKey, staleAlertStateIds } from './alert-policy.js';
 
 const SEVERITY_PRIORITY: Record<AlertSeverity, NotificationPriority | null> = {
   CRITICAL: NotificationPriority.URGENT,
@@ -47,10 +47,12 @@ function categoryForAlertCode(code: string): ChangeCategory {
   return ChangeCategory.ORDER;
 }
 
-/** A stable, id-safe fallback discriminator for an alert with no entityId of its own. */
-function slug(title: string): string {
-  return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 60);
-}
+/**
+ * Orders per page. The whole open book with every relation used to be loaded
+ * in one query and held for the length of the sweep; a page at a time keeps
+ * the memory flat as the book grows.
+ */
+const PAGE_SIZE = 50;
 
 /**
  * One pass over every open order: recompute its alerts, and announce the
@@ -60,38 +62,77 @@ function slug(title: string): string {
  * alerts a change in severity or detail, but for lateness and deadline
  * reminders only a change in severity — their detail is a day count that
  * moves every day by itself, which re-announced every late item each morning.
+ *
+ * Shipped orders are left out along with completed ones: the goods have gone,
+ * and the alert engine has nothing left to say about their schedule.
  */
 export async function runAlertSweep(): Promise<{ checked: number; announced: number }> {
-  const orders = await prisma.order.findMany({
-    where: { cancelled: false, cachedStatus: { notIn: ['COMPLETED'] } },
-    include: ORDER_INCLUDE,
-  });
-
+  let checked = 0;
   let announced = 0;
   const today = new Date();
+  let after: string | null = null;
+
+  for (;;) {
+    // Keyed on the id rather than an offset, so an order that ships or is
+    // cancelled mid-sweep does not shift the pages and skip another.
+    const orders: FullOrder[] = await prisma.order.findMany({
+      where: {
+        cancelled: false,
+        cachedStatus: { notIn: ['COMPLETED', 'SHIPPED'] },
+        ...(after ? { id: { gt: after } } : {}),
+      },
+      include: ORDER_INCLUDE,
+      orderBy: { id: 'asc' },
+      take: PAGE_SIZE,
+    });
+    if (orders.length === 0) break;
+    checked += orders.length;
+    announced += await sweepPage(orders, today);
+    if (orders.length < PAGE_SIZE) break;
+    after = orders[orders.length - 1]!.id;
+  }
+
+  return { checked, announced };
+}
+
+/** Announce one page of orders' alerts. Returns how many were announced. */
+async function sweepPage(orders: FullOrder[], today: Date): Promise<number> {
+  // Each order's own records — the ids its alerts may be kept against.
+  const ownIds = new Map(orders.map((o) => [o.id, new Set<string>([
+    ...o.externalOperations.map((r) => r.id),
+    ...o.qualityAudits.map((r) => r.id),
+    ...o.tasks.map((r) => r.id),
+  ])]));
+
+  // The page's dedup rows in one query, rather than one per alert.
+  const states = await prisma.alertState.findMany({
+    where: {
+      entityType: 'Order',
+      OR: [
+        { entityId: { in: [...ownIds.values()].flatMap((s) => [...s]) } },
+        ...orders.map((o) => ({ entityId: { startsWith: `${o.id}:` } })),
+      ],
+    },
+    select: { id: true, code: true, entityId: true, lastSnapshot: true },
+  });
+  const stateByKey = new Map(states.map((s) => [alertKey(s.code, s.entityId), s]));
+
+  let announced = 0;
+  const stale: string[] = [];
 
   for (const order of orders) {
     const { alerts } = deriveOrder(order, today);
+    const fired = new Set<string>();
 
     for (const alert of alerts) {
       const priority = SEVERITY_PRIORITY[alert.severity];
       if (!priority) continue;
 
-      // `deriveOrder` can return several alerts sharing one `code` within the
-      // same order with no `entityId` of their own — several blocked stages,
-      // several materials with a consumption variance — each still uniquely
-      // identified by its own `title` ("Cutting is blocked" vs "Packing is
-      // blocked"). Falling back to `order.id` alone for all of them made
-      // every alert in such a group fight over one dedup row, each sweep
-      // overwriting the last one's snapshot and re-triggering the others:
-      // verified live against real order data, fixed by keying on the title
-      // too whenever there is no better id.
-      const entityId = alert.entityId ?? `${order.id}:${slug(alert.title)}`;
+      const entityId = alertEntityId(order.id, alert);
       const snapshot = alertSnapshot(alert);
+      fired.add(alertKey(alert.code, entityId));
 
-      const prior = await prisma.alertState.findUnique({
-        where: { code_entityType_entityId: { code: alert.code, entityType: 'Order', entityId } },
-      });
+      const prior = stateByKey.get(alertKey(alert.code, entityId));
       if (prior?.lastSnapshot === snapshot) continue;
 
       await announceChange({
@@ -116,9 +157,15 @@ export async function runAlertSweep(): Promise<{ checked: number; announced: num
       });
       announced++;
     }
+
+    stale.push(...staleAlertStateIds(order.id, ownIds.get(order.id)!, states, fired));
   }
 
-  return { checked: orders.length, announced };
+  // An alert that stopped firing is forgotten, so if it comes back it is news
+  // again rather than matched against the snapshot it left behind.
+  if (stale.length > 0) await prisma.alertState.deleteMany({ where: { id: { in: stale } } });
+
+  return announced;
 }
 
 let timer: NodeJS.Timeout | null = null;

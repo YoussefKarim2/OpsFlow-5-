@@ -23,6 +23,22 @@ dashboardRouter.use(authenticate);
 
 const DUE_SOON_DAYS = 14;
 
+/**
+ * Whether one of an order's alerts belongs on the Follow-Up list.
+ *
+ * Not the overdue-tasks summary: the list carries each overdue task as its
+ * own row, with the person to chase, and the summary alongside them counted
+ * the same tasks twice. And nothing from an order that has shipped or is
+ * complete except an open quality failure — the goods have gone and its
+ * schedule is history, but a failed audit still has a corrective action
+ * somebody has to close.
+ */
+export function followUpShowsAlert(code: string, orderClosed: boolean): boolean {
+  if (code === 'TASK_OVERDUE') return false;
+  if (orderClosed) return code === 'QUALITY_FAILED';
+  return true;
+}
+
 dashboardRouter.get('/', requirePermission('order:read'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   const today = new Date();
@@ -264,6 +280,7 @@ dashboardRouter.get('/follow-up', requirePermission('order:read'), asyncHandler(
     // Alerts already carry severity and a next action — reuse them verbatim
     // rather than re-deriving urgency here.
     for (const alert of d.alerts) {
+      if (!followUpShowsAlert(alert.code, closed)) continue;
       items.push({
         id: `${order.id}:${alert.code}:${alert.entityId ?? ''}`,
         kind:

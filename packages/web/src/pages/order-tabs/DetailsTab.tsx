@@ -21,42 +21,26 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
 
   const { data: lookups } = useQuery({ queryKey: ['lookups'], queryFn: api.reference.lookups });
 
-  const [form, setForm] = useState({
-    poNumber: order.poNumber,
-    clientId: order.client.id,
-    coordinatorId: order.coordinator?.id ?? '',
-    outsideWorkManagerId: order.outsideWorkManager?.id ?? '',
-    orderName: order.orderName,
-    season: order.season,
-    itemType: order.itemType ?? '',
-    gender: order.gender ?? '',
-    styleNumber: order.styleNumber ?? '',
-    fit: order.fit ?? '',
-    blockPattern: order.blockPattern ?? '',
-    fabric: order.fabric ?? '',
-    shippingMethod: order.shippingMethod ?? '',
-    // Blank stays blank. Defaulting to 0 saved a price of $0 on every order
-    // whose details were saved before the price was known, and the costing then
-    // reported the whole cost as a loss.
-    pricePerPieceUsd: order.pricePerPieceUsd == null ? '' : String(order.pricePerPieceUsd),
-    samMinutes: order.samMinutes == null ? '' : String(order.samMinutes),
-    // Typed as a percentage (5), stored as a fraction (0.05).
-    cutPercentText: percentText(order.cutPercentage),
-    accessoryPercentText: percentText(order.accessoryPercentage),
-    poDate: order.poDate?.slice(0, 10) ?? '',
-    internalPoDate: order.internalPoDate?.slice(0, 10) ?? '',
-    productionSample: order.productionSample,
-    productionSampleNote: order.productionSampleNote ?? '',
-    shippingAddress: order.shippingAddress ?? '',
-    billingAddress: order.billingAddress ?? '',
-    promisedShippingDate: order.promisedShippingDate?.slice(0, 10) ?? '',
-    requiredDeliveryDate: order.requiredDeliveryDate?.slice(0, 10) ?? '',
-    externalReference: order.externalReference ?? '',
-    externalWorkSort: order.externalWorkSort ?? '',
-    externalWorkType: order.externalWorkType ?? '',
-    priority: order.priority,
-    notes: { ...order.notes },
-  });
+  // The form, and the copy of the order it was filled from. Both are taken
+  // when Edit is pressed — not once when the tab first mounted, which left
+  // the form on whatever the order said then — and Save sends only what
+  // differs from that copy, with the version it was taken at. Sending the
+  // whole form put back every field somebody else had changed meanwhile.
+  const [form, setForm] = useState(() => formFrom(order));
+  const [snapshot, setSnapshot] = useState(() => ({ form: formFrom(order), version: order.updatedAt }));
+
+  const startEditing = () => {
+    const fresh = formFrom(order);
+    setForm(fresh);
+    setSnapshot({ form: fresh, version: order.updatedAt });
+    setError(null);
+    setEditing(true);
+  };
+  const cancelEditing = () => {
+    setForm(formFrom(order));
+    setError(null);
+    setEditing(false);
+  };
 
   /**
    * A percentage as typed, as the stored fraction, or the reason it cannot be
@@ -73,24 +57,24 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
   };
 
   const save = useMutation({
-    mutationFn: () =>
-      api.orders.update(order.id, {
-        ...withoutKeys(form, ['cutPercentText', 'accessoryPercentText']),
-        pricePerPieceUsd: form.pricePerPieceUsd === '' ? null : Number(form.pricePerPieceUsd),
-        samMinutes: form.samMinutes === '' ? null : Number(form.samMinutes),
-        cutPercentage: percentField('Cut percentage', form.cutPercentText),
-        accessoryPercentage: percentField('Accessory percentage', form.accessoryPercentText),
-        notes: {
-          general: form.notes.general ?? '', spread: form.notes.spread ?? '',
-          cut: form.notes.cut ?? '', packing: form.notes.packing ?? '',
-          external: form.notes.external ?? '',
-        },
-      }),
+    mutationFn: async () => {
+      const patch = changedFields(snapshot.form, form, percentField);
+      // Nothing edited is nothing to save — and nothing to refuse.
+      if (Object.keys(patch).length === 0) return null;
+      // The version the form was filled at: the server refuses the save if
+      // the order has been changed since, rather than overwriting it.
+      return api.orders.update(order.id, { ...patch, expectedUpdatedAt: snapshot.version });
+    },
     onSuccess: () => {
       setEditing(false); setError(null);
       void qc.invalidateQueries({ queryKey: ['order', order.id] });
     },
-    onError: (e) => setError(e instanceof ApiError || e instanceof Error ? e.message : 'Could not save.'),
+    onError: (e) => {
+      setError(e instanceof ApiError || e instanceof Error ? e.message : 'Could not save.');
+      // Moved underneath the form: fetch the order as it is now, so Cancel
+      // and Edit again start from it.
+      if (e instanceof ApiError && e.status === 409) void qc.invalidateQueries({ queryKey: ['order', order.id] });
+    },
   });
 
   const editable = can('order:edit');
@@ -102,13 +86,13 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
 
       <div className="flex justify-end gap-2">
         {editable && !editing && (
-          <button onClick={() => setEditing(true)} className="btn-secondary btn-sm">
+          <button onClick={startEditing} className="btn-secondary btn-sm">
             <Pencil className="h-3.5 w-3.5" /> Edit details
           </button>
         )}
         {editing && (
           <>
-            <button onClick={() => setEditing(false)} className="btn-secondary btn-sm">Cancel</button>
+            <button onClick={cancelEditing} className="btn-secondary btn-sm">Cancel</button>
             <button onClick={() => save.mutate()} disabled={save.isPending} className="btn-primary btn-sm">
               <Save className="h-3.5 w-3.5" />{save.isPending ? 'Saving…' : 'Save changes'}
             </button>
@@ -266,11 +250,91 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
 }
 
 
-/** The form without the fields that exist only on screen. */
-function withoutKeys<T extends object, K extends keyof T>(o: T, keys: readonly K[]): Omit<T, K> {
-  const rest = { ...o };
-  for (const k of keys) delete rest[k];
-  return rest;
+/** The editable fields, as the form holds them, filled from the order as it is. */
+function formFrom(order: OrderDetailDto) {
+  return {
+    poNumber: order.poNumber,
+    clientId: order.client.id,
+    coordinatorId: order.coordinator?.id ?? '',
+    outsideWorkManagerId: order.outsideWorkManager?.id ?? '',
+    orderName: order.orderName,
+    season: order.season,
+    itemType: order.itemType ?? '',
+    gender: order.gender ?? '',
+    styleNumber: order.styleNumber ?? '',
+    fit: order.fit ?? '',
+    blockPattern: order.blockPattern ?? '',
+    fabric: order.fabric ?? '',
+    shippingMethod: order.shippingMethod ?? '',
+    // Blank stays blank. Defaulting to 0 saved a price of $0 on every order
+    // whose details were saved before the price was known, and the costing then
+    // reported the whole cost as a loss.
+    pricePerPieceUsd: order.pricePerPieceUsd == null ? '' : String(order.pricePerPieceUsd),
+    samMinutes: order.samMinutes == null ? '' : String(order.samMinutes),
+    // Typed as a percentage (5), stored as a fraction (0.05).
+    cutPercentText: percentText(order.cutPercentage),
+    accessoryPercentText: percentText(order.accessoryPercentage),
+    poDate: order.poDate?.slice(0, 10) ?? '',
+    internalPoDate: order.internalPoDate?.slice(0, 10) ?? '',
+    productionSample: order.productionSample,
+    productionSampleNote: order.productionSampleNote ?? '',
+    shippingAddress: order.shippingAddress ?? '',
+    billingAddress: order.billingAddress ?? '',
+    promisedShippingDate: order.promisedShippingDate?.slice(0, 10) ?? '',
+    requiredDeliveryDate: order.requiredDeliveryDate?.slice(0, 10) ?? '',
+    externalReference: order.externalReference ?? '',
+    externalWorkSort: order.externalWorkSort ?? '',
+    externalWorkType: order.externalWorkType ?? '',
+    priority: order.priority,
+    notes: { ...order.notes },
+  };
+}
+
+type DetailsForm = ReturnType<typeof formFrom>;
+
+/** Fields sent under another name or in another form than the form holds them. */
+const CONVERTED = new Set<keyof DetailsForm>([
+  'pricePerPieceUsd', 'samMinutes', 'cutPercentText', 'accessoryPercentText',
+  'productionSample', 'productionSampleNote', 'notes',
+]);
+const NOTE_KINDS = ['general', 'spread', 'cut', 'packing', 'external'] as const;
+
+/**
+ * The save: only what was edited since the form was filled, as the API takes
+ * it. A field nobody touched is not sent, so it cannot put back an older value
+ * over somebody else's — and an untouched cut percentage cannot rewrite the
+ * cut order.
+ */
+function changedFields(
+  before: DetailsForm,
+  after: DetailsForm,
+  percent: (label: string, text: string) => number,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of Object.keys(after) as Array<keyof DetailsForm>) {
+    if (!CONVERTED.has(k) && after[k] !== before[k]) out[k] = after[k];
+  }
+  const number = (text: string) => (text === '' ? null : Number(text));
+  if (after.pricePerPieceUsd !== before.pricePerPieceUsd) out.pricePerPieceUsd = number(after.pricePerPieceUsd);
+  if (after.samMinutes !== before.samMinutes) out.samMinutes = number(after.samMinutes);
+  if (after.cutPercentText !== before.cutPercentText) {
+    out.cutPercentage = percent('Cut percentage', after.cutPercentText);
+  }
+  if (after.accessoryPercentText !== before.accessoryPercentText) {
+    out.accessoryPercentage = percent('Accessory percentage', after.accessoryPercentText);
+  }
+  // Production sample is one answer, Yes/No or a comment, and the server
+  // clears whichever half is not sent — so the two always travel together.
+  if (after.productionSample !== before.productionSample || after.productionSampleNote !== before.productionSampleNote) {
+    out.productionSample = after.productionSample;
+    out.productionSampleNote = after.productionSampleNote;
+  }
+  const notes: Record<string, string> = {};
+  for (const kind of NOTE_KINDS) {
+    if ((after.notes[kind] ?? '') !== (before.notes[kind] ?? '')) notes[kind] = after.notes[kind] ?? '';
+  }
+  if (Object.keys(notes).length > 0) out.notes = notes;
+  return out;
 }
 
 /** A stored fraction as the percentage a person types: 0.05 → "5", 0.025 → "2.5". */

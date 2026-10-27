@@ -9,8 +9,9 @@ import assert from 'node:assert/strict';
 
 import {
   shipmentTotalAfter, assertShippableQuantity, assertPackingWithinReason,
-  assertProducedCoversShipped, producedAfterChange,
+  assertProducedCoversShipped, producedAfterChange, assertUnchangedSince,
 } from './rules.js';
+import { ConflictError } from '../errors.js';
 
 describe('packed quantity has the production ceiling', () => {
   test('up to 1.5× the larger of order and cut is accepted', () => {
@@ -57,6 +58,26 @@ describe('produced may not be corrected below shipped', () => {
     assert.doesNotThrow(() => assertProducedCoversShipped({ ...base, producedBefore: 1000, producedAfter: 800, shippedQty: 800 }));
     // Already shipped past produced under an override: an unrelated edit is not blocked.
     assert.doesNotThrow(() => assertProducedCoversShipped({ ...base, producedBefore: 600, producedAfter: 600, shippedQty: 800 }));
+  });
+});
+
+describe('an order edit is checked against the version it was made from', () => {
+  const now = new Date('2026-10-27T09:15:30.123Z');
+
+  test('the same version saves', () => {
+    assert.doesNotThrow(() => assertUnchangedSince(now.toISOString(), now));
+  });
+
+  test('a moved order refuses the save, with a sentence and a 409', () => {
+    assert.throws(
+      () => assertUnchangedSince('2026-10-27T09:00:00.000Z', now),
+      (e: unknown) => e instanceof ConflictError && e.status === 409 && /changed this order/.test(e.message),
+    );
+  });
+
+  test('a caller that sends no version is not checked', () => {
+    assert.doesNotThrow(() => assertUnchangedSince(undefined, now));
+    assert.doesNotThrow(() => assertUnchangedSince(null, now));
   });
 });
 

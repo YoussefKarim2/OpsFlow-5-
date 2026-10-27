@@ -13,6 +13,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { foldChanges } from './change-fold.js';
+import { IGNORED_FIELDS } from '../middleware/audit-middleware.js';
 import type { ChangeDraft } from '../request-context.js';
 
 const draft = (over: Partial<ChangeDraft> = {}): ChangeDraft => ({
@@ -100,6 +101,22 @@ describe('noise is left out', () => {
     ]);
     assert.equal(folded.length, 1);
     assert.deepEqual(folded[0]!.fields.map((f) => f.field), ['orderName']);
+  });
+
+  test('recalculating the cut order is not an order change', () => {
+    // Every quantity save rewrites the cut order and stamps the time it was
+    // written. That stamp, on its own, used to send an "order changed" email.
+    const folded = foldChanges([
+      draft({ field: 'cutOrderGeneratedAt', oldValue: '2026-10-01T08:00:00.000Z', newValue: '2026-10-27T09:00:00.000Z' }),
+      draft({ field: 'cachedStatus', oldValue: 'DRAFT', newValue: 'IN_PRODUCTION' }),
+    ]);
+    assert.equal(folded.length, 0);
+  });
+
+  test('the audit trail ignores the same timestamp and cache columns', () => {
+    for (const field of ['cutOrderGeneratedAt', 'updatedAt', 'cachedStatus', 'cachedProgressPct', 'cachedStageKey']) {
+      assert.ok(IGNORED_FIELDS.has(field), field);
+    }
   });
 
   test('a model nobody asked to track produces nothing', () => {

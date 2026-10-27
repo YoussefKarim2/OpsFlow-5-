@@ -287,10 +287,12 @@ export function computeCutVariance(
   // the same way — otherwise the variance reports a shortfall against a number
   // the factory was never going to cut. With no axes given there is no grid to
   // net against, and the order total is the best available answer.
-  const cuttable = colors.length > 0 && sizes.length > 0
-    ? computeCuttableQty(cells, colors, sizes)
-    : Math.max(0, orderedQty - ledgerTotal(cells, QtyLedger.STOCK));
-  const plannedCutQty = computeCutOrderTotal(cuttable, cutPct);
+  // Rounded the way the cut order rounds, too: up per cell, then summed.
+  // Rounding the netted total once came out a few pieces under the generated
+  // cut order, and the Overview reported that difference as a cut variance.
+  const plannedCutQty = colors.length > 0 && sizes.length > 0
+    ? computeCutOrderQty(cells, colors, sizes, cutPct)
+    : computeCutOrderTotal(Math.max(0, orderedQty - ledgerTotal(cells, QtyLedger.STOCK)), cutPct);
   const actual = actualCutQty ?? ledgerTotal(cells, QtyLedger.CUT);
   return {
     orderedQty,

@@ -8,9 +8,9 @@
  * the cutting floor works from.
  */
 
-import { QtyLedger, computeCutMatrix, type QtyCell } from '@opsflow/shared';
+import { QtyLedger, computeCutMatrix, ledgerTotal, type QtyCell } from '@opsflow/shared';
 import { prisma } from '../db.js';
-import { ORDER_INCLUDE, deriveOrder, type FullOrder } from './order-service.js';
+import { ORDER_INCLUDE, toAxes, toQtyCells } from './order-service.js';
 
 /**
  * The ledgers the cut order is calculated from. Writing any of these leaves a
@@ -23,17 +23,46 @@ import { ORDER_INCLUDE, deriveOrder, type FullOrder } from './order-service.js';
  */
 export const CUT_ORDER_INPUT_LEDGERS: readonly string[] = [QtyLedger.ORDER, QtyLedger.STOCK];
 
-/** Recalculate the CUT ledger and store it. Returns the new and previous totals. */
-export async function writeCutOrder(order: FullOrder): Promise<{ total: number; before: number }> {
-  const d = deriveOrder(order);
-  const cutPct = Number(order.cutPercentage.toString());
-  const cutCells: QtyCell[] = computeCutMatrix(d.cells, d.colors, d.sizes, cutPct);
+/**
+ * Recalculate the CUT ledger and store it. Returns the new and previous totals.
+ *
+ * Calculated inside the transaction that writes it, under the order's row
+ * lock, from the quantities as they are at that moment. Working from the copy
+ * the caller had read earlier left a window in which a grid save landing
+ * between the read and the write was cut from the old figures — and two saves
+ * at once could each rewrite the sheet from a different half of the truth.
+ * The lock is the one `POST /orders/:id/sizes` and the matrix save take, so
+ * all three queue behind one another.
+ */
+export async function writeCutOrder(order: { id: string }): Promise<{ total: number; before: number }> {
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM orders WHERE id = ${order.id} FOR UPDATE`;
+    const fresh = await tx.order.findUniqueOrThrow({
+      where: { id: order.id },
+      select: {
+        cutPercentage: true,
+        updatedAt: true,
+        colors: ORDER_INCLUDE.colors,
+        sizes: ORDER_INCLUDE.sizes,
+        quantities: true,
+      },
+    });
+    const cells = toQtyCells(fresh);
+    const { colors, sizes } = toAxes(fresh);
+    const cutCells: QtyCell[] = computeCutMatrix(cells, colors, sizes, Number(fresh.cutPercentage.toString()));
+    const before = ledgerTotal(cells, QtyLedger.CUT);
 
-  await prisma.$transaction(async (tx) => {
     // Recorded separately from the rows: when stock covers every cell the
     // cut order is empty, and "generated, nothing to cut" must stay
     // distinguishable from "never generated" — see `shouldRefreshCutOrder`.
-    await tx.order.update({ where: { id: order.id }, data: { cutOrderGeneratedAt: new Date() } });
+    // The order's `updatedAt` is written back as it was: recalculating the cut
+    // order is not an edit of the order's details, and the details save is
+    // checked against that column. Safe under the row lock — nothing else can
+    // have moved it since it was read.
+    await tx.order.update({
+      where: { id: order.id },
+      data: { cutOrderGeneratedAt: new Date(), updatedAt: fresh.updatedAt },
+    });
     await tx.stageQuantity.deleteMany({ where: { orderId: order.id, ledger: 'CUT' } });
     if (cutCells.length > 0) {
       await tx.stageQuantity.createMany({
@@ -42,9 +71,8 @@ export async function writeCutOrder(order: FullOrder): Promise<{ total: number; 
         })),
       });
     }
+    return { total: cutCells.reduce((a, c) => a + c.qty, 0), before };
   });
-
-  return { total: cutCells.reduce((a, c) => a + c.qty, 0), before: d.totals[QtyLedger.CUT] ?? 0 };
 }
 
 /**

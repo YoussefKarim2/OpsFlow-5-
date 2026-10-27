@@ -105,6 +105,17 @@ describe('an order that has shipped stops raising schedule alerts', () => {
     assert.ok(!codes.includes(AlertCode.PRODUCTION_BEHIND));
     assert.ok(!codes.includes(AlertCode.PACKING_INCOMPLETE));
   });
+
+  test('nor does a task left open on the plan', () => {
+    const tasks = [{
+      id: 't1', stageKey: 'PACKING', title: 'Approve packing list', status: 'NOT_STARTED',
+      priority: 'MEDIUM', dueDate: '2026-09-01', completedAt: null, assigneeName: null,
+      department: 'Packing', sequence: 12,
+    }] as unknown as AlertContext['tasks'];
+    const codes = (finished: boolean) => evaluateAlerts({ ...ctx(finished), tasks }).map((a) => a.code);
+    assert.ok(codes(false).includes(AlertCode.TASK_OVERDUE));
+    assert.ok(!codes(true).includes(AlertCode.TASK_OVERDUE));
+  });
 });
 
 describe('a passed final inspection clears Quality Check on its own', () => {

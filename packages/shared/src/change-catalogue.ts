@@ -278,9 +278,14 @@ export const FIELD_LABELS: Readonly<Record<string, string>> = {
   storageKey: 'Stored file',
 };
 
-/** Columns nobody wants to read about, even when they genuinely changed. */
+/**
+ * Columns nobody wants to read about, even when they genuinely changed.
+ * `cutOrderGeneratedAt` is the time the cut order was last recalculated — a
+ * timestamp, not news; the cut total is announced on its own when it moves.
+ */
 export const NOISE_FIELDS: ReadonlySet<string> = new Set([
   'updatedAt', 'createdAt', 'cachedProgressPct', 'cachedStatus', 'cachedStageKey',
+  'cutOrderGeneratedAt',
   'lastLoginAt', 'failedLoginCount', 'lockedUntil', 'position', 'position_',
   'sequence', 'storageDriver', 'checksum', 'requestId',
 ]);
