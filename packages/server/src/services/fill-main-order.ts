@@ -15,7 +15,8 @@
 import { prisma } from '../db.js';
 import { storage } from './storage/index.js';
 import { writeOrderMatrix } from './import/committer.js';
-import { writeCutOrder } from './cut-order.js';
+import type { ExtractionResult } from './import/extractor.js';
+import { writeCutOrderIn } from './cut-order.js';
 import { ORDER_INCLUDE, refreshOrderCache } from './order-service.js';
 import { logActivity } from './activity-service.js';
 
@@ -25,6 +26,28 @@ export type FillResult =
 
 const PO_TYPES = ['CUSTOMER_PO', 'CUSTOMER_REFERENCE'] as const;
 const READABLE = /\.(pdf|xlsx|xlsm|csv)$/i;
+
+/** Reader warnings about the order's header, which a fill does not write. */
+const ORDER_HEADER_FIELDS = new Set(['poNumber', 'clientName', 'orderName']);
+
+/** No upload can be larger than this (the import and attachment limit), so a stored file that is is not read. */
+const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Documents that failed to read in this process, by storage key — not tried
+ * again until the server restarts.
+ */
+const unreadable = new Set<string>();
+
+/**
+ * Two PO numbers that are the same number: case and spacing aside, and a
+ * leading "PO" too — the document says "PO-178", the order was created as
+ * "178". Nothing else is loosened: "17-8" and "1-78" stay different orders.
+ */
+export function samePo(a: string | null | undefined, b: string | null | undefined): boolean {
+  const key = (s: string) => s.trim().toUpperCase().replace(/^P\.?O\.?\s*(?:NO\.?|#)?\s*[-#:.]?\s*(?=\w)/, '').replace(/\s+/g, '');
+  return !!a && !!b && key(a) !== '' && key(a) === key(b);
+}
 
 async function orderPieces(orderId: string): Promise<number> {
   const agg = await prisma.stageQuantity.aggregate({ where: { orderId, ledger: 'ORDER' }, _sum: { qty: true } });
@@ -38,9 +61,10 @@ async function orderPieces(orderId: string): Promise<number> {
  * the order was imported from, or one a person filed as "Customer PO". Any
  * other reference document (a tech pack, say, whose measurement chart reads
  * like a size grid) is used only when the PO number it carries is this
- * order's.
+ * order's. `importedFrom` marks the file the order was created from, the one
+ * document whose PO number is not checked against the order's.
  */
-async function sourcesFor(orderId: string): Promise<Array<{ storageKey: string; fileName: string; trusted: boolean }>> {
+async function sourcesFor(orderId: string): Promise<Array<{ storageKey: string; fileName: string; trusted: boolean; importedFrom: boolean }>> {
   const jobs = await prisma.importJob.findMany({
     where: { createdOrderId: orderId }, orderBy: { createdAt: 'desc' }, select: { storageKey: true, fileName: true },
   });
@@ -50,13 +74,35 @@ async function sourcesFor(orderId: string): Promise<Array<{ storageKey: string; 
   });
   const rank = (t: string) => (t === 'CUSTOMER_PO' ? 0 : 1);
   const all = [
-    ...jobs.map((j) => ({ ...j, trusted: true })),
+    ...jobs.map((j) => ({ ...j, trusted: true, importedFrom: true })),
     ...attachments.filter((a) => READABLE.test(a.fileName))
       .sort((a, b) => rank(a.documentType) - rank(b.documentType))
-      .map((a) => ({ storageKey: a.storageKey, fileName: a.fileName, trusted: a.documentType === 'CUSTOMER_PO' })),
+      .map((a) => ({ storageKey: a.storageKey, fileName: a.fileName, trusted: a.documentType === 'CUSTOMER_PO', importedFrom: false })),
   ];
   const seen = new Set<string>();
   return all.filter((s) => (seen.has(s.storageKey) ? false : (seen.add(s.storageKey), true)));
+}
+
+/**
+ * Whether a document's quantities may fill this order, judged by its PO.
+ *
+ * A document that states another PO is another order's, however it was
+ * filed: a "Customer PO" attached to the wrong order filled it with that
+ * order's quantities. "States" means a labelled PO number — not one the reader
+ * guessed or made up, which it flags with a warning. The file the order was
+ * imported from is exempt: it is this order's by construction, even if the PO
+ * was renamed since. Any other reference document must show this order's PO.
+ */
+export function documentPoVerdict(
+  src: { trusted: boolean; importedFrom: boolean },
+  extraction: Pick<ExtractionResult, 'fields' | 'issues'>,
+  orderPo: string | null | undefined,
+): 'USE' | 'OTHER_PO' | 'NOT_SHOWN' {
+  const docPo = extraction.fields.poNumber == null ? null : String(extraction.fields.poNumber);
+  const labelled = docPo != null && !extraction.issues.some((i) => i.level === 'WARNING' && i.field === 'poNumber');
+  if (labelled && !src.importedFrom && !samePo(docPo, orderPo)) return 'OTHER_PO';
+  if (!src.trusted && !samePo(docPo, orderPo)) return 'NOT_SHOWN';
+  return 'USE';
 }
 
 export async function fillMainOrderFromDocuments(
@@ -67,18 +113,23 @@ export async function fillMainOrderFromDocuments(
   const sources = await sourcesFor(orderId);
   if (sources.length === 0) return { filled: false, reason: 'NO_DOCUMENT', tried: 0 };
   const order = await prisma.order.findUnique({ where: { id: orderId }, select: { poNumber: true } });
-  const samePo = (a: string | null | undefined, b: string | null | undefined) =>
-    !!a && !!b && a.trim().toUpperCase() === b.trim().toUpperCase();
   let otherPo: string | undefined;
 
   // Loaded here rather than at the top: the import route imports the orders
   // route, which imports this module.
   const { runExtraction } = await import('../routes/import.js');
   for (const src of sources) {
+    // A document that has already failed to read in this process is not read
+    // again, and nor is one larger than any upload could be: the start-up fill
+    // runs on every boot, and one bad file must not cost every boot.
+    if (unreadable.has(src.storageKey)) continue;
     let extraction: Awaited<ReturnType<typeof runExtraction>>;
     try {
-      extraction = await runExtraction(await storage.get(src.storageKey), {});
+      const buffer = await storage.get(src.storageKey);
+      if (buffer.length > MAX_DOCUMENT_BYTES) { unreadable.add(src.storageKey); continue; }
+      extraction = await runExtraction(buffer, {});
     } catch {
+      unreadable.add(src.storageKey);
       continue; // unreadable or missing; try the next document
     }
     const matrix = extraction.matrices.find((m) => m.ledger === 'ORDER');
@@ -88,22 +139,29 @@ export async function fillMainOrderFromDocuments(
     // readers say when a file is not a purchase order; filed as one by
     // mistake, it must not become 370 "pieces" called Chest and Sleeve.
     if (extraction.issues.some((i) => i.field === 'documentKind')) continue;
-    const docPo = extraction.fields.poNumber == null ? null : String(extraction.fields.poNumber);
-    if (!src.trusted && !samePo(docPo, order?.poNumber)) {
-      otherPo = docPo ?? otherPo;
-      continue; // not this order's PO
+    const verdict = documentPoVerdict(src, extraction, order?.poNumber);
+    if (verdict !== 'USE') {
+      otherPo = (extraction.fields.poNumber == null ? null : String(extraction.fields.poNumber)) ?? otherPo;
+      continue;
     }
 
-    // Checked again inside the write: someone may have typed a grid meanwhile.
-    const written = await prisma.$transaction(async (tx) => {
+    // One transaction for the Main Order and the Cut Order calculated from
+    // it: written apart, a failure between them left a Main Order with no Cut
+    // Order, and nothing would ever fill it again — the order no longer
+    // looked empty. Checked again inside: someone may have typed a grid
+    // meanwhile.
+    const done = await prisma.$transaction(async (tx) => {
       const agg = await tx.stageQuantity.aggregate({ where: { orderId, ledger: 'ORDER' }, _sum: { qty: true } });
-      if ((agg._sum.qty ?? 0) > 0) return 0;
-      return writeOrderMatrix(tx, orderId, matrix);
-    });
-    if (written === 0) return { filled: false, reason: 'HAS_QUANTITIES', tried: 0 };
+      if ((agg._sum.qty ?? 0) > 0) return null;
+      const written = await writeOrderMatrix(tx, orderId, matrix);
+      if (written === 0) return null;
+      const full = await tx.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
+      const { total: cut } = await writeCutOrderIn(tx, full!);
+      return { written, cut };
+    }, { timeout: 30_000 });
+    if (!done) return { filled: false, reason: 'HAS_QUANTITIES', tried: 0 };
+    const { written, cut } = done;
 
-    const full = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
-    const { total: cut } = await writeCutOrder(full!);
     await logActivity({
       orderId, actorId: actor.id, actorName: actor.name,
       action: 'QUANTITIES_UPDATED',
@@ -113,7 +171,11 @@ export async function fillMainOrderFromDocuments(
     await refreshOrderCache(orderId);
     return {
       filled: true, pieces: written, cut, fileName: src.fileName,
-      warnings: extraction.issues.filter((i) => i.level !== 'INFO').map((i) => i.message),
+      // About the quantities only: "no customer was found" is about creating
+      // an order, and this one already exists.
+      warnings: extraction.issues
+        .filter((i) => i.level !== 'INFO' && !ORDER_HEADER_FIELDS.has(i.field ?? ''))
+        .map((i) => i.message),
     };
   }
   if (otherPo !== undefined) return { filled: false, reason: 'NOT_THIS_PO', tried: sources.length, otherPo };

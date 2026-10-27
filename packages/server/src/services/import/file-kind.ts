@@ -48,11 +48,38 @@ function looksTextual(b: Buffer): boolean {
   return !head.includes(0);
 }
 
+/**
+ * `FF FE` or `FE FF` — the byte-order mark of UTF-16 text, which is what
+ * Excel's "Unicode Text" and several ERP exports save. Every other byte of it
+ * is a NUL beside an ASCII letter, so the test above called it binary and a
+ * perfectly good CSV was refused as "not a spreadsheet".
+ */
+function isUtf16Text(b: Buffer): boolean {
+  return b.length >= 4 && ((b[0] === 0xff && b[1] === 0xfe) || (b[0] === 0xfe && b[1] === 0xff));
+}
+
+/**
+ * A password-protected .xlsx is not a zip: Office wraps the encrypted package
+ * in the same OLE2 container an old .xls uses, with a stream named
+ * "EncryptedPackage" (in UTF-16, as OLE2 names are). Calling it an older .xls
+ * sent people to "Save As" on a file that only needed its password removed.
+ */
+function isEncryptedOoxml(b: Buffer): boolean {
+  return b.includes(Buffer.from('EncryptedPackage', 'utf16le'));
+}
+
 export function detectFileKind(buffer: Buffer, fileName = ''): FileKind {
   if (isPdf(buffer)) return 'pdf';
   if (isZip(buffer)) return 'xlsx';
 
   if (isLegacyXls(buffer)) {
+    if (isEncryptedOoxml(buffer)) {
+      throw new BadRequestError(
+        'This workbook is password-protected, so it cannot be read. ' +
+        'Open it in Excel, remove the password (File → Info → Protect Workbook → Encrypt with Password, ' +
+        'and clear it), save it, and upload it again.',
+      );
+    }
     throw new BadRequestError(
       'This is an older .xls workbook, which cannot be read directly. ' +
       'Open it in Excel and use File → Save As to save it as .xlsx, then upload that.',
@@ -68,7 +95,7 @@ export function detectFileKind(buffer: Buffer, fileName = ''): FileKind {
     );
   }
 
-  if (looksTextual(buffer)) return 'csv';
+  if (isUtf16Text(buffer) || looksTextual(buffer)) return 'csv';
 
   throw new BadRequestError(
     'That file is not a spreadsheet or a PDF — its contents do not match any format ' +

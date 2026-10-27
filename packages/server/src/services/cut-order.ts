@@ -9,6 +9,7 @@
  */
 
 import { QtyLedger, computeCutMatrix, ledgerTotal, type QtyCell } from '@opsflow/shared';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
 import { ORDER_INCLUDE, toAxes, toQtyCells } from './order-service.js';
 
@@ -35,44 +36,52 @@ export const CUT_ORDER_INPUT_LEDGERS: readonly string[] = [QtyLedger.ORDER, QtyL
  * all three queue behind one another.
  */
 export async function writeCutOrder(order: { id: string }): Promise<{ total: number; before: number }> {
-  return prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT id FROM orders WHERE id = ${order.id} FOR UPDATE`;
-    const fresh = await tx.order.findUniqueOrThrow({
-      where: { id: order.id },
-      select: {
-        cutPercentage: true,
-        updatedAt: true,
-        colors: ORDER_INCLUDE.colors,
-        sizes: ORDER_INCLUDE.sizes,
-        quantities: true,
-      },
-    });
-    const cells = toQtyCells(fresh);
-    const { colors, sizes } = toAxes(fresh);
-    const cutCells: QtyCell[] = computeCutMatrix(cells, colors, sizes, Number(fresh.cutPercentage.toString()));
-    const before = ledgerTotal(cells, QtyLedger.CUT);
+  return prisma.$transaction((tx) => writeCutOrderIn(tx, order));
+}
 
-    // Recorded separately from the rows: when stock covers every cell the
-    // cut order is empty, and "generated, nothing to cut" must stay
-    // distinguishable from "never generated" — see `shouldRefreshCutOrder`.
-    // The order's `updatedAt` is written back as it was: recalculating the cut
-    // order is not an edit of the order's details, and the details save is
-    // checked against that column. Safe under the row lock — nothing else can
-    // have moved it since it was read.
-    await tx.order.update({
-      where: { id: order.id },
-      data: { cutOrderGeneratedAt: new Date(), updatedAt: fresh.updatedAt },
-    });
-    await tx.stageQuantity.deleteMany({ where: { orderId: order.id, ledger: 'CUT' } });
-    if (cutCells.length > 0) {
-      await tx.stageQuantity.createMany({
-        data: cutCells.map((c) => ({
-          orderId: order.id, orderColorId: c.colorId, orderSizeId: c.sizeId, ledger: 'CUT' as const, qty: c.qty,
-        })),
-      });
-    }
-    return { total: cutCells.reduce((a, c) => a + c.qty, 0), before };
+/**
+ * The same, inside a transaction the caller already holds — so a Main Order
+ * and the Cut Order calculated from it are written together or not at all.
+ * Quantities are re-read here, inside that transaction, so the cut order
+ * follows what the caller has just written.
+ */
+export async function writeCutOrderIn(tx: Prisma.TransactionClient, order: { id: string }): Promise<{ total: number; before: number }> {
+  await tx.$queryRaw`SELECT id FROM orders WHERE id = ${order.id} FOR UPDATE`;
+  const fresh = await tx.order.findUniqueOrThrow({
+    where: { id: order.id },
+    select: {
+      cutPercentage: true,
+      updatedAt: true,
+      colors: ORDER_INCLUDE.colors,
+      sizes: ORDER_INCLUDE.sizes,
+      quantities: true,
+    },
   });
+  const cells = toQtyCells(fresh);
+  const { colors, sizes } = toAxes(fresh);
+  const cutCells: QtyCell[] = computeCutMatrix(cells, colors, sizes, Number(fresh.cutPercentage.toString()));
+  const before = ledgerTotal(cells, QtyLedger.CUT);
+
+  // Recorded separately from the rows: when stock covers every cell the
+  // cut order is empty, and "generated, nothing to cut" must stay
+  // distinguishable from "never generated" — see `shouldRefreshCutOrder`.
+  // The order's `updatedAt` is written back as it was: recalculating the cut
+  // order is not an edit of the order's details, and the details save is
+  // checked against that column. Safe under the row lock — nothing else can
+  // have moved it since it was read.
+  await tx.order.update({
+    where: { id: order.id },
+    data: { cutOrderGeneratedAt: new Date(), updatedAt: fresh.updatedAt },
+  });
+  await tx.stageQuantity.deleteMany({ where: { orderId: order.id, ledger: 'CUT' } });
+  if (cutCells.length > 0) {
+    await tx.stageQuantity.createMany({
+      data: cutCells.map((c) => ({
+        orderId: order.id, orderColorId: c.colorId, orderSizeId: c.sizeId, ledger: 'CUT' as const, qty: c.qty,
+      })),
+    });
+  }
+  return { total: cutCells.reduce((a, c) => a + c.qty, 0), before };
 }
 
 /**

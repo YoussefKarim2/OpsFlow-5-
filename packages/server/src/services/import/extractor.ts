@@ -180,6 +180,33 @@ function cellText(value: unknown): string {
   return String(value);
 }
 
+/**
+ * A formula with no saved result: the cell reads as empty, though Excel shows
+ * a number in it.
+ *
+ * Excel stores each formula's last result beside it when it saves; a file
+ * written by something else (a script, an online sheet's export, some ERPs)
+ * often stores the formula alone. Its quantities then vanish without a word
+ * — a size grid of =B4*2 cells imported as nothing — so they are counted and
+ * the coordinator is told to re-save the file in Excel.
+ */
+export function isUncachedFormula(value: unknown): boolean {
+  if (value == null || typeof value !== 'object') return false;
+  const v = value as Record<string, unknown>;
+  return ('formula' in v || 'sharedFormula' in v) && v.result == null;
+}
+
+/** The warning for `count` uncached formula cells, worded once for every reader. */
+export function uncachedFormulaIssue(count: number, sheet: string): ImportIssue {
+  return {
+    level: 'WARNING', field: null, sheet, cell: null,
+    message:
+      `${count} quantity cell${count === 1 ? '' : 's'} on ${sheet} ${count === 1 ? 'holds a formula' : 'hold formulas'} `
+      + `with no saved result, so ${count === 1 ? 'it reads' : 'they read'} as empty. Open the file in Excel and re-save it `
+      + '(Excel stores each result when it saves), then upload it again.',
+  };
+}
+
 function cellValue(cell: ExcelJS.Cell | undefined): unknown {
   if (!cell) return null;
   const v = cell.value;
@@ -381,6 +408,7 @@ function extractMatrix(sheet: ExcelJS.Worksheet, spec: MatrixSpec, issues: Impor
 
   const rows: ExtractedMatrix['rows'] = [];
   let sheetTotal: number | null = null;
+  let uncached = 0;
 
   for (let r = header.row + 1; r <= header.row + 60; r++) {
     const label = String(cellText(cellValue(sheet.getRow(r).getCell(header.col)))).trim();
@@ -399,11 +427,14 @@ function extractMatrix(sheet: ExcelJS.Worksheet, spec: MatrixSpec, issues: Impor
     const cells: Record<string, number> = {};
     let rowTotal = 0;
     for (const s of sizes) {
-      const n = toNumber(cellValue(sheet.getRow(r).getCell(s.col)));
+      const cell = sheet.getRow(r).getCell(s.col);
+      if (isUncachedFormula(cell.value)) uncached++;
+      const n = toNumber(cellValue(cell));
       if (n != null && n > 0) { cells[s.name] = n; rowTotal += n; }
     }
     if (rowTotal > 0) rows.push({ color: label, cells, total: rowTotal });
   }
+  if (uncached > 0) issues.push({ ...uncachedFormulaIssue(uncached, spec.sheet), field: spec.ledger });
 
   const computedTotal = rows.reduce((a, r) => a + r.total, 0);
 

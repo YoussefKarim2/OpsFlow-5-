@@ -110,6 +110,13 @@ describe('a real file', () => {
     assert.deepEqual(d!.lines.map((l) => [l.name, l.number, l.sizeLabel]), [['Messi', '10', 'S'], ['Kane', '9', 'XL']]);
   });
 
+  test('a CSV keeps jersey numbers 07 and 00 as printed (t8)', async () => {
+    // ExcelJS ran Number() on every CSV field: 07 became 7, 00 became 0 and
+    // 1e3 became 1000 — on a shirt that is a different number.
+    const [d] = await readInstructionFile(Buffer.from('Name,Number,Size\nSMITH,07,L\nJONES,00,M\nBROWN,0,S\nLEE,1e3,S\n'), 'names.csv');
+    assert.deepEqual(d!.lines.map((l) => [l.name, l.number]), [['SMITH', '07'], ['JONES', '00'], ['BROWN', '0'], ['LEE', '1e3']]);
+  });
+
   test('a PDF is refused with a sentence', async () => {
     await assert.rejects(readInstructionFile(Buffer.from('%PDF-1.4 x'), 'x.pdf'), /Excel file/);
   });
