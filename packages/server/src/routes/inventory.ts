@@ -245,6 +245,8 @@ const wastageSchema = z.object({
   materialId: z.string().min(1),
   qty: z.number().positive(),
   orderId: z.string().nullable().optional(),
+  /** The order's BOM line the waste belongs to, so its own reservation carries it. */
+  bomItemId: z.string().nullable().optional(),
   locationId: z.string().nullable().optional(),
   reason: z.string().trim().min(3, 'Say what was wasted and why.'),
 });

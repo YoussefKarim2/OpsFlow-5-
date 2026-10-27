@@ -67,7 +67,8 @@ const UNIT_ALIASES: Record<string, UnitOfMeasure> = {
   CM: 'CM', CMS: 'CM', CENTIMETER: 'CM', CENTIMETRE: 'CM',
   YD: 'YD', YDS: 'YD', YARD: 'YD', YARDS: 'YD',
   KG: 'KG', KGS: 'KG', KILO: 'KG', KILOS: 'KG', KILOGRAM: 'KG', KILOGRAMS: 'KG',
-  G: 'G', GR: 'G', GM: 'G', GRAM: 'G', GRAMS: 'G',
+  // "Grm." is how the bill of materials' own unit list writes grams.
+  G: 'G', GR: 'G', GM: 'G', GMS: 'G', GRM: 'G', GRMS: 'G', GRAM: 'G', GRAMS: 'G',
   PCS: 'PCS', PC: 'PCS', PIECE: 'PCS', PIECES: 'PCS', EA: 'PCS', EACH: 'PCS', NO: 'PCS', UNIT: 'PCS', UNITS: 'PCS',
   DZN: 'DZN', DZ: 'DZN', DOZ: 'DZN', DOZEN: 'DZN', DOZENS: 'DZN',
   ROLL: 'ROLL', ROLLS: 'ROLL',
@@ -107,6 +108,41 @@ export function convertQty(
   const y = UNIT_BASE[b];
   if (!x || !y || x.dimension !== y.dimension) return null;
   return quantise((qty * x.factor) / y.factor);
+}
+
+/**
+ * Packs whose contents vary by supplier and that have no unit of their own in
+ * the stock catalogue.
+ *
+ * "Block" is on the bill of materials' unit list: a block of size stickers or
+ * barcode labels. It is a count of something, but not a fixed one — one
+ * supplier's block is 100 stickers, another's 500 — so it is deliberately not
+ * read as pieces. Equating them would reserve a hundredth of what the line
+ * needs and call it covered. What it gets instead is a reason that says so,
+ * rather than the bare "cannot be converted" an unknown spelling gets.
+ */
+const PACK_UNITS: Record<string, string> = {
+  BLOCK: 'block', BLOCKS: 'block', BLK: 'block', BLKS: 'block',
+};
+
+/**
+ * Why a quantity in one unit cannot be moved against stock held in another,
+ * in words a storekeeper can act on. For use only once `convertQty` or
+ * `unitsCompatible` has already refused.
+ */
+export function unitMismatchReason(lineUnit: string, stockUnit: string, materialName: string): string {
+  const pack = PACK_UNITS[lineUnit.toUpperCase().replace(/[^A-Z]/g, '')];
+  if (pack) {
+    return `${materialName} is held in ${stockUnit}, and a ${pack} holds a different number from one supplier ` +
+      `to the next, so it cannot be counted as ${stockUnit}. Enter the quantity in ${stockUnit}, ` +
+      `or measure the bill-of-materials line in ${stockUnit}.`;
+  }
+  if (!normaliseUnit(lineUnit)) {
+    return `${materialName} is held in ${stockUnit}, and "${lineUnit}" is not a unit the system recognises. ` +
+      `Enter the quantity in ${stockUnit}.`;
+  }
+  return `${materialName} is held in ${stockUnit}, and ${lineUnit} cannot be converted to it. ` +
+    `Enter the quantity in ${stockUnit}.`;
 }
 
 /** True when two units can be compared without a conversion decision. */
@@ -260,6 +296,87 @@ export const STOCK_STATUS_STYLE: Record<StockStatus, { label: string; tone: 'red
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Drawing reservations down, and giving them back
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** A reservation as the draw-down and restore plans read it. */
+export interface HeldReservation {
+  id: string;
+  qty: number;
+  consumedQty: number;
+}
+
+/** What a plan does to one reservation. */
+export interface ReservationChange {
+  id: string;
+  /** The reservation's new consumed figure. */
+  consumedQty: number;
+  /** Fully drawn down, so no longer holding anything. */
+  fulfilled: boolean;
+  /** How much this reservation moved — drawn, or given back. */
+  moved: number;
+}
+
+/**
+ * Draw a quantity that has left the shelf against an order's reservations, in
+ * the order given (the service passes them oldest first, so the earliest
+ * commitment is honoured first).
+ *
+ * Used for issues and for wastage written off against an order alike: either
+ * way the metres are gone, and a reservation still holding them would promise
+ * the order stock that no longer exists — and, by keeping "reserved" above
+ * the shelf, show the material as over-reserved to everybody else.
+ *
+ * Whatever the reservations cannot cover came out of free stock; `drawn` is
+ * the part that came off a reservation.
+ */
+export function planReservationDrawDown(
+  reservations: readonly HeldReservation[],
+  qty: number,
+): { changes: ReservationChange[]; drawn: number } {
+  const changes: ReservationChange[] = [];
+  let remaining = Math.max(0, quantise(qty));
+  for (const r of reservations) {
+    if (qtyCmp(remaining, 0) <= 0) break;
+    const outstanding = Math.max(0, qtySub(r.qty, r.consumedQty));
+    if (outstanding <= 0) continue;
+    const take = Math.min(outstanding, remaining);
+    const consumedQty = qtyAdd(r.consumedQty, take);
+    changes.push({ id: r.id, consumedQty, fulfilled: qtyCmp(consumedQty, r.qty) >= 0, moved: take });
+    remaining = qtySub(remaining, take);
+  }
+  return { changes, drawn: qtyAdd(...changes.map((c) => c.moved)) };
+}
+
+/**
+ * Put material that came back from the floor onto the reservations it was
+ * drawn from, in the order given.
+ *
+ * Spread across them rather than poured into one: the service used to restore
+ * a single reservation and cap it at what that one had consumed, so returning
+ * 300 m against two reservations that had each given 200 restored 200 and the
+ * other 100 quietly became anyone's stock. What no reservation consumed came
+ * from free stock on the way out, and goes back to free stock now.
+ */
+export function planReservationRestore(
+  reservations: readonly HeldReservation[],
+  qty: number,
+): { changes: ReservationChange[]; restored: number } {
+  const changes: ReservationChange[] = [];
+  let remaining = Math.max(0, quantise(qty));
+  for (const r of reservations) {
+    if (qtyCmp(remaining, 0) <= 0) break;
+    const consumed = Math.max(0, r.consumedQty);
+    if (consumed <= 0) continue;
+    const give = Math.min(consumed, remaining);
+    const consumedQty = qtySub(consumed, give);
+    changes.push({ id: r.id, consumedQty, fulfilled: qtyCmp(consumedQty, r.qty) >= 0, moved: give });
+    remaining = qtySub(remaining, give);
+  }
+  return { changes, restored: qtyAdd(...changes.map((c) => c.moved)) };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Requirements and shortages
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -288,17 +405,35 @@ export interface RequirementInput {
    * is covered.
    */
   stockUnit?: string | null;
+  /**
+   * Reservation requests for this line still waiting for a decision, in the
+   * same unit as `reservedQty`. They hold no stock, so they do not secure the
+   * line — but they are already asked for, and offering "Reserve" again for
+   * the same quantity is how a coordinator who pressed it twice, or two
+   * coordinators on the same order, stacked up duplicate requests for a
+   * decider to untangle.
+   */
+  requestedQty?: number | null;
 }
 
 export interface RequirementResult extends RequirementInput {
+  /** Pending requests, in the line's unit. Zero when there are none. */
+  requestedQty: number;
   /** Still to secure: required − reserved − issued, never negative. */
   outstandingQty: number;
   /** Outstanding that stock cannot currently cover. This is the real shortage. */
   shortQty: number;
-  /** Outstanding that stock *can* cover — reservable right now. */
+  /**
+   * Outstanding that stock *can* cover and nobody has yet asked for —
+   * reservable right now. Pending requests are taken off first.
+   */
   reservableQty: number;
   coveragePct: number | null;
-  status: 'COVERED' | 'RESERVABLE' | 'SHORT' | 'UNLINKED';
+  /**
+   * REQUESTED: everything outstanding has been asked for and is waiting on a
+   * decider. Stock exists for it; there is nothing more to press.
+   */
+  status: 'COVERED' | 'RESERVABLE' | 'REQUESTED' | 'SHORT' | 'UNLINKED';
 }
 
 /**
@@ -316,9 +451,11 @@ export function computeRequirement(input: RequirementInput): RequirementResult {
 
   // A line with no material record cannot be checked against stock. Saying so
   // is honest; treating it as covered would be a lie the cutting floor finds out.
+  const requestedQty = Math.max(0, r.requestedQty ?? 0);
   if (r.materialId == null || r.availableQty == null) {
     return {
       ...r,
+      requestedQty,
       outstandingQty,
       shortQty: 0,
       reservableQty: 0,
@@ -327,11 +464,16 @@ export function computeRequirement(input: RequirementInput): RequirementResult {
     };
   }
 
-  const reservableQty = Math.max(0, Math.min(outstandingQty, r.availableQty));
+  // A request holds no stock, so it does not reduce the shortage — the shelf
+  // still has to be able to cover it when a decider says yes. It reduces what
+  // is left to ask for, and the stock left to ask it of.
+  const unrequested = Math.max(0, qtySub(outstandingQty, requestedQty));
+  const reservableQty = Math.max(0, Math.min(unrequested, qtySub(r.availableQty, requestedQty)));
   const shortQty = Math.max(0, qtySub(outstandingQty, r.availableQty));
 
   return {
     ...r,
+    requestedQty,
     outstandingQty,
     shortQty,
     reservableQty,
@@ -339,7 +481,8 @@ export function computeRequirement(input: RequirementInput): RequirementResult {
     status:
       outstandingQty === 0 ? 'COVERED'
       : shortQty > 0 ? 'SHORT'
-      : 'RESERVABLE',
+      : reservableQty > 0 ? 'RESERVABLE'
+      : 'REQUESTED',
   };
 }
 
@@ -359,7 +502,8 @@ function toRequirementUnit(r: RequirementInput): RequirementInput {
   if (reservedQty == null || (r.availableQty != null && availableQty == null)) {
     return { ...r, availableQty: null };
   }
-  return { ...r, reservedQty, availableQty };
+  const requestedQty = r.requestedQty ? convertQty(r.requestedQty, r.stockUnit, r.unit) : r.requestedQty;
+  return { ...r, reservedQty, availableQty, requestedQty };
 }
 
 export interface MaterialPosition {

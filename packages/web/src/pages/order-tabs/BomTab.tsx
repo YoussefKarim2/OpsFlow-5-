@@ -243,6 +243,9 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
           // step; both screens read it.
           void qc.invalidateQueries({ queryKey: ['costing', order.id] });
           void qc.invalidateQueries({ queryKey: ['order-steps', order.id] });
+          // A linked line's issue takes stock off the shelf and draws down the
+          // reservation: the Materials tab and the inventory screens read both.
+          void qc.invalidateQueries({ queryKey: ['inventory'] });
         }}
       />
       <AttachmentsPanel
