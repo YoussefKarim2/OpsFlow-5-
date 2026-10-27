@@ -49,9 +49,17 @@ const CREATE_FIELDS: Record<string, string[]> = {
   Role: ['key', 'label', 'permissions'],
 };
 
-/** Fields that change on every write and would drown the log. */
-const IGNORED_FIELDS = new Set([
+/**
+ * Fields that change on every write and would drown the log.
+ *
+ * `cutOrderGeneratedAt` is bookkeeping too: writing the cut order stamps it,
+ * and as a recorded field it turned every quantity save into an "order
+ * changed" email whose only news was the time the sheet was recalculated. The
+ * cut total itself is announced separately, when it moves.
+ */
+export const IGNORED_FIELDS: ReadonlySet<string> = new Set([
   'updatedAt', 'createdAt', 'cachedProgressPct', 'cachedStatus', 'cachedStageKey',
+  'cutOrderGeneratedAt',
   // Bookkeeping the throttle writes on nearly every sign-in.
   'lastLoginAt', 'failedLoginCount', 'lockedUntil',
 ]);
