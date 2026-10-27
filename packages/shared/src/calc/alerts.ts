@@ -255,7 +255,9 @@ export function evaluateAlerts(ctx: AlertContext): Alert[] {
   }
 
   // --- Tasks -------------------------------------------------------------
-  const overdue = ctx.tasks.filter((t) => {
+  // Gated like the date and production alerts: once the goods have gone, a
+  // task left open on the plan is housekeeping, not a deadline being missed.
+  const overdue = finished ? [] : ctx.tasks.filter((t) => {
     if (t.status === TaskStatus.COMPLETED || !t.dueDate) return false;
     const d = daysBetween(today, t.dueDate);
     return d != null && d < 0;
