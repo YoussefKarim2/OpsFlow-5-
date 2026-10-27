@@ -14,7 +14,7 @@
 
 import { useState } from 'react';
 import { useParams, useSearchParams, Link, useNavigate } from 'react-router-dom';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, LayoutGrid, ListOrdered, Trash2 } from 'lucide-react';
 import { fmtDate, type OrderStepState, type OrderTabKey } from '@opsflow/shared';
 import { api, ApiError } from '../lib/api';
@@ -70,6 +70,7 @@ export function OrderWorkspacePage() {
   const [showAllTabs, setShowAllTabs] = useState(false);
   const { isSuperAdmin } = useAuth();
   const navigate = useNavigate();
+  const qc = useQueryClient();
   const [deleting, setDeleting] = useState(false);
   const [confirmText, setConfirmText] = useState('');
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -97,7 +98,14 @@ export function OrderWorkspacePage() {
    */
   const remove = useMutation({
     mutationFn: () => api.orders.remove(id, confirmText.trim()),
-    onSuccess: () => { setDeleting(false); navigate('/orders', { replace: true }); },
+    onSuccess: () => {
+      setDeleting(false);
+      // The list and the dashboard still held the deleted order, one click
+      // from a "not found".
+      void qc.invalidateQueries({ queryKey: ['orders'] });
+      void qc.invalidateQueries({ queryKey: ['dashboard'] });
+      navigate('/orders', { replace: true });
+    },
     onError: (e) => setDeleteError(e instanceof ApiError ? e.message : 'Could not delete this order.'),
   });
 

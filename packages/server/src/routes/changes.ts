@@ -42,7 +42,9 @@ const dateFilter = z
   .refine((v) => v === undefined || v === '' || !Number.isNaN(Date.parse(v)), {
     message: 'Not a date OpsFlow can read. Use YYYY-MM-DD.',
   })
-  .transform((v) => (v && v !== '' ? new Date(v) : undefined));
+  // Kept as sent: whether it is a bare date or an instant decides how the
+  // window is read — see `createdAtWindow`.
+  .transform((v) => (v && v !== '' ? v : undefined));
 
 const feedQuery = z.object({
   category: z.enum(CATEGORIES).optional(),
@@ -58,10 +60,29 @@ const feedQuery = z.object({
   pageSize: z.coerce.number().int().min(1).max(200).default(50),
 });
 
-function endOfDay(d: Date): Date {
-  const copy = new Date(d);
-  copy.setUTCHours(23, 59, 59, 999);
-  return copy;
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * The `createdAt` window for a from/to pair, as sent.
+ *
+ * The page sends instants: the start of the first day and the start of the
+ * day after the last, both at the viewer's own midnight, so the window is
+ * `from ≤ t < to`. Read as bare dates they were UTC days, and in Cairo that
+ * moved the window two or three hours: a change made at 01:00 on the 5th
+ * appeared under the 4th. A bare YYYY-MM-DD — a bookmarked link, an older
+ * page — still means that whole UTC day, as it always did.
+ */
+export function createdAtWindow(
+  from: string | undefined, to: string | undefined,
+): { gte?: Date; lt?: Date } | undefined {
+  const window: { gte?: Date; lt?: Date } = {};
+  if (from) window.gte = new Date(from);
+  if (to) {
+    const end = new Date(to);
+    if (DATE_ONLY.test(to)) end.setUTCDate(end.getUTCDate() + 1);
+    window.lt = end;
+  }
+  return window.gte || window.lt ? window : undefined;
 }
 
 const eventInclude = {
@@ -106,6 +127,7 @@ function toDto(e: EventRow) {
 
 changesRouter.get('/', requirePermission('order:read'), asyncHandler(async (req, res) => {
   const q = feedQuery.parse(req.query);
+  const createdAt = createdAtWindow(q.from, q.to);
 
   const where: Prisma.ChangeEventWhereInput = {
     ...(q.category ? { category: q.category as never } : {}),
@@ -114,14 +136,7 @@ changesRouter.get('/', requirePermission('order:read'), asyncHandler(async (req,
     ...(q.orderId ? { orderId: q.orderId } : {}),
     ...(q.entityType ? { entityType: q.entityType } : {}),
     ...(q.q ? { summary: { contains: q.q, mode: 'insensitive' as const } } : {}),
-    ...(q.from || q.to
-      ? {
-          createdAt: {
-            ...(q.from ? { gte: q.from } : {}),
-            ...(q.to ? { lte: endOfDay(q.to) } : {}),
-          },
-        }
-      : {}),
+    ...(createdAt ? { createdAt } : {}),
   };
 
   const [rows, total] = await Promise.all([

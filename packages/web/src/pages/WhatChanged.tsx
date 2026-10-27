@@ -33,6 +33,15 @@ import { ComboSelect } from '../components/ComboSelect';
 
 const PRIORITIES: NotificationPriority[] = ['URGENT', 'HIGH', 'NORMAL', 'LOW'];
 
+/**
+ * A date input's YYYY-MM-DD as the instant of local midnight, `addDays` days
+ * on: "2026-10-05", 1 → the start of the 6th here, as an ISO instant.
+ */
+function localMidnight(day: string, addDays: number): string {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(y!, m! - 1, d! + addDays).toISOString();
+}
+
 const TONE_CLASSES: Record<NotificationPriority, { chip: string; bar: string }> = {
   URGENT: { chip: 'bg-red-50 text-red-700 ring-red-600/20', bar: 'bg-red-500' },
   HIGH: { chip: 'bg-orange-50 text-orange-700 ring-orange-600/20', bar: 'bg-orange-500' },
@@ -99,8 +108,11 @@ export function WhatChangedPage({ embedded = false }: { embedded?: boolean } = {
     ...(category !== 'ALL' ? { category } : {}),
     ...(priority !== 'ALL' ? { priority } : {}),
     ...(actorId ? { actorId } : {}),
-    ...(from ? { from } : {}),
-    ...(to ? { to } : {}),
+    // The days as the viewer reads them: from their own midnight, to the
+    // midnight after the last day (exclusive). Sent as bare dates they were
+    // UTC days, and in Cairo an early-morning change landed on the day before.
+    ...(from ? { from: localMidnight(from, 0) } : {}),
+    ...(to ? { to: localMidnight(to, 1) } : {}),
     ...(q ? { q } : {}),
     page,
     pageSize: 50,
