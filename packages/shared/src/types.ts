@@ -109,6 +109,8 @@ export interface OrderDetailDto {
   internalPoDate: string | null;
   /// Null is "nobody has said yet", which is not the same as "no".
   productionSample: boolean | null;
+  /// A comment typed instead of Yes or No; when set it is the answer shown.
+  productionSampleNote: string | null;
   /// The order's own addresses. Null means it inherits the client's, which
   /// `client.shippingAddress` already resolves for display.
   shippingAddress: string | null;

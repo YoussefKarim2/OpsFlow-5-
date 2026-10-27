@@ -650,6 +650,7 @@ export async function getOrderDetail(orderId: string, today = new Date()): Promi
     poDate: iso(order.poDate),
     internalPoDate: iso(order.internalPoDate),
     productionSample: order.productionSample,
+    productionSampleNote: order.productionSampleNote,
     // The order's own addresses, which may be null. `client.shippingAddress`
     // below is the same value with the client's default behind it — right for
     // display, wrong for an editor, which must not save the client's address

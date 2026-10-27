@@ -219,6 +219,9 @@ model Order {
   /// Whether a production sample is required before the line starts. Nullable
   /// because "nobody has said yet" is different from "no".
   productionSample         Boolean?
+  /// A comment typed instead of Yes or No ("Sent 20 Oct", "Waiting fabric").
+  /// When it is set the yes/no is left unanswered: the comment is the answer.
+  productionSampleNote     String?
   promisedShippingDate     DateTime?
   requiredDeliveryDate     DateTime?
   fabricDeliveryToSupplier DateTime?

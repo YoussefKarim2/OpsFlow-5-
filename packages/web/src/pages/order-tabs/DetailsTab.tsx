@@ -46,6 +46,7 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
     poDate: order.poDate?.slice(0, 10) ?? '',
     internalPoDate: order.internalPoDate?.slice(0, 10) ?? '',
     productionSample: order.productionSample,
+    productionSampleNote: order.productionSampleNote ?? '',
     shippingAddress: order.shippingAddress ?? '',
     billingAddress: order.billingAddress ?? '',
     promisedShippingDate: order.promisedShippingDate?.slice(0, 10) ?? '',
@@ -145,29 +146,38 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
             <Edit label="Order name" editing={editing} value={form.orderName}
               onChange={(v) => setForm({ ...form, orderName: v })} display={order.orderName} />
 
-            {/* Three states, not two: nobody has said yet is not the same as no,
-                and the sheet colours an unanswered cell for exactly that reason. */}
+            {/* Yes, No, Not decided — or a comment typed instead ("Sent 20 Oct").
+                Nobody has said yet is not the same as no, and a comment is the
+                answer when there is one. */}
             <div>
               <p className="label">Production sample</p>
               {editing ? (
-                <ComboSelect
-                  className="input"
-                  value={form.productionSample == null ? '' : form.productionSample ? 'yes' : 'no'}
-                  onChange={(e) => setForm({
-                    ...form,
-                    productionSample: e.target.value === '' ? null : e.target.value === 'yes',
-                  })}
-                >
-                  <option value="">Not decided</option>
-                  <option value="yes">Yes</option>
-                  <option value="no">No</option>
-                </ComboSelect>
+                <>
+                  <ComboSelect
+                    allowCustom
+                    className="input"
+                    placeholder="Choose, or type a comment"
+                    value={form.productionSampleNote || (form.productionSample == null ? '' : form.productionSample ? 'yes' : 'no')}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setForm(v === '' || v === 'yes' || v === 'no'
+                        ? { ...form, productionSample: v === '' ? null : v === 'yes', productionSampleNote: '' }
+                        : { ...form, productionSample: null, productionSampleNote: v });
+                    }}
+                  >
+                    <option value="">Not decided</option>
+                    <option value="yes">Yes</option>
+                    <option value="no">No</option>
+                  </ComboSelect>
+                  <p className="mt-1 text-xs text-ink-500">Pick one, or type a comment. It is saved with Save changes.</p>
+                </>
               ) : (
                 <p className={clsx(
                   'text-sm',
-                  order.productionSample === false ? 'font-semibold text-red-700' : 'text-ink-800',
+                  !order.productionSampleNote && order.productionSample === false ? 'font-semibold text-red-700' : 'text-ink-800',
                 )}>
-                  {order.productionSample == null ? '—' : order.productionSample ? 'Yes' : 'No'}
+                  {order.productionSampleNote
+                    ?? (order.productionSample == null ? '—' : order.productionSample ? 'Yes' : 'No')}
                 </p>
               )}
             </div>

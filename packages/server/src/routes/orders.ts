@@ -156,6 +156,8 @@ const createSchema = z.object({
   internalPoDate: z.string().optional().nullable(),
   /// Null is "nobody has said yet", which is not the same as "no".
   productionSample: z.boolean().optional().nullable(),
+  /// Typed instead of Yes or No. Blank clears it.
+  productionSampleNote: z.string().trim().max(300).nullable().optional().transform((v) => (v === '' ? null : v)),
   priority: z.enum(['LOW', 'MEDIUM', 'HIGH', 'URGENT']).default('MEDIUM'),
   colors: z.array(z.object({ colorId: z.string(), productName: z.string().optional() })).default([]),
   sizes: z.array(z.string()).default([]),
@@ -216,6 +218,7 @@ ordersRouter.post('/', requirePermission('order:create'), asyncHandler(async (re
         billingAddress: input.billingAddress,
         internalPoDate: input.internalPoDate ? new Date(input.internalPoDate) : null,
         productionSample: input.productionSample ?? null,
+        productionSampleNote: input.productionSampleNote ?? null,
         priority: input.priority,
       },
     });
