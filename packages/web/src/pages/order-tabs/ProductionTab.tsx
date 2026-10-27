@@ -15,9 +15,10 @@ import { Plus, AlertTriangle, Trash2 } from 'lucide-react';
 import { fmtDate, fmtDateShort, fmtNumber, type OrderDetailDto } from '@opsflow/shared';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
+import { localToday } from '../../lib/local-today';
 import {
   Card, CardHeader, StatTile, Num, Modal, Field,
-  Spinner, ErrorNote, EmptyState,
+  Spinner, ErrorNote, EmptyState, useToast,
 } from '../../components/ui';
 import { ComboSelect } from '../../components/ComboSelect';
 
@@ -27,18 +28,27 @@ export function ProductionTab({ order }: { order: OrderDetailDto }) {
   const qc = useQueryClient();
   const { can } = useAuth();
   const [adding, setAdding] = useState(false);
+  /** The entry waiting on Remove / Keep — one click no longer deletes. */
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const toast = useToast();
 
   const { data, isLoading } = useQuery({
     queryKey: ['production', order.id],
     queryFn: () => api.production.get(order.id),
   });
 
+  // The Productivity page reads the same entries, so it is refreshed too.
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['production', order.id] });
+    void qc.invalidateQueries({ queryKey: ['order', order.id] });
+    void qc.invalidateQueries({ queryKey: ['productivity'] });
+  };
+
   const remove = useMutation({
     mutationFn: (id: string) => api.production.remove(id),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ['production', order.id] });
-      void qc.invalidateQueries({ queryKey: ['order', order.id] });
-    },
+    onSuccess: () => { setConfirming(null); toast.success('Entry removed'); refresh(); },
+    // A refusal — e.g. it would take produced below what has shipped — is said.
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : 'Could not remove the entry.'),
   });
 
   if (isLoading) return <Spinner />;
@@ -220,16 +230,23 @@ export function ProductionTab({ order }: { order: OrderDetailDto }) {
                   <td className="td text-xs">{r.line || '—'}</td>
                   <td className="td text-xs">{r.team || '—'}</td>
                   <td className="td max-w-xs truncate text-xs text-ink-500">{r.notes || '—'}</td>
-                  <td className="td text-right">
-                    {can('production:write') && (
+                  <td className="td whitespace-nowrap text-right">
+                    {can('production:write') && (confirming === r.id ? (
+                      <>
+                        <button className="btn-sm btn-danger" onClick={() => remove.mutate(r.id)} disabled={remove.isPending}>
+                          Remove
+                        </button>{' '}
+                        <button className="btn-secondary btn-sm" onClick={() => setConfirming(null)}>Keep</button>
+                      </>
+                    ) : (
                       <button
-                        onClick={() => remove.mutate(r.id)}
+                        onClick={() => setConfirming(r.id)}
                         className="btn-ghost btn-sm text-ink-400 hover:text-red-600"
                         title="Remove this entry"
                       >
                         <Trash2 className="h-3 w-3" />
                       </button>
-                    )}
+                    ))}
                   </td>
                 </tr>
               ))}
@@ -241,11 +258,7 @@ export function ProductionTab({ order }: { order: OrderDetailDto }) {
       <RecordModal
         open={adding} orderId={order.id}
         onClose={() => setAdding(false)}
-        onDone={() => {
-          setAdding(false);
-          void qc.invalidateQueries({ queryKey: ['production', order.id] });
-          void qc.invalidateQueries({ queryKey: ['order', order.id] });
-        }}
+        onDone={() => { setAdding(false); refresh(); }}
       />
     </div>
   );
@@ -256,8 +269,8 @@ function RecordModal({
 }: {
   open: boolean; orderId: string; onClose: () => void; onDone: () => void;
 }) {
-  const today = new Date().toISOString().slice(0, 10);
-  const [form, setForm] = useState({ date: today, operation: 'SEWING', qty: '', line: '', team: '', notes: '' });
+  // The local calendar day: the UTC one is still yesterday in Cairo after midnight.
+  const [form, setForm] = useState({ date: localToday(), operation: 'SEWING', qty: '', line: '', team: '', notes: '' });
   const [error, setError] = useState<string | null>(null);
 
   const save = useMutation({

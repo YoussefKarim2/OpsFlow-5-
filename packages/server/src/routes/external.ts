@@ -28,6 +28,30 @@ const OP_STATUSES = ['NOT_SENT', 'SENT', 'IN_PROGRESS', 'RETURNED', 'CANCELLED']
 /** A row from before approvals were removed reads as what it now is: not sent. */
 export const asNotSent = (status: string): string => (status === 'WAITING_APPROVAL' ? 'NOT_SENT' : status);
 
+/** The order work moves through; CANCELLED stands outside it. */
+const FORWARD = ['NOT_SENT', 'SENT', 'IN_PROGRESS', 'RETURNED'] as const;
+
+/**
+ * Whether an operation may move from one status to another.
+ *
+ * Only forward — not sent, sent, in progress, returned, with steps skippable
+ * (the tab marks work returned straight from sent) — or to cancelled from
+ * anywhere. Anything else was accepted before: work marked returned could be
+ * set back to not sent, which made it editable and deletable again and erased
+ * the only record that it had ever left. Cancelled is final.
+ */
+export function canMoveStatus(from: string, to: string): boolean {
+  const current = asNotSent(from);
+  if (current === 'CANCELLED') return false;
+  if (to === 'CANCELLED') return true;
+  const a = FORWARD.indexOf(current as (typeof FORWARD)[number]);
+  const b = FORWARD.indexOf(to as (typeof FORWARD)[number]);
+  return a >= 0 && b > a;
+}
+
+/** Work that has left the building: its quantity and price are a record now. */
+export const isLockedStatus = (status: string): boolean => asNotSent(status) !== 'NOT_SENT';
+
 // ── External operations ─────────────────────────────────────────────────────
 
 externalRouter.get('/:orderId/operations', requirePermission('external:read'), asyncHandler(async (req, res) => {
@@ -213,10 +237,15 @@ externalRouter.delete('/operations/:id', requirePermission('external:write'), as
  * the keys that actually arrived. Prisma ignores `undefined`, which is exactly
  * the semantics wanted: absent means unchanged, not cleared.
  */
+/*
+ * The factory, reference, notes and return date also take null, which clears
+ * them: the editor sends null for a field someone emptied, and before these
+ * accepted it an emptied field could only be left as it was.
+ */
 const bulkRowSchema = z.object({
   id: z.string().optional(),
-  externalFactoryId: z.string().optional(),
-  externalReference: z.string().optional(),
+  externalFactoryId: z.string().nullable().optional(),
+  externalReference: z.string().nullable().optional(),
   operationType: z.string().min(1),
   operationTypeAr: z.string().optional(),
   operationSort: z.string().optional(),
@@ -225,7 +254,7 @@ const bulkRowSchema = z.object({
   unitPriceUsd: z.number().nonnegative().optional(),
   expectedReturnDate: z.string().nullable().optional(),
   colorIds: z.array(z.string()).optional(),
-  notes: z.string().optional(),
+  notes: z.string().nullable().optional(),
 });
 
 /**
@@ -237,8 +266,18 @@ const bulkRowSchema = z.object({
  * `null` as "clear it", and the difference between those two is a coordinator's
  * expected return date.
  */
-export function bulkUpdateData(row: z.infer<typeof bulkRowSchema>): Record<string, unknown> {
+export function bulkUpdateData(
+  row: z.infer<typeof bulkRowSchema>,
+  status = 'NOT_SENT',
+): Record<string, unknown> {
   const { id: _id, expectedReturnDate, ...fields } = row;
+  // A row that has been sent keeps the quantity and price it went out with —
+  // the editor shows it read-only, and the server now holds it to that too.
+  if (isLockedStatus(status)) {
+    delete fields.qty;
+    delete fields.unitRate;
+    delete fields.unitPriceUsd;
+  }
   return {
     ...fields,
     ...(expectedReturnDate !== undefined
@@ -290,12 +329,20 @@ externalRouter.put('/:orderId/operations', requirePermission('external:write'), 
     if (removable.length > 0) {
       await tx.externalOperation.deleteMany({ where: { id: { in: removable } } });
     }
+    const statusOf = new Map(existing.map((e) => [e.id, e.status]));
     for (const row of rows) {
       const { id, expectedReturnDate, ...fields } = row;
       if (id) {
+        // An id from another order is refused rather than written: the row is
+        // addressed by id *and* this order, so one order's save cannot reach
+        // into another's work.
+        const status = statusOf.get(id);
+        if (status === undefined) {
+          throw new ValidationError('One of these operations is not on this order. Reload the page and try again.');
+        }
         // Status is never written here; it belongs to the transition route.
         // Only the keys this caller sent are written — see bulkRowSchema.
-        await tx.externalOperation.update({ where: { id }, data: bulkUpdateData(row) });
+        await tx.externalOperation.update({ where: { id, orderId: order.id }, data: bulkUpdateData(row, status) });
       } else {
         // A new row does need the defaults, since nothing exists to preserve.
         await tx.externalOperation.create({
@@ -340,6 +387,13 @@ externalRouter.post('/operations/:id/status', requirePermission('external:write'
     include: { order: { select: { id: true, poNumber: true } } },
   });
   if (!op) throw new NotFoundError('External operation');
+  if (!canMoveStatus(op.status, input.status)) {
+    const label = (s: string) => asNotSent(s).toLowerCase().replace(/_/g, ' ');
+    throw new ValidationError(
+      `This operation is ${label(op.status)} and cannot be moved to ${label(input.status)}. ` +
+      'Work only moves forward — sent, in progress, returned — or is cancelled.',
+    );
+  }
 
   await prisma.externalOperation.update({
     where: { id: op.id },

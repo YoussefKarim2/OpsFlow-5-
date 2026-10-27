@@ -13,6 +13,7 @@ import {
 } from '@opsflow/shared';
 import { api } from '../lib/api';
 import { useAuth } from '../lib/auth';
+import { localToday } from '../lib/local-today';
 import { Card, CardHeader, StatTile, Spinner, ErrorNote, EmptyState, TabStrip, useToast, clsx } from '../components/ui';
 import { ComboSelect } from '../components/ComboSelect';
 import { AnalysisCharts, ProductionRecords, opLabel, OP_COLOR } from './productivity/parts';
@@ -34,12 +35,6 @@ type Mode = ProductivityPeriod | 'custom';
 const MODES: Array<{ key: Mode; label: string }> = [
   { key: 'day', label: 'Day' }, { key: 'week', label: 'Week' }, { key: 'month', label: 'Month' }, { key: 'custom', label: 'Custom' },
 ];
-
-/** Today as the calendar day the user is looking at, not the UTC day. */
-function localToday(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
 
 
 export function ProductivityPage() {

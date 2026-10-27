@@ -1068,6 +1068,10 @@ export const api = {
     saveCartonLines: (cartonId: string, lines: Array<{ orderSizeId?: string | null; sizeLabel?: string | null; qty: number }>) =>
       put<{ ok: true; lines: number; qty: number }>(`/packing/cartons/${cartonId}/lines`, { lines }),
     approve: (listId: string) => post<{ ok: true }>(`/packing/list/${listId}/approve`),
+    /** Clear an approval so the cartons can be corrected. Refused while an issued invoice uses the list. */
+    reopen: (listId: string) => post<{ ok: true }>(`/packing/list/${listId}/reopen`),
+    /** Take a wrong carton out; its pieces come off the PACKED ledger with it. */
+    removeCarton: (cartonId: string) => del(`/packing/cartons/${cartonId}`),
     shipments: (orderId: string) => get<{ data: ShipmentDto[] }>(`/packing/${orderId}/shipments`),
     createShipment: (orderId: string, body: unknown, reason?: string) =>
       post<{ id: string; overrideApplied: boolean }>(`/packing/${orderId}/shipments`, body, reason),

@@ -10,6 +10,8 @@ import { NotFoundError } from '../errors.js';
 import { refreshOrderCache } from '../services/order-service.js';
 import { logActivity } from '../services/activity-service.js';
 import { createCorrectiveActionTask } from '../services/workflow-service.js';
+import { pickReinspectionTarget } from '../services/reinspection.js';
+import { cairoDay } from '../util/cairo-day.js';
 
 export const qualityRouter = Router();
 qualityRouter.use(authenticate);
@@ -116,11 +118,33 @@ qualityRouter.post('/:orderId', requirePermission('quality:audit'), asyncHandler
     manualResult: input.manualResult ?? null,
   });
 
+  // No date typed means today in the factory, not the UTC instant — which near
+  // midnight is the previous day (see cairoDay).
+  const inspectionDate = input.inspectionDate ? new Date(input.inspectionDate) : cairoDay();
+
   const audit = await prisma.$transaction(async (tx) => {
+    // One audit of this order at a time while the link is worked out, or two
+    // re-inspections saved together both claim the same FAIL.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`reinspection:${order.id}`}))`;
+
+    // Right-first-time counts first inspections only; see reinspection.ts.
+    const fails = await tx.qualityAudit.findMany({
+      where: { orderId: order.id, auditType: input.auditType, result: 'FAIL', inspectionDate: { lte: inspectionDate } },
+      select: { id: true, inspectionDate: true, createdAt: true },
+    });
+    const answered = fails.length === 0 ? [] : await tx.qualityAudit.findMany({
+      where: { reinspectionOf: { in: fails.map((f) => f.id) } },
+      select: { reinspectionOf: true },
+    });
+    const reinspectionOf = pickReinspectionTarget(
+      fails, new Set(answered.map((a) => a.reinspectionOf).filter((id): id is string => !!id)), inspectionDate,
+    );
+
     const created = await tx.qualityAudit.create({
       data: {
         orderId: order.id,
-        inspectionDate: input.inspectionDate ? new Date(input.inspectionDate) : new Date(),
+        inspectionDate,
+        reinspectionOf,
         factoryId: input.factoryId,
         auditType: input.auditType,
         availableQty: input.availableQty,

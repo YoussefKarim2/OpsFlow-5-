@@ -58,6 +58,80 @@ export function assertProductionWithinReason(
 }
 
 /**
+ * Packed quantity, held to the same ceiling as production.
+ *
+ * Cartons had no limit at all, so a carton of 2400 typed for 240 went onto the
+ * PACKED ledger and the funnel showed the order packed ten times over. The
+ * ceiling is the production one — the larger of the order and the cut, times
+ * the same multiple — because a factory cannot pack what it could not have made.
+ */
+export function assertPackingWithinReason(
+  newTotalPacked: number,
+  orderQty: number,
+  cutQty: number,
+): void {
+  const ceiling = Math.max(cutQty, orderQty) * PRODUCTION_SANITY_MULTIPLE;
+  if (orderQty > 0 && newTotalPacked > ceiling) {
+    throw new QuantityRuleError(
+      `This would make ${newTotalPacked.toLocaleString()} pieces packed on the order, more than ` +
+        `${Math.round(ceiling).toLocaleString()} — ${PRODUCTION_SANITY_MULTIPLE}× the larger of the order and cut quantities. ` +
+        'Check the carton quantities for an extra digit.',
+      { newTotalPacked, orderQty, cutQty, ceiling },
+    );
+  }
+}
+
+/**
+ * Produced as the order counts it after one sewing entry changes.
+ *
+ * The order's produced figure is the IN_LINE ledger or the sewing records,
+ * whichever is further along (see deriveOrder), so taking an entry out only
+ * lowers it when sewing was the larger of the two. `removedSewing` is what the
+ * entry counted towards sewing before, `addedSewing` what it counts after.
+ */
+export function producedAfterChange(opts: {
+  inLineQty: number;
+  sewingQty: number;
+  removedSewing: number;
+  addedSewing: number;
+}): number {
+  return Math.max(opts.inLineQty, opts.sewingQty - opts.removedSewing + opts.addedSewing);
+}
+
+/**
+ * Correcting production may not leave the order having shipped more than it
+ * made — the shipped-versus-produced rule seen from the other side. Before this,
+ * a production entry could be removed after its pieces had shipped, and the
+ * order then showed 1,000 shipped against 600 produced with no override on
+ * record. The same override as shipping applies: the permission and a reason.
+ *
+ * Only a change that lowers produced is judged. An order that was already
+ * shipped past produced under an override is not blocked from an unrelated edit.
+ */
+export function assertProducedCoversShipped(opts: {
+  producedBefore: number;
+  producedAfter: number;
+  shippedQty: number;
+  hasOverridePermission: boolean;
+  overrideReason?: string | null;
+}): void {
+  const { producedBefore, producedAfter, shippedQty, hasOverridePermission, overrideReason } = opts;
+  if (producedAfter >= producedBefore || producedAfter >= shippedQty) return;
+
+  if (!hasOverridePermission) {
+    throw new OverrideRequiredError(
+      `This would leave ${producedAfter.toLocaleString()} pieces produced when ${shippedQty.toLocaleString()} ` +
+        'are already on shipments. An administrator can override this.',
+    );
+  }
+  if (!overrideReason?.trim()) {
+    throw new ValidationError(
+      'Taking produced below shipped requires a written reason. Send it in the X-Change-Reason header.',
+    );
+  }
+}
+
+/**
  * Shipped may not exceed produced — the brief's rule — unless an admin
  * overrides with a reason. The reason is mandatory and lands in the audit
  * trail, so the exception is visible rather than silent.

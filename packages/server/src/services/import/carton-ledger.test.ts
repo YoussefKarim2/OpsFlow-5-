@@ -17,7 +17,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ledgerDeltas } from './carton-ledger.js';
+import { ledgerDeltas, cartonHolding, repeatedCartonNumber } from './carton-ledger.js';
 
 describe('adjusting the PACKED ledger for an edited carton', () => {
   test('adding a size increments only that size', () => {
@@ -65,5 +65,39 @@ describe('adjusting the PACKED ledger for an edited carton', () => {
     const after = new Map([['S', 12], ['L', 15], ['XL', 8]]);
     const sum = (m: Map<string, number>) => [...m.values()].reduce((a, b) => a + b, 0);
     assert.equal(sum(ledgerDeltas(before, after)), sum(after) - sum(before));
+  });
+});
+
+describe('removing a carton gives back what it counted', () => {
+  test('a single-size carton returns its own quantity', () => {
+    const held = cartonHolding({ qty: 24, orderSizeId: 'S', lines: [] });
+    assert.deepEqual(ledgerDeltas(held, new Map()), new Map([['S', -24]]));
+  });
+
+  test('a mixed carton returns each size row, and free-text sizes return nothing', () => {
+    const held = cartonHolding({
+      qty: 30, orderSizeId: null,
+      lines: [{ orderSizeId: 'S', qty: 10 }, { orderSizeId: 'M', qty: 12 }, { orderSizeId: null, qty: 8 }],
+    });
+    assert.deepEqual(ledgerDeltas(held, new Map()), new Map([['S', -10], ['M', -12]]));
+  });
+
+  test('a carton with rows is counted by its rows, not again by its own size', () => {
+    const held = cartonHolding({ qty: 20, orderSizeId: 'S', lines: [{ orderSizeId: 'S', qty: 20 }] });
+    assert.deepEqual(held, new Map([['S', 20]]));
+  });
+});
+
+describe('carton numbers are not repeated on one list', () => {
+  test('a number already on the list is caught, whatever its case or spacing', () => {
+    assert.equal(repeatedCartonNumber(['CTN-001', 'CTN-002'], [' ctn-002 ']), 'ctn-002');
+  });
+
+  test('a batch that repeats itself is caught', () => {
+    assert.equal(repeatedCartonNumber([], ['CTN-001', 'CTN-002', 'CTN-001']), 'CTN-001');
+  });
+
+  test('new numbers pass', () => {
+    assert.equal(repeatedCartonNumber(['CTN-001'], ['CTN-002', 'CTN-003']), null);
   });
 });
