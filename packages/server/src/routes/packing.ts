@@ -1,21 +1,58 @@
 import { Router } from 'express';
 import { z } from 'zod';
+import { QtyLedger } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
-import { NotFoundError, ValidationError } from '../errors.js';
+import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 import { ORDER_INCLUDE, deriveOrder, refreshOrderCache } from '../services/order-service.js';
 import { logActivity, logAndNotify } from '../services/activity-service.js';
-import { assertShippableQuantity, shipmentTotalAfter } from '../services/rules.js';
+import { assertPackingWithinReason, assertShippableQuantity, shipmentTotalAfter } from '../services/rules.js';
 import { getRequestContext } from '../request-context.js';
-import { ledgerDeltas } from '../services/import/carton-ledger.js';
+import { cartonHolding, ledgerDeltas, repeatedCartonNumber } from '../services/import/carton-ledger.js';
+import { shipmentDates } from '../services/shipment-dates.js';
 import { dateInput } from '../util/date-input.js';
+import { cairoDay } from '../util/cairo-day.js';
 
 export const packingRouter = Router();
 packingRouter.use(authenticate);
 
 const dec = (v: { toString(): string } | null | undefined): number | null =>
   v == null ? null : Number(v.toString());
+
+/**
+ * Refuse a change that would leave the order with an implausible PACKED total.
+ *
+ * `added` is what this request adds to the ledger — a new carton's pieces, or
+ * the net growth of an edited one. A change that only takes pieces off is never
+ * refused, or a wrong carton could not be corrected downwards.
+ */
+async function assertPackedCeiling(orderId: string, added: number): Promise<void> {
+  if (added <= 0) return;
+  const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId }, include: ORDER_INCLUDE });
+  const totals = deriveOrder(order).totals;
+  assertPackingWithinReason(
+    (totals[QtyLedger.PACKED] ?? 0) + added,
+    totals[QtyLedger.ORDER] ?? 0,
+    totals[QtyLedger.CUT] ?? 0,
+  );
+}
+
+/**
+ * Refuse a carton number already on the list. Two boxes labelled CTN-001 on one
+ * list is a manifest the forwarder cannot reconcile; it happened every time the
+ * size grid was used twice, because it numbered from CTN-001 each time.
+ */
+async function assertCartonNumbersFree(listId: string, incoming: readonly string[]): Promise<void> {
+  const existing = await prisma.carton.findMany({ where: { packingListId: listId }, select: { cartonNumber: true } });
+  const repeated = repeatedCartonNumber(existing.map((c) => c.cartonNumber), incoming);
+  if (repeated) {
+    throw new ConflictError(
+      `Carton ${repeated} is already on this packing list. Give the new carton a different number.`,
+      { cartonNumber: repeated },
+    );
+  }
+}
 
 // ── Packing ─────────────────────────────────────────────────────────────────
 
@@ -177,15 +214,7 @@ packingRouter.put('/cartons/:cartonId/lines', requirePermission('packing:write')
 
   // What each size held before, and what it holds now. Only rows tied to a real
   // order size touch the ledger — a free-text size is not a cell in the matrix.
-  const before = new Map<string, number>();
-  for (const l of carton.lines) {
-    if (l.orderSizeId) before.set(l.orderSizeId, (before.get(l.orderSizeId) ?? 0) + l.qty);
-  }
-  // A carton with no lines yet still holds its own single-size quantity, and
-  // that is what the ledger currently reflects.
-  if (carton.lines.length === 0 && carton.orderSizeId) {
-    before.set(carton.orderSizeId, (before.get(carton.orderSizeId) ?? 0) + carton.qty);
-  }
+  const before = cartonHolding(carton);
 
   const after = new Map<string, number>();
   for (const r of rows) {
@@ -193,6 +222,9 @@ packingRouter.put('/cartons/:cartonId/lines', requirePermission('packing:write')
   }
 
   const total = rows.reduce((a, r) => a + r.qty, 0);
+  if (colorId) {
+    await assertPackedCeiling(orderId, [...ledgerDeltas(before, after).values()].reduce((a, d) => a + d, 0));
+  }
 
   await prisma.$transaction(async (tx) => {
     await tx.cartonLine.deleteMany({ where: { cartonId: carton.id } });
@@ -241,6 +273,63 @@ packingRouter.put('/cartons/:cartonId/lines', requirePermission('packing:write')
   res.json({ ok: true, lines: rows.length, qty: total });
 }));
 
+/**
+ * Remove a carton entered by mistake.
+ *
+ * Before this there was no way to take one out: a wrong carton stayed on the
+ * list and its pieces stayed on the PACKED ledger. The ledger is given back
+ * exactly what the carton counted — the same per-size difference the size
+ * editor applies, from what it held to nothing — so pieces packed into other
+ * cartons of the same size are untouched. One transaction, so the carton and
+ * its pieces leave together. An approved list is refused, as for every other
+ * carton change; it is reopened first.
+ */
+packingRouter.delete('/cartons/:cartonId', requirePermission('packing:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const carton = await prisma.carton.findUnique({
+    where: { id: req.params.cartonId },
+    include: { lines: true, packingList: { select: { id: true, orderId: true, approved: true } } },
+  });
+  if (!carton) throw new NotFoundError('Carton');
+  if (carton.packingList.approved) {
+    throw new ValidationError('This packing list has been approved. Reopen it before removing a carton.');
+  }
+
+  const orderId = carton.packingList.orderId;
+  const colorId = carton.orderColorId;
+
+  await prisma.$transaction(async (tx) => {
+    if (colorId) {
+      for (const [sizeId, delta] of ledgerDeltas(cartonHolding(carton), new Map())) {
+        await tx.stageQuantity.upsert({
+          where: {
+            orderId_orderColorId_orderSizeId_ledger: {
+              orderId, orderColorId: colorId, orderSizeId: sizeId, ledger: 'PACKED',
+            },
+          },
+          create: {
+            orderId, orderColorId: colorId, orderSizeId: sizeId,
+            ledger: 'PACKED', qty: Math.max(0, delta),
+          },
+          update: { qty: { increment: delta } },
+        });
+      }
+    }
+    // Its size rows go with it (onDelete: Cascade).
+    await tx.carton.delete({ where: { id: carton.id } });
+  });
+
+  await logActivity({
+    orderId, actorId: actor.id, actorName: actor.name,
+    action: 'CARTON_REMOVED',
+    summary: `removed carton ${carton.cartonNumber} — ${carton.qty.toLocaleString()} pcs`,
+    entityType: 'Carton', entityId: carton.id,
+  });
+
+  await refreshOrderCache(orderId);
+  res.status(204).end();
+}));
+
 packingRouter.post('/list/:listId/cartons/bulk', requirePermission('packing:write'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   const rows = z.array(cartonSchema).min(1, 'Add at least one size.').parse(req.body.cartons);
@@ -255,6 +344,11 @@ packingRouter.post('/list/:listId/cartons/bulk', requirePermission('packing:writ
       throw new ValidationError(`Carton ${r.cartonNumber}: net weight cannot exceed gross weight.`);
     }
   }
+  await assertCartonNumbersFree(list.id, rows.map((r) => r.cartonNumber));
+  await assertPackedCeiling(
+    list.orderId,
+    rows.reduce((a, r) => a + (r.orderColorId && r.orderSizeId ? r.qty : 0), 0),
+  );
 
   const start = await prisma.carton.count({ where: { packingListId: list.id } });
 
@@ -303,6 +397,8 @@ packingRouter.post('/list/:listId/cartons', requirePermission('packing:write'), 
   if (input.netWeightKg != null && input.grossWeightKg != null && input.netWeightKg > input.grossWeightKg) {
     throw new ValidationError('Net weight cannot exceed gross weight.');
   }
+  await assertCartonNumbersFree(list.id, [input.cartonNumber]);
+  await assertPackedCeiling(list.orderId, input.orderColorId && input.orderSizeId ? input.qty : 0);
 
   const count = await prisma.carton.count({ where: { packingListId: list.id } });
   const carton = await prisma.carton.create({ data: { ...input, packingListId: list.id, position: count } });
@@ -347,10 +443,17 @@ packingRouter.post('/list/:listId/approve', requirePermission('packing:approve')
     throw new ValidationError('There are no cartons to approve. Add the cartons first.');
   }
 
-  await prisma.packingList.update({
-    where: { id: list.id },
+  // Conditional on still being unapproved, so a double click or two reviewers
+  // at once approve it once: one notification, one log line, the first name.
+  const { count } = await prisma.packingList.updateMany({
+    where: { id: list.id, approved: false },
     data: { approved: true, approvedAt: new Date(), approvedByName: actor.name },
   });
+  if (count === 0) {
+    throw new ConflictError(
+      `This packing list was already approved${list.approvedByName ? ` by ${list.approvedByName}` : ''}.`,
+    );
+  }
 
   const totalQty = list.cartons.reduce((a, c) => a + c.qty, 0);
   await logAndNotify(
@@ -368,6 +471,55 @@ packingRouter.post('/list/:listId/approve', requirePermission('packing:approve')
       departments: ['PACKING', 'COORDINATOR'],
     },
   );
+
+  await refreshOrderCache(list.orderId);
+  res.json({ ok: true });
+}));
+
+/**
+ * Take an approved packing list back to review, so a carton can be corrected.
+ *
+ * Approval locks the cartons, and nothing undid it: a list approved with one
+ * wrong carton could only be worked around with a second list. Reopening
+ * clears the sign-off rather than deleting anything, and the list is approved
+ * again once it is right.
+ *
+ * Refused while an issued invoice was built from the list. That document has
+ * gone to the customer with these cartons on it; changing them underneath it
+ * would leave the issued manifest describing boxes that no longer exist. The
+ * invoice is voided first, which is a decision of its own.
+ */
+packingRouter.post('/list/:listId/reopen', requirePermission('packing:approve'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const list = await prisma.packingList.findUnique({ where: { id: req.params.listId } });
+  if (!list) throw new NotFoundError('Packing list');
+  if (!list.approved) throw new ConflictError('This packing list is not approved, so there is nothing to reopen.');
+
+  const issued = await prisma.invoice.findFirst({
+    where: {
+      status: 'ISSUED',
+      OR: [{ packingListId: list.id }, { orders: { some: { packingListId: list.id } } }],
+    },
+    select: { number: true },
+  });
+  if (issued) {
+    throw new ConflictError(
+      `Invoice ${issued.number} has been issued from this packing list. Void the invoice before reopening the list.`,
+      { invoiceNumber: issued.number },
+    );
+  }
+
+  await prisma.packingList.update({
+    where: { id: list.id },
+    data: { approved: false, approvedAt: null, approvedByName: null },
+  });
+
+  await logActivity({
+    orderId: list.orderId, actorId: actor.id, actorName: actor.name,
+    action: 'PACKING_REOPENED',
+    summary: `reopened the packing list${list.approvedByName ? ` approved by ${list.approvedByName}` : ''} for changes`,
+    entityType: 'PackingList', entityId: list.id,
+  });
 
   await refreshOrderCache(list.orderId);
   res.json({ ok: true });
@@ -447,6 +599,14 @@ packingRouter.post('/:orderId/shipments', requirePermission('shipment:write'), a
   }
 
   const overrode = input.qty > 0 && shippedTotal > producedQty;
+  // Recorded straight in as Shipped or Delivered, it gets the departure (and
+  // arrival) stamps the status menu gives it, on the factory's calendar day.
+  const dates = shipmentDates({
+    status: input.status, previousStatus: null,
+    actualShippingDate: input.actualShippingDate ? new Date(input.actualShippingDate) : null,
+    deliveredDate: null,
+    today: cairoDay(),
+  });
 
   const shipment = await prisma.shipment.create({
     data: {
@@ -456,7 +616,8 @@ packingRouter.post('/:orderId/shipments', requirePermission('shipment:write'), a
       qty: input.qty,
       promisedShippingDate: order.promisedShippingDate,
       requiredDeliveryDate: order.requiredDeliveryDate,
-      actualShippingDate: input.actualShippingDate ? new Date(input.actualShippingDate) : null,
+      actualShippingDate: dates.actualShippingDate,
+      deliveredDate: dates.deliveredDate,
       trackingNumber: input.trackingNumber,
       carrier: input.carrier,
       awbNumber: input.awbNumber,
@@ -534,14 +695,15 @@ packingRouter.patch('/shipments/:id', requirePermission('shipment:write'), async
 
   const parse = (v: string | null | undefined, current: Date | null): Date | null =>
     v === undefined ? current : v === null ? null : new Date(v);
-  let actualShippingDate = parse(input.actualShippingDate, shipment.actualShippingDate);
-  let deliveredDate = parse(input.deliveredDate, shipment.deliveredDate);
-  // A consignment that has gone has a departure date, and a delivered one an
-  // arrival date. When nobody typed one, the day it was marked is the best
-  // record there is — better than a gap the invoice step then waits on.
-  const now = new Date();
-  if ((status === 'SHIPPED' || status === 'DELIVERED') && !actualShippingDate) actualShippingDate = now;
-  if (status === 'DELIVERED' && !deliveredDate) deliveredDate = now;
+  // Stamped when it moves forward without a typed date, cleared when it moves
+  // back past the status the date belongs to — see shipment-dates.ts.
+  const { actualShippingDate, deliveredDate } = shipmentDates({
+    status,
+    previousStatus: shipment.status,
+    actualShippingDate: parse(input.actualShippingDate, shipment.actualShippingDate),
+    deliveredDate: parse(input.deliveredDate, shipment.deliveredDate),
+    today: cairoDay(),
+  });
 
   await prisma.shipment.update({
     where: { id: shipment.id },
