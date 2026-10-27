@@ -3,7 +3,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import {
   normaliseHeader, toSavedMapping, ChangeCategory, NotificationPriority,
-  toIsoDayOrNull,
+  toIsoDayOrNull, CONCEPT_META,
   type ImportConcept,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
@@ -13,6 +13,7 @@ import { NotFoundError, BadRequestError } from '../errors.js';
 import { extractWorkbook, applyFieldOverrides, type ExtractionResult } from '../services/import/extractor.js';
 import { extractTabular, type TabularAnalysis } from '../services/import/tabular-extractor.js';
 import { commitImport, mergeMatrixAxes } from '../services/import/committer.js';
+import { normalisePoNumber } from '../services/rules.js';
 import { announceChange } from '../services/change-service.js';
 import { PROFILES } from '../services/import/profiles.js';
 import { storage } from '../services/storage/index.js';
@@ -40,16 +41,82 @@ const GENERIC_PROFILE = 'generic-tabular';
  * Both return the same `ExtractionResult`, so everything downstream — the
  * preview, the validation, the transactional commit — is shared.
  */
+type ExtractionOptions = {
+  forceTabular?: boolean;
+  sheetName?: string;
+  overrides?: Record<number, ImportConcept>;
+  fieldOverrides?: Record<string, string | number | null>;
+  /** The import job, which names a PDF's stand-in PO number the same on every read. */
+  job?: { id: string; createdAt: Date; fileName?: string };
+};
+
 export async function runExtraction(
   buffer: Buffer,
-  options: {
-    forceTabular?: boolean;
-    sheetName?: string;
-    overrides?: Record<number, ImportConcept>;
-    fieldOverrides?: Record<string, string | number | null>;
-    /** The import job, which names a PDF's stand-in PO number the same on every read. */
-    job?: { id: string; createdAt: Date; fileName?: string };
-  } = {},
+  options: ExtractionOptions = {},
+): Promise<ExtractionResult & { analysis?: TabularAnalysis }> {
+  const result = await readDocument(buffer, options);
+  warnFractionalQuantities(result);
+  return result;
+}
+
+/**
+ * Say so when a quantity in the grid is not a whole number.
+ *
+ * The commit rounds each cell — a garment is not cut in tenths — and a 0.4
+ * became 0, which is no cell at all, without a word on the review screen.
+ * A fraction in a quantity column is nearly always a misread (a price, a
+ * length) or a typing slip, either of which a person should see first.
+ */
+export function warnFractionalQuantities(extraction: ExtractionResult): void {
+  const m = extraction.matrices.find((x) => x.ledger === 'ORDER');
+  if (!m) return;
+  const odd = m.rows.flatMap((r) => Object.entries(r.cells)
+    .filter(([, q]) => q > 0 && !Number.isInteger(q))
+    .map(([size, q]) => `${r.color} / ${size}: ${q} (imported as ${Math.round(q)})`));
+  if (odd.length === 0) return;
+  extraction.issues.push({
+    level: 'WARNING', field: null, sheet: null, cell: null,
+    message:
+      `${odd.length === 1 ? 'A quantity is' : `${odd.length} quantities are`} not a whole number of pieces — `
+      + `${odd.slice(0, 3).join('; ')}${odd.length > 3 ? `; and ${odd.length - 3} more` : ''}. `
+      + 'Each is rounded when the order is created, and one that rounds to 0 is left out. Correct them in the grid if that is not right.',
+  });
+}
+
+/**
+ * Say so at the preview when the order's PO number is already in the system.
+ *
+ * The commit refuses a duplicate, and that was the first anyone heard of it —
+ * after the review, the mapping and the corrections were all done. The PO is
+ * looked up as the commit will write it, and the existing order is named.
+ */
+export async function warnIfPoExists(
+  extraction: ExtractionResult,
+  find: (poNumber: string) => Promise<{ id: string; poNumber: string; clientName: string | null } | null> = findOrderByPo,
+): Promise<void> {
+  const raw = extraction.fields.poNumber;
+  if (raw == null || String(raw).trim() === '') return;
+  let poNumber: string;
+  try { poNumber = normalisePoNumber(String(raw)); } catch { return; } // the commit explains an unusable one
+  const existing = await find(poNumber);
+  if (!existing) return;
+  extraction.issues.push({
+    level: 'WARNING', field: 'poNumber', sheet: null, cell: null,
+    message:
+      `PO ${existing.poNumber} is already in the system${existing.clientName ? ` (${existing.clientName})` : ''}, `
+      + 'so confirming will be refused — an order cannot be created twice under one number. Open the existing '
+      + 'order instead; or, if this is a different order, correct the PO number in the file and upload it again.',
+  });
+}
+
+async function findOrderByPo(poNumber: string) {
+  const o = await prisma.order.findUnique({ where: { poNumber }, select: { id: true, poNumber: true, client: { select: { name: true } } } });
+  return o ? { id: o.id, poNumber: o.poNumber, clientName: o.client.name } : null;
+}
+
+async function readDocument(
+  buffer: Buffer,
+  options: ExtractionOptions,
 ): Promise<ExtractionResult & { analysis?: TabularAnalysis }> {
   // A PDF has no sheets and no profile, so neither Excel reader applies. It
   // produces the same ExtractionResult, which is what lets everything after
@@ -159,11 +226,16 @@ function headerFingerprint(headers: readonly string[]): string {
   return createHash('sha1').update(normalised.join('|')).digest('hex').slice(0, 32);
 }
 
-function buildPreview(extraction: ExtractionResult) {
+export function buildPreview(extraction: ExtractionResult) {
   const found = extraction.matrices.find((m) => m.ledger === 'ORDER');
   // Shown as the commit will create it: "Navy" and "navy" are one colour there,
-  // so they are one row here.
-  const orderMatrix = found ? { ...found, ...mergeMatrixAxes(found) } : undefined;
+  // so they are one row here. The total is the merged rows' own sum, not the
+  // reader's figure: when the two differed (a size heading written twice),
+  // the preview promised pieces the grid beside it did not have.
+  const merged = found ? mergeMatrixAxes(found) : undefined;
+  const orderMatrix = found && merged
+    ? { ...found, ...merged, computedTotal: merged.rows.reduce((a, r) => a + r.total, 0) }
+    : undefined;
   return {
     order: Object.fromEntries(
       Object.entries(extraction.fields).map(([k, v]) => [
@@ -326,6 +398,7 @@ importRouter.post('/upload', requirePermission('import:run'), upload.single('fil
   });
 
   const result = await runExtraction(req.file.buffer, { job });
+  await warnIfPoExists(result);
   await persistJob(job.id, result);
 
   res.json({ jobId: job.id, fileName: job.fileName, ...toResponse(result) });
@@ -338,6 +411,26 @@ importRouter.post('/upload', requirePermission('import:run'), upload.single('fil
  * payload, so what is previewed is always what is in the file plus the mapping
  * that was explicitly chosen — never a body someone could have edited.
  */
+/**
+ * The mapping screen's column → concept choices, checked.
+ *
+ * They arrive as plain strings, and one that is not a concept reached the
+ * reader and failed there as "Cannot read properties of undefined" — a 500
+ * for what is a bad request. Refused here by name, on every path, including
+ * a recognised workbook whose reader would have ignored it.
+ */
+export function columnOverridesFrom(mapping: Record<string, string> | undefined): Record<number, ImportConcept> {
+  const overrides: Record<number, ImportConcept> = {};
+  for (const [index, concept] of Object.entries(mapping ?? {})) {
+    if (!Object.prototype.hasOwnProperty.call(CONCEPT_META, concept)) {
+      throw new BadRequestError(`"${concept}" is not a column type the importer knows. Pick the column's meaning from the list.`);
+    }
+    if (!/^\d+$/.test(index)) throw new BadRequestError(`"${index}" is not a column number.`);
+    overrides[Number(index)] = concept as ImportConcept;
+  }
+  return overrides;
+}
+
 const remapSchema = z.object({
   sheetName: z.string().optional(),
   /** Column index → concept, from the mapping screen. */
@@ -354,11 +447,8 @@ importRouter.post('/:jobId/remap', requirePermission('import:run'), asyncHandler
     throw new BadRequestError(`This file has already been imported as order ${job.createdOrderId}.`);
   }
 
+  const overrides = columnOverridesFrom(input.columnMapping);
   const buffer = await storage.get(job.storageKey);
-  const overrides: Record<number, ImportConcept> = {};
-  for (const [index, concept] of Object.entries(input.columnMapping ?? {})) {
-    overrides[Number(index)] = concept as ImportConcept;
-  }
 
   const result = await runExtraction(buffer, {
     forceTabular: job.profile === GENERIC_PROFILE,
@@ -368,6 +458,7 @@ importRouter.post('/:jobId/remap', requirePermission('import:run'), asyncHandler
     job,
   });
 
+  await warnIfPoExists(result);
   await persistJob(job.id, result);
   res.json({ jobId: job.id, fileName: job.fileName, ...toResponse(result) });
 }));
@@ -579,10 +670,7 @@ importRouter.post('/:jobId/commit', requirePermission('import:run'), asyncHandle
   // the preview the user approved must be the data that gets written.
   const buffer = await storage.get(job.storageKey);
 
-  const columnOverrides: Record<number, ImportConcept> = {};
-  for (const [index, concept] of Object.entries(input.columnMapping ?? {})) {
-    columnOverrides[Number(index)] = concept as ImportConcept;
-  }
+  const columnOverrides = columnOverridesFrom(input.columnMapping);
 
   // The review screen's values are applied inside, by the same reader the
   // preview used — a value that cannot be read is refused here, by name,
