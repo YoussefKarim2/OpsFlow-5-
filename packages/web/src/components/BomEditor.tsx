@@ -142,18 +142,28 @@ export function BomEditor({
   const itemsFor: ItemsFor = (d) => (d === 'Fabric' ? fabrics : bomItemsFor(d));
   const [rows, setRows] = useState<RowDraft[]>(() => initial.map((r) => toDraft(r, itemsFor)));
   const [expanded, setExpanded] = useState<number | null>(null);
+  /**
+   * Saved lines removed in this editor. The server deletes exactly these and
+   * nothing else, so a line someone added after this editor opened survives
+   * the save instead of being taken for one this person removed.
+   */
+  const [removedIds, setRemovedIds] = useState<string[]>([]);
 
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const save = useMutation({
-    mutationFn: () => api.materials.saveBom(orderId, rows.map(fromDraft)),
+    mutationFn: () => api.materials.saveBom(orderId, rows.map(fromDraft), removedIds),
     onSuccess: () => {
       setSaveError(null);
+      setRemovedIds([]);
       void qc.invalidateQueries({ queryKey: ['bom', orderId] });
       void qc.invalidateQueries({ queryKey: ['order', orderId] });
       // The costing sheet and the workflow both read the bill of materials.
       void qc.invalidateQueries({ queryKey: ['costing', orderId] });
       void qc.invalidateQueries({ queryKey: ['order-steps', orderId] });
+      // A corrected issued figure on a linked line moves stock, so the
+      // Materials tab and the inventory screens are stale too.
+      void qc.invalidateQueries({ queryKey: ['inventory'] });
       onSaved?.();
     },
     // Without this the mutation swallowed every failure: the button finished,
@@ -382,7 +392,11 @@ export function BomEditor({
                         type="button"
                         className="btn-ghost btn-sm text-red-600"
                         title="Remove this item"
-                        onClick={() => setRows(rows.filter((_, n) => n !== i))}
+                        onClick={() => {
+                          const gone = rows[i]?.id;
+                          if (gone) setRemovedIds((ids) => (ids.includes(gone) ? ids : [...ids, gone]));
+                          setRows(rows.filter((_, n) => n !== i));
+                        }}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>

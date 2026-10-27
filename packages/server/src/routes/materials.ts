@@ -8,7 +8,7 @@ import { asyncHandler } from '../util/async-handler.js';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 import { refreshOrderCache, ORDER_INCLUDE, deriveOrder } from '../services/order-service.js';
 import { logActivity, logAndNotify } from '../services/activity-service.js';
-import { issueToProduction, returnFromProduction } from '../services/inventory-service.js';
+import { issueToProduction, returnFromProduction, assertIssueCorrectionsPossible } from '../services/inventory-service.js';
 import { clearLayPlan } from '../services/import/laying-committer.js';
 import type { AuthUser } from '../middleware/auth.js';
 
@@ -149,6 +149,74 @@ const bomRowSchema = bomItemSchema.extend({
   sizes: z.array(bomSizeSchema).default([]),
 });
 
+const saveBomSchema = z.object({
+  items: z.array(bomRowSchema),
+  /**
+   * Lines removed in the editor. Only these are deleted: a line the editor did
+   * not send is left alone. "Stored minus sent" used to be the rule, so a line
+   * somebody else added — or the import committed — after this editor opened
+   * was deleted by a save from a screen that had never seen it. The lay plan's
+   * PUT works the same way.
+   */
+  removeIds: z.array(z.string()).max(2000).default([]),
+});
+
+/** What a BOM line carries that makes removing it unsafe. */
+export interface BomLineHistory {
+  item: string;
+  issuedQty: number;
+  issueCount: number;
+  /** Reservations still ACTIVE or PENDING against the line. */
+  openReservations: number;
+}
+
+/**
+ * Why these BOM lines cannot be removed, or null when they can.
+ *
+ * A line material has been issued against is history, not a draft. Deleting
+ * it took its issue records with it (they cascade), the costing's actual
+ * consumption dropped, and the stock movements were left pointing at nothing.
+ *
+ * A line holding a reservation or a request is a claim on the shelf. Deleting
+ * it left the reservation tied to nothing — stock held for a line that no
+ * longer exists, invisible on the order and still subtracted from what every
+ * other order could take. It is released or withdrawn first, on purpose.
+ */
+export function bomRemovalBlocker(lines: readonly BomLineHistory[]): string | null {
+  const issued = lines.filter((l) => l.issuedQty > 0 || l.issueCount > 0);
+  if (issued.length > 0) {
+    return `Material has already been issued against ${issued.map((l) => l.item).join(', ')}, so `
+      + `${issued.length === 1 ? 'it' : 'they'} cannot be removed from the bill of materials. `
+      + 'Reload the page if you did not mean to remove them.';
+  }
+  const held = lines.filter((l) => l.openReservations > 0);
+  if (held.length > 0) {
+    return `${held.map((l) => l.item).join(', ')} ${held.length === 1 ? 'has' : 'have'} stock reserved or requested, `
+      + `so ${held.length === 1 ? 'it' : 'they'} cannot be removed from the bill of materials. `
+      + 'Release the reservation or withdraw the request on the Materials tab first.';
+  }
+  return null;
+}
+
+/** The counts `bomRemovalBlocker` reads, selected alongside a BOM line. */
+const BOM_HISTORY_COUNT = {
+  _count: {
+    select: {
+      issues: true,
+      reservations: { where: { status: { in: ['ACTIVE', 'PENDING'] as Array<'ACTIVE' | 'PENDING'> } } },
+    },
+  },
+} as const;
+
+function toHistory(l: {
+  item: string; issuedQty: Prisma.Decimal; _count: { issues: number; reservations: number };
+}): BomLineHistory {
+  return {
+    item: l.item, issuedQty: Number(l.issuedQty.toString()),
+    issueCount: l._count.issues, openReservations: l._count.reservations,
+  };
+}
+
 /**
  * Replace the whole bill of materials for one order.
  *
@@ -224,7 +292,7 @@ async function setIssuedQty(
 
 materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
-  const rows = z.array(bomRowSchema).parse(req.body.items);
+  const { items: rows, removeIds } = saveBomSchema.parse(req.body ?? {});
 
   const order = await prisma.order.findFirst({
     where: { OR: [{ id: req.params.orderId }, { poNumber: req.params.orderId }] },
@@ -234,103 +302,123 @@ materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHa
 
   const existing = await prisma.bomItem.findMany({
     where: { orderId: order.id },
-    select: { id: true, item: true, issuedQty: true, _count: { select: { issues: true } } },
+    select: {
+      id: true, item: true, issuedQty: true, unit: true, materialId: true,
+      ...BOM_HISTORY_COUNT,
+    },
   });
-  const keep = new Set(rows.map((r) => r.id).filter((id): id is string => !!id));
-  const removedRows = existing.filter((e) => !keep.has(e.id));
+  const known = new Map(existing.map((e) => [e.id, e]));
+
+  // A row's id is the client's word for which line it is. It has to be a line
+  // of this order: an id from another order's BOM would otherwise have been
+  // updated here, and moved to this order's position list besides.
+  if (rows.some((r) => r.id && !known.has(r.id))) {
+    throw new ValidationError('One of the lines is no longer on this bill of materials. Reload and try again.');
+  }
+  const sent = new Set(rows.map((r) => r.id).filter((id): id is string => !!id));
+  const removedRows = removeIds
+    .filter((id, i) => removeIds.indexOf(id) === i && !sent.has(id))
+    .map((id) => known.get(id))
+    .filter((e): e is NonNullable<typeof e> => !!e);
   const removed = removedRows.map((e) => e.id);
 
-  // A line material has been issued against is history, not a draft. Deleting
-  // it took its issue records with it (they cascade), the costing's actual
-  // consumption dropped, and the stock movements were left pointing at
-  // nothing. A save from a screen that never loaded the line did it silently.
-  const issuedRemoved = removedRows.filter((e) => Number(e.issuedQty) > 0 || e._count.issues > 0);
-  if (issuedRemoved.length > 0) {
-    throw new ConflictError(
-      `Material has already been issued against ${issuedRemoved.map((e) => e.item).join(', ')}, so `
-      + `${issuedRemoved.length === 1 ? 'it' : 'they'} cannot be removed from the bill of materials. `
-      + 'Reload the page if you did not mean to remove them.',
-    );
-  }
+  const blocked = bomRemovalBlocker(removedRows.map(toHistory));
+  if (blocked) throw new ConflictError(blocked);
 
-  // Issued figures on lines linked to stock, applied after the rows are saved.
+  // Issued figures on lines linked to stock: they move the shelf through the
+  // inventory service, which keeps its own transactions, so they are applied
+  // once the rows are saved — and checked now, before anything is written, so
+  // a figure stock cannot honour refuses the whole save rather than half of it.
   const linkedIssues: Array<{ id: string; issued: number }> = [];
+  const linkedChecks: Array<{ bomItemId: string; materialId: string; unit: string; was: number; issued: number }> = [];
+  for (const r of rows) {
+    const before = r.id ? known.get(r.id) : undefined;
+    if (r.issuedQty == null || !before?.materialId) continue;
+    linkedIssues.push({ id: before.id, issued: r.issuedQty });
+    linkedChecks.push({
+      bomItemId: before.id, materialId: before.materialId, unit: r.unit,
+      was: Number(before.issuedQty.toString()), issued: r.issuedQty,
+    });
+  }
+  await assertIssueCorrectionsPossible(order.id, linkedChecks);
 
-  await prisma.$transaction(async (tx) => {
-    // Deleting first frees any unique constraint the rewritten rows might want.
-    if (removed.length > 0) await tx.bomItem.deleteMany({ where: { id: { in: removed } } });
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Deleting first frees any unique constraint the rewritten rows might want.
+      if (removed.length > 0) await tx.bomItem.deleteMany({ where: { id: { in: removed } } });
 
-    for (const [i, row] of rows.entries()) {
-      const { id, sizes, issuedQty, ...fields } = row;
-      const total = sizes.length > 0
-        ? sizes.reduce((a, s) => a + s.qty, 0)
-        : fields.requiredQty;
-      const data = { ...fields, requiredQty: total, position_: i };
+      for (const [i, row] of rows.entries()) {
+        const { id, sizes, issuedQty, ...fields } = row;
+        const total = sizes.length > 0
+          ? sizes.reduce((a, s) => a + s.qty, 0)
+          : fields.requiredQty;
+        const data = { ...fields, requiredQty: total, position_: i };
 
-      // What the row said before this save, so a changed issued quantity can
-      // be recorded as the movement it is rather than overwritten in place.
-      const before = id
-        ? await tx.bomItem.findUnique({ where: { id }, select: { issuedQty: true, unit: true, materialId: true } })
-        : null;
+        // What the row said before this save, so a changed issued quantity can
+        // be recorded as the movement it is rather than overwritten in place.
+        const before = id
+          ? await tx.bomItem.findUnique({ where: { id }, select: { issuedQty: true, unit: true, materialId: true } })
+          : null;
 
-      const itemId = id
-        ? (await tx.bomItem.update({ where: { id }, data, select: { id: true } })).id
-        : (await tx.bomItem.create({ data: { ...data, orderId: order.id }, select: { id: true } })).id;
+        const itemId = id
+          ? (await tx.bomItem.update({ where: { id }, data, select: { id: true } })).id
+          : (await tx.bomItem.create({ data: { ...data, orderId: order.id }, select: { id: true } })).id;
 
-      // A line linked to a catalogue material draws on real stock, so its
-      // correction has to move the shelf and the reservation too. That runs
-      // through the inventory service, which keeps its own transactions, so it
-      // is done once the rows are saved.
-      if (issuedQty != null && before?.materialId) {
-        linkedIssues.push({ id: itemId, issued: issuedQty });
-      } else if (issuedQty != null) {
-        const was = before ? Number(before.issuedQty.toString()) : 0;
-        const delta = issuedQty - was;
-        if (delta !== 0) {
-          await tx.bomItem.update({
-            where: { id: itemId },
-            data: { issuedQty, issuedByName: actor.name, issuedAt: new Date() },
-          });
-          // Negative when the figure is corrected downwards. The log is a
-          // running account, so it has to be able to go both ways.
-          await tx.materialIssue.create({
-            data: {
-              orderId: order.id, bomItemId: itemId, qty: delta,
-              unit: fields.unit, issuedById: actor.id,
-              notes: `Corrected on the bill of materials from ${was.toLocaleString()} to ${issuedQty.toLocaleString()}`,
-            },
+        // A line linked to a catalogue material draws on real stock, so its
+        // correction has to move the shelf and the reservation too. That was
+        // gathered and checked above, and is applied once the rows are saved.
+        if (issuedQty != null && !before?.materialId) {
+          const was = before ? Number(before.issuedQty.toString()) : 0;
+          const delta = issuedQty - was;
+          if (delta !== 0) {
+            await tx.bomItem.update({
+              where: { id: itemId },
+              data: { issuedQty, issuedByName: actor.name, issuedAt: new Date() },
+            });
+            // Negative when the figure is corrected downwards. The log is a
+            // running account, so it has to be able to go both ways.
+            await tx.materialIssue.create({
+              data: {
+                orderId: order.id, bomItemId: itemId, qty: delta,
+                unit: fields.unit, issuedById: actor.id,
+                notes: `Corrected on the bill of materials from ${was.toLocaleString()} to ${issuedQty.toLocaleString()}`,
+              },
+            });
+          }
+        }
+
+        // The breakdown is small and wholly owned by its item, so replacing it is
+        // simpler than diffing and nothing else references these rows.
+        await tx.bomItemSize.deleteMany({ where: { bomItemId: itemId } });
+        if (sizes.length > 0) {
+          await tx.bomItemSize.createMany({
+            data: sizes.map((sz, n) => ({ bomItemId: itemId, sizeLabel: sz.sizeLabel, qty: sz.qty, position: n })),
           });
         }
       }
-
-      // The breakdown is small and wholly owned by its item, so replacing it is
-      // simpler than diffing and nothing else references these rows.
-      await tx.bomItemSize.deleteMany({ where: { bomItemId: itemId } });
-      if (sizes.length > 0) {
-        await tx.bomItemSize.createMany({
-          data: sizes.map((sz, n) => ({ bomItemId: itemId, sizeLabel: sz.sizeLabel, qty: sz.qty, position: n })),
-        });
-      }
-    }
-  });
-
-  for (const { id, issued } of linkedIssues) {
-    const item = await prisma.bomItem.findUniqueOrThrow({
-      where: { id },
-      select: { id: true, orderId: true, unit: true, issuedQty: true, materialId: true },
     });
-    await setIssuedQty(item, issued, actor);
+
+    for (const { id, issued } of linkedIssues) {
+      const item = await prisma.bomItem.findUniqueOrThrow({
+        where: { id },
+        select: { id: true, orderId: true, unit: true, issuedQty: true, materialId: true },
+      });
+      await setIssuedQty(item, issued, actor);
+    }
+
+    await logActivity({
+      orderId: order.id, actorId: actor.id, actorName: actor.name,
+      action: 'BOM_SAVED',
+      summary: `saved the bill of materials — ${rows.length} item${rows.length === 1 ? '' : 's'}` +
+               (removed.length > 0 ? `, ${removed.length} removed` : ''),
+      entityType: 'Order', entityId: order.id,
+    });
+  } finally {
+    // Whatever was written — all of it, or the rows before a stock movement
+    // that lost a race — the order's cached figures follow it.
+    await refreshOrderCache(order.id);
   }
 
-  await logActivity({
-    orderId: order.id, actorId: actor.id, actorName: actor.name,
-    action: 'BOM_SAVED',
-    summary: `saved the bill of materials — ${rows.length} item${rows.length === 1 ? '' : 's'}` +
-             (removed.length > 0 ? `, ${removed.length} removed` : ''),
-    entityType: 'Order', entityId: order.id,
-  });
-
-  await refreshOrderCache(order.id);
   res.json({ ok: true, count: rows.length, removed: removed.length });
 }));
 
@@ -396,12 +484,11 @@ materialsRouter.patch('/bom/:id', requirePermission('material:edit'), asyncHandl
 materialsRouter.delete('/bom/:id', requirePermission('material:edit'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   const item = await prisma.bomItem.findUnique({
-    where: { id: req.params.id }, include: { _count: { select: { issues: true } } },
+    where: { id: req.params.id }, include: BOM_HISTORY_COUNT,
   });
   if (!item) throw new NotFoundError('BOM item');
-  if (Number(item.issuedQty) > 0 || item._count.issues > 0) {
-    throw new ConflictError(`Material has already been issued against ${item.item}, so it cannot be removed.`);
-  }
+  const blocked = bomRemovalBlocker([toHistory(item)]);
+  if (blocked) throw new ConflictError(blocked);
   await prisma.bomItem.delete({ where: { id: item.id } });
   await logActivity({
     orderId: item.orderId, actorId: actor.id, actorName: actor.name,
@@ -442,7 +529,13 @@ materialsRouter.post('/bom/:id/issue', requirePermission('material:issue'), asyn
 
   // A line linked to a catalogue material is issued from real stock: through
   // the inventory service, so the shelf, this order's reservation and the
-  // movement ledger fall with the issued figure instead of staying put.
+  // movement ledger fall with the issued figure instead of staying put. That
+  // service also raises the line's issued figure, inside its own locked
+  // transaction, so here only the issue record is written.
+  //
+  // This route used to write `alreadyIssued + qty` back over it — a total
+  // read before the issue — so two issues at once each wrote their own stale
+  // sum and one of them vanished from the line while its stock had gone.
   if (item.materialId) {
     await issueToProduction(actor, {
       materialId: item.materialId, orderId: item.orderId, qty: input.qty, unit: item.unit,
@@ -451,6 +544,8 @@ materialsRouter.post('/bom/:id/issue', requirePermission('material:issue'), asyn
   }
 
   const result = await prisma.$transaction(async (tx) => {
+    // The log entry is the quantity as issued, in the line's unit — the same
+    // figure the line rose by — so the issues still add up to the total.
     const issue = await tx.materialIssue.create({
       data: {
         orderId: item.orderId, bomItemId: item.id, qty: input.qty, unit: item.unit,
@@ -458,17 +553,22 @@ materialsRouter.post('/bom/:id/issue', requirePermission('material:issue'), asyn
         notes: input.notes,
       },
     });
-    await tx.bomItem.update({
-      where: { id: item.id },
-      data: {
-        issuedQty: newTotal,
-        issuedByName: actor.name,
-        issuedToName: input.issuedToName ?? item.issuedToName,
-        issuedAt: new Date(),
-      },
-    });
+    if (!item.materialId) {
+      // Relative, for the same reason: the database adds, nobody's stale total wins.
+      await tx.bomItem.update({
+        where: { id: item.id },
+        data: {
+          issuedQty: { increment: input.qty },
+          issuedByName: actor.name,
+          issuedToName: input.issuedToName ?? item.issuedToName,
+          issuedAt: new Date(),
+        },
+      });
+    }
     return issue;
   });
+  const after = await prisma.bomItem.findUniqueOrThrow({ where: { id: item.id }, select: { issuedQty: true } });
+  const issuedNow = Number(after.issuedQty.toString());
 
   // The inventory service has already logged a linked line's issue.
   if (!item.materialId) {
@@ -477,7 +577,7 @@ materialsRouter.post('/bom/:id/issue', requirePermission('material:issue'), asyn
       action: 'MATERIAL_ISSUED',
       summary: `issued ${input.qty.toLocaleString()} ${item.unit} of ${item.item}${input.issuedToName ? ` to ${input.issuedToName}` : ''}`,
       entityType: 'MaterialIssue', entityId: result.id,
-      meta: { item: item.item, qty: input.qty, unit: item.unit, newTotal, required },
+      meta: { item: item.item, qty: input.qty, unit: item.unit, newTotal: issuedNow, required },
     });
   }
 
@@ -504,7 +604,7 @@ materialsRouter.post('/bom/:id/issue', requirePermission('material:issue'), asyn
   }
 
   await refreshOrderCache(item.orderId);
-  res.status(201).json({ id: result.id, newIssuedQty: newTotal, stillShort });
+  res.status(201).json({ id: result.id, newIssuedQty: issuedNow, stillShort });
 }));
 
 // ── Markers and fabric ──────────────────────────────────────────────────────

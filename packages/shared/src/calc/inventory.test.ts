@@ -17,7 +17,8 @@ import { qtyAdd, qtySub, qtyCmp, quantise, qtyIsZero } from './num.js';
 import {
   signedQty, replayMovements, computeStockPosition, deriveStockStatus,
   computeRequirement, computeMaterialPosition, computeConsumptionVariance,
-  summariseInventory, daysOfCover, convertQty, unitsCompatible, normaliseUnit,
+  summariseInventory, daysOfCover, convertQty, unitsCompatible, normaliseUnit, unitMismatchReason,
+  planReservationDrawDown, planReservationRestore,
   type MovementInput, type ReservationInput, type RequirementInput,
 } from './inventory.js';
 
@@ -234,6 +235,37 @@ describe('requirements and shortages', () => {
     assert.equal(r.reservableQty, 0);
   });
 
+  test('a line already requested in full stops offering Reserve', () => {
+    // Pressing Reserve twice used to file two requests for the same metres.
+    const r = computeRequirement(req({ availableQty: 5000, requestedQty: 1676 }));
+    assert.equal(r.status, 'REQUESTED');
+    assert.equal(r.reservableQty, 0);
+    assert.equal(r.requestedQty, 1676);
+    // A request secures nothing: the line is still outstanding until accepted.
+    assert.equal(r.outstandingQty, 1676);
+  });
+
+  test('a partly requested line offers only the rest', () => {
+    const r = computeRequirement(req({ availableQty: 5000, requestedQty: 1000 }));
+    assert.equal(r.status, 'RESERVABLE');
+    assert.equal(r.reservableQty, 676);
+  });
+
+  test('a request does not hide a shortage', () => {
+    const r = computeRequirement(req({ availableQty: 1200, requestedQty: 1200 }));
+    assert.equal(r.status, 'SHORT');
+    assert.equal(r.shortQty, 476);
+    // The 1,200 on the shelf is what the request will take; nothing is left.
+    assert.equal(r.reservableQty, 0);
+  });
+
+  test('a request in the stock unit is read in the line unit', () => {
+    // 914.4 m requested is the whole 1,000 yd line.
+    const r = computeRequirement(req({ unit: 'YD', requiredQty: 1000, availableQty: 5000, requestedQty: 914.4, stockUnit: 'M' }));
+    assert.equal(r.requestedQty, 1000);
+    assert.equal(r.status, 'REQUESTED');
+  });
+
   test('position roll-up separates short from merely unreserved', () => {
     const p = computeMaterialPosition([
       req({ id: 'a', requiredQty: 1676, availableQty: 1200 }),                 // short 476
@@ -394,6 +426,31 @@ describe('unit conversion', () => {
     assert.equal(normaliseUnit('Kgs'), 'KG');
   });
 
+  test('grams as the bill of materials writes them', () => {
+    // The BOM's unit list offers "Grm.", which used to resolve to nothing, so a
+    // thread line in grams could not be linked to thread held in kilos.
+    for (const spelling of ['Grm.', 'GRM', 'grms', 'Gms', 'g']) {
+      assert.equal(normaliseUnit(spelling), 'G', `“${spelling}”`);
+    }
+    assert.ok(unitsCompatible('Grm.', 'KG'));
+    assert.equal(convertQty(2500, 'Grm.', 'KG'), 2.5);
+  });
+
+  test('a block is not read as pieces, and says why', () => {
+    // One supplier's block is 100 stickers, another's 500.
+    assert.equal(normaliseUnit('Block'), null);
+    assert.ok(!unitsCompatible('Block', 'PCS'));
+    assert.equal(convertQty(3, 'Block', 'PCS'), null);
+    const why = unitMismatchReason('Block', 'PCS', 'Size sticker');
+    assert.match(why, /block holds a different number/);
+    assert.match(why, /Enter the quantity in PCS/);
+  });
+
+  test('other refusals still name the units', () => {
+    assert.match(unitMismatchReason('KG', 'M', 'Jersey'), /Jersey is held in M, and KG cannot be converted/);
+    assert.match(unitMismatchReason('Bundle', 'M', 'Jersey'), /"Bundle" is not a unit the system recognises/);
+  });
+
   test('spelling differences do not block comparison or conversion', () => {
     assert.ok(unitsCompatible('Met.', 'M'));
     assert.ok(unitsCompatible('Pcs', 'PCS'));
@@ -407,5 +464,52 @@ describe('unit conversion', () => {
     assert.ok(!unitsCompatible('sparkles', 'M'));
     // …but two identical unknown units are trivially comparable.
     assert.ok(unitsCompatible('sparkles', 'sparkles'));
+  });
+});
+
+describe('drawing reservations down and giving them back', () => {
+  const held = [
+    { id: 'a', qty: 200, consumedQty: 0 },
+    { id: 'b', qty: 300, consumedQty: 100 },
+  ];
+
+  test('a draw-down takes the oldest first and spills onto the next', () => {
+    const p = planReservationDrawDown(held, 350);
+    assert.deepEqual(p.changes, [
+      { id: 'a', consumedQty: 200, fulfilled: true, moved: 200 },
+      { id: 'b', consumedQty: 250, fulfilled: false, moved: 150 },
+    ]);
+    assert.equal(p.drawn, 350);
+  });
+
+  test('beyond every reservation the rest is free stock, not drawn', () => {
+    const p = planReservationDrawDown(held, 1000);
+    assert.equal(p.drawn, 400);
+    assert.ok(p.changes.every((c) => c.fulfilled));
+  });
+
+  test('a return is spread across reservations instead of capped at one', () => {
+    // Two reservations each gave 200; 300 comes back. Restoring only one
+    // reservation put 200 back and let the other 100 become anyone's stock.
+    const p = planReservationRestore([
+      { id: 'x', qty: 200, consumedQty: 200 },
+      { id: 'y', qty: 200, consumedQty: 200 },
+    ], 300);
+    assert.deepEqual(p.changes, [
+      { id: 'x', consumedQty: 0, fulfilled: false, moved: 200 },
+      { id: 'y', consumedQty: 100, fulfilled: false, moved: 100 },
+    ]);
+    assert.equal(p.restored, 300);
+  });
+
+  test('a return larger than everything consumed restores only what was consumed', () => {
+    const p = planReservationRestore([{ id: 'x', qty: 200, consumedQty: 50 }], 120);
+    assert.equal(p.restored, 50);
+    assert.equal(p.changes[0]!.consumedQty, 0);
+  });
+
+  test('nothing to move leaves nothing changed', () => {
+    assert.deepEqual(planReservationDrawDown(held, 0).changes, []);
+    assert.deepEqual(planReservationRestore([{ id: 'x', qty: 5, consumedQty: 0 }], 5).changes, []);
   });
 });

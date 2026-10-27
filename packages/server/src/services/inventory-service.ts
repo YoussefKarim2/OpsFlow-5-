@@ -26,11 +26,12 @@ import {
   MovementType, ReservationStatus, StockStatus,
   computeStockPosition, computeMaterialPosition, summariseInventory,
   deriveStockStatus, convertQty, unitsCompatible, replayMovements,
-  qtyAdd, qtySub, qtyCmp, quantise,
-  type StockPosition, type RequirementInput, type MaterialPosition,
+  qtyAdd, qtySub, qtyCmp, quantise, unitMismatchReason,
+  planReservationDrawDown, planReservationRestore,
+  type StockPosition, type RequirementInput, type MaterialPosition, type ReservationChange,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
-import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../errors.js';
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../errors.js';
 import { canDecideReservations, RESERVATION_DECIDER_EMAILS, isAllowlistedSuperAdmin } from '../config.js';
 import { logActivity, logAndNotify } from './activity-service.js';
 import type { AuthUser } from '../middleware/auth.js';
@@ -268,10 +269,7 @@ async function applyMovement(
   if (suppliedUnit !== material.unit) {
     const converted = convertQty(qty, suppliedUnit, material.unit);
     if (converted == null) {
-      throw new ValidationError(
-        `${material.name} is held in ${material.unit}, and ${suppliedUnit} cannot be converted to it. ` +
-        `Enter the quantity in ${material.unit}.`,
-      );
+      throw new ValidationError(unitMismatchReason(input.unit ?? suppliedUnit, material.unit, material.name));
     }
     qty = converted;
   }
@@ -409,13 +407,49 @@ export async function adjustStock(
   return row;
 }
 
+/**
+ * Write off material that is spoiled, lost or cut wrong.
+ *
+ * Against an order, the metres written off come off that order's reservation
+ * first, exactly as an issue does. They are gone either way; a reservation
+ * left holding them promised the order stock that no longer exists, and kept
+ * "reserved" above what is on the shelf, so the material read as
+ * over-reserved to every other order.
+ */
 export async function recordWastage(
   actor: AuthUser,
-  input: { materialId: string; qty: number; orderId?: string | null; reason: string; locationId?: string | null },
+  input: {
+    materialId: string; qty: number; orderId?: string | null; reason: string; locationId?: string | null;
+    bomItemId?: string | null;
+  },
 ): Promise<MaterialRow> {
-  await prisma.$transaction(async (tx) => {
-    await applyMovement(tx, actor, { ...input, type: MovementType.WASTAGE });
-  });
+  if (input.bomItemId && !input.orderId) {
+    throw new BadRequestError('A bill-of-materials line belongs to an order; say which order the wastage is against.');
+  }
+  await withSerializableRetry(() => prisma.$transaction(async (tx) => {
+    let reservationId: string | null = null;
+    if (input.orderId) {
+      await assertBomLineFor(tx, input.bomItemId, input.orderId, input.materialId);
+      // Wastage carries no unit of its own: it is entered in the material's,
+      // which is what reservations are counted in.
+      const reservations = await activeReservationsFor(tx, {
+        materialId: input.materialId, orderId: input.orderId, bomItemId: input.bomItemId ?? null,
+        // Written off against the order without naming a line, it is the
+        // order's loss as a whole, so any of its reservations may carry it —
+        // the general allocation first.
+        anyLine: !input.bomItemId,
+      });
+      const plan = planReservationDrawDown(reservations, quantise(input.qty));
+      await applyReservationChanges(tx, plan.changes);
+      reservationId = plan.changes[0]?.id ?? null;
+    }
+    await applyMovement(tx, actor, {
+      materialId: input.materialId, qty: input.qty, orderId: input.orderId ?? null,
+      bomItemId: input.bomItemId ?? null, reservationId,
+      reason: input.reason, locationId: input.locationId ?? null,
+      type: MovementType.WASTAGE,
+    });
+  }, { isolationLevel: 'Serializable' }));
 
   const row = await getMaterial(input.materialId);
   await logActivity({
@@ -463,15 +497,14 @@ export async function reserveForOrder(
 
       const order = await tx.order.findUnique({ where: { id: input.orderId }, select: { poNumber: true } });
       if (!order) throw new NotFoundError('Order');
+      await assertBomLineFor(tx, input.bomItemId, input.orderId, input.materialId);
 
       let qty = quantise(input.qty);
       const suppliedUnit = (input.unit ?? material.unit).toUpperCase();
       if (suppliedUnit !== material.unit) {
         const converted = convertQty(qty, suppliedUnit, material.unit);
         if (converted == null) {
-          throw new ValidationError(
-            `${material.name} is held in ${material.unit}; ${suppliedUnit} cannot be converted to it.`,
-          );
+          throw new ValidationError(unitMismatchReason(input.unit ?? suppliedUnit, material.unit, material.name));
         }
         qty = converted;
       }
@@ -500,6 +533,29 @@ export async function reserveForOrder(
       }
 
       if (!decides) {
+        // One open request per (material, order, BOM line), added to rather
+        // than duplicated. Pressing Reserve twice, or two people pressing it on
+        // the same order, used to leave the decider two requests for the same
+        // metres — accept both and the order held twice what it needed.
+        const open = await tx.materialReservation.findFirst({
+          where: {
+            materialId: input.materialId,
+            orderId: input.orderId,
+            bomItemId: input.bomItemId ?? null,
+            status: ReservationStatus.PENDING,
+          },
+          orderBy: { createdAt: 'asc' },
+        });
+        if (open) {
+          await tx.materialReservation.update({
+            where: { id: open.id },
+            data: { qty: qtyAdd(decOr0(open.qty), qty) },
+          });
+          return {
+            reservationId: open.id, reservedQty: qty, partial: qtyCmp(qty, requested) < 0,
+            materialName: material.name, unit: material.unit, poNumber: order.poNumber, pending: true,
+          };
+        }
         const request = await tx.materialReservation.create({
           data: {
             materialId: input.materialId,
@@ -777,37 +833,24 @@ export async function issueToProduction(
       if (suppliedUnit !== material.unit) {
         const converted = convertQty(qty, suppliedUnit, material.unit);
         if (converted == null) {
-          throw new ValidationError(`${material.name} is held in ${material.unit}; ${suppliedUnit} cannot be converted.`);
+          throw new ValidationError(unitMismatchReason(input.unit ?? suppliedUnit, material.unit, material.name));
         }
         qty = converted;
       }
       if (qty <= 0) throw new ValidationError('Enter a quantity greater than zero.');
+      await assertBomLineFor(tx, input.bomItemId, input.orderId, input.materialId);
 
       const row = toMaterialRow(material);
 
       // Reservations for this order, oldest first, so the earliest commitment
-      // is honoured first.
-      //
-      // Scoped to the BOM line when one is given: two lines of the same order
-      // can require the same material for different purposes, and drawing one
-      // line's issue against the other's reservation would leave the second
-      // looking covered when its material has already gone. A reservation with
-      // no BOM line is a general allocation to the order and is fair game for
-      // either. Without a BOM line, only those general allocations are touched.
-      const reservations = await tx.materialReservation.findMany({
-        where: {
-          materialId: input.materialId,
-          orderId: input.orderId,
-          status: ReservationStatus.ACTIVE,
-          ...(input.bomItemId
-            ? { OR: [{ bomItemId: input.bomItemId }, { bomItemId: null }] }
-            : { bomItemId: null }),
-        },
-        orderBy: { createdAt: 'asc' },
+      // is honoured first — scoped to the BOM line as `activeReservationsFor`
+      // explains.
+      const reservations = await activeReservationsFor(tx, {
+        materialId: input.materialId, orderId: input.orderId, bomItemId: input.bomItemId ?? null,
       });
 
       const reservedForThisOrder = qtyAdd(
-        ...reservations.map((r) => Math.max(0, qtySub(decOr0(r.qty), decOr0(r.consumedQty)))),
+        ...reservations.map((r) => Math.max(0, qtySub(r.qty, r.consumedQty))),
       );
       const drawnFromReservation = Math.min(qty, reservedForThisOrder);
       const drawnFromFree = qtySub(qty, drawnFromReservation);
@@ -824,25 +867,9 @@ export async function issueToProduction(
       }
 
       // Draw down each reservation in turn.
-      let remaining = drawnFromReservation;
-      let firstReservationId: string | null = null;
-      for (const r of reservations) {
-        if (qtyIsZeroLocal(remaining)) break;
-        const outstanding = Math.max(0, qtySub(decOr0(r.qty), decOr0(r.consumedQty)));
-        if (outstanding <= 0) continue;
-        const take = Math.min(outstanding, remaining);
-        const newConsumed = qtyAdd(decOr0(r.consumedQty), take);
-        await tx.materialReservation.update({
-          where: { id: r.id },
-          data: {
-            consumedQty: newConsumed,
-            // A reservation fully drawn down is finished, not still pending.
-            status: qtyCmp(newConsumed, decOr0(r.qty)) >= 0 ? ReservationStatus.FULFILLED : ReservationStatus.ACTIVE,
-          },
-        });
-        firstReservationId ??= r.id;
-        remaining = qtySub(remaining, take);
-      }
+      const plan = planReservationDrawDown(reservations, drawnFromReservation);
+      await applyReservationChanges(tx, plan.changes);
+      const firstReservationId = plan.changes[0]?.id ?? null;
 
       await applyMovement(tx, actor, {
         materialId: input.materialId,
@@ -931,7 +958,18 @@ export async function issueToProduction(
   return { material: row, drawnFromReservation: result.drawnFromReservation, drawnFromFree: result.drawnFromFree };
 }
 
-/** Unused material coming back from the floor: physical up, reservation restored. */
+/**
+ * Unused material coming back from the floor: physical up, reservation restored.
+ *
+ * The return goes back onto the reservations the issue could have drawn from —
+ * this BOM line's, then the order's general allocation — spread across them as
+ * far as they had been drawn. Another line's reservation is not touched: it
+ * did not give the material, and restoring it would show that line as covered
+ * by metres meant for this one.
+ *
+ * Once the order has shipped or completed there is nothing left to hold stock
+ * for, so the material goes back on the shelf as free stock.
+ */
 export async function returnFromProduction(
   actor: AuthUser,
   input: {
@@ -942,13 +980,16 @@ export async function returnFromProduction(
   await withSerializableRetry(() => prisma.$transaction(async (tx) => {
     const material = await tx.material.findUnique({ where: { id: input.materialId } });
     if (!material) throw new NotFoundError('Material');
+    const order = await tx.order.findUnique({ where: { id: input.orderId }, select: { cachedStatus: true, cancelled: true } });
+    if (!order) throw new NotFoundError('Order');
+    await assertBomLineFor(tx, input.bomItemId, input.orderId, input.materialId);
 
     let qty = quantise(input.qty);
     const suppliedUnit = (input.unit ?? material.unit).toUpperCase();
     if (suppliedUnit !== material.unit) {
       const converted = convertQty(qty, suppliedUnit, material.unit);
       if (converted == null) {
-        throw new ValidationError(`${material.name} is held in ${material.unit}; ${suppliedUnit} cannot be converted.`);
+        throw new ValidationError(unitMismatchReason(input.unit ?? suppliedUnit, material.unit, material.name));
       }
       qty = converted;
     }
@@ -972,28 +1013,32 @@ export async function returnFromProduction(
       );
     }
 
-    // Put it back on the reservation it came off, so the order keeps its claim
-    // rather than the metres silently becoming available to everyone else.
-    const fulfilled = await tx.materialReservation.findFirst({
-      where: {
-        materialId: input.materialId,
-        orderId: input.orderId,
-        status: { in: [ReservationStatus.ACTIVE, ReservationStatus.FULFILLED] },
-        consumedQty: { gt: 0 },
-      },
-      orderBy: { updatedAt: 'desc' },
-    });
-    if (fulfilled) {
-      const restored = Math.max(0, qtySub(decOr0(fulfilled.consumedQty), qty));
-      await tx.materialReservation.update({
-        where: { id: fulfilled.id },
-        data: {
-          consumedQty: restored,
-          status: qtyCmp(restored, decOr0(fulfilled.qty)) >= 0
-            ? ReservationStatus.FULFILLED
-            : ReservationStatus.ACTIVE,
+    // Put it back on the reservations it came off, so the order keeps its
+    // claim rather than the metres silently becoming available to everyone
+    // else — unless the order is finished and has no claim left to keep.
+    let restoredTo: string | null = null;
+    if (!order.cancelled && !ORDER_DONE.has(order.cachedStatus ?? '')) {
+      const drawn = await tx.materialReservation.findMany({
+        where: {
+          materialId: input.materialId,
+          orderId: input.orderId,
+          status: { in: [ReservationStatus.ACTIVE, ReservationStatus.FULFILLED] },
+          consumedQty: { gt: 0 },
+          ...(input.bomItemId
+            ? { OR: [{ bomItemId: input.bomItemId }, { bomItemId: null }] }
+            : { bomItemId: null }),
         },
+        orderBy: { updatedAt: 'desc' },
       });
+      // The line's own reservations before the general allocation, most
+      // recently drawn first within each.
+      const ordered = [
+        ...drawn.filter((r) => r.bomItemId != null),
+        ...drawn.filter((r) => r.bomItemId == null),
+      ].map((r) => ({ id: r.id, qty: decOr0(r.qty), consumedQty: decOr0(r.consumedQty) }));
+      const plan = planReservationRestore(ordered, qty);
+      await applyReservationChanges(tx, plan.changes);
+      restoredTo = plan.changes[0]?.id ?? null;
     }
 
     await applyMovement(tx, actor, {
@@ -1003,7 +1048,7 @@ export async function returnFromProduction(
       qty,
       orderId: input.orderId,
       bomItemId: input.bomItemId ?? null,
-      reservationId: fulfilled?.id ?? null,
+      reservationId: restoredTo,
       reason: input.reason ?? 'Returned unused from production',
     });
 
@@ -1030,6 +1075,80 @@ export async function returnFromProduction(
   return row;
 }
 
+/**
+ * Check, before anything is written, that issued figures typed on the bill of
+ * materials can be carried out against stock.
+ *
+ * A correction to a line linked to a catalogue material runs through
+ * `issueToProduction` or `returnFromProduction`, which keep their own
+ * transactions and so run after the rows are saved. When one of them then
+ * refused — not enough free stock, or more coming back than ever went out —
+ * the save answered 409 with the rows already written, and the person retried
+ * a save that had half happened. The same tests are made here first, in the
+ * material's unit and summed per material, so a refusal leaves nothing saved.
+ *
+ * It is a check, not a lock: the movements themselves still test again when
+ * they run, so a race that slips between the two is refused there rather than
+ * overdrawing the shelf.
+ */
+export async function assertIssueCorrectionsPossible(
+  orderId: string,
+  corrections: ReadonlyArray<{ bomItemId: string; materialId: string; unit: string; was: number; issued: number }>,
+): Promise<void> {
+  const byMaterial = new Map<string, typeof corrections[number][]>();
+  for (const c of corrections) {
+    if (qtyCmp(c.issued, c.was) === 0) continue;
+    byMaterial.set(c.materialId, [...(byMaterial.get(c.materialId) ?? []), c]);
+  }
+
+  for (const [materialId, list] of byMaterial) {
+    const material = await prisma.material.findUnique({ where: { id: materialId }, include: MATERIAL_INCLUDE });
+    if (!material) throw new NotFoundError('Material');
+    const row = toMaterialRow(material);
+
+    let fromFree = 0;
+    let comingBack = 0;
+    for (const c of list) {
+      const delta = qtySub(c.issued, c.was);
+      const inStockUnit = convertQty(Math.abs(delta), c.unit, material.unit);
+      if (inStockUnit == null) throw new ValidationError(unitMismatchReason(c.unit, material.unit, material.name));
+      if (delta > 0) {
+        const reservations = await activeReservationsFor(prisma, { materialId, orderId, bomItemId: c.bomItemId });
+        const reserved = qtyAdd(...reservations.map((r) => Math.max(0, qtySub(r.qty, r.consumedQty))));
+        fromFree = qtyAdd(fromFree, Math.max(0, qtySub(inStockUnit, reserved)));
+      } else {
+        comingBack = qtyAdd(comingBack, inStockUnit);
+      }
+    }
+
+    if (qtyCmp(fromFree, row.position.availableQty) > 0) {
+      throw new ConflictError(
+        `The issued figures typed for ${material.name} need ${fromFree.toLocaleString()} ${material.unit} beyond ` +
+        `this order's reservation, but only ${Math.max(0, row.position.availableQty).toLocaleString()} is unreserved. ` +
+        'Nothing was saved. Release another order\'s reservation or record a receipt first, or correct the figure.',
+      );
+    }
+
+    if (comingBack > 0) {
+      const sums = await prisma.materialMovement.groupBy({
+        by: ['type'],
+        where: { materialId, orderId, type: { in: [MovementType.ISSUE, MovementType.RETURN] } },
+        _sum: { qty: true },
+      });
+      const issued = decOr0(sums.find((g) => g.type === MovementType.ISSUE)?._sum.qty);
+      const returned = decOr0(sums.find((g) => g.type === MovementType.RETURN)?._sum.qty);
+      const out = qtySub(issued, returned);
+      if (qtyCmp(comingBack, out) > 0) {
+        throw new ConflictError(
+          `Lowering the issued figure for ${material.name} would bring ${comingBack.toLocaleString()} ${material.unit} ` +
+          `back to stock, but only ${Math.max(0, out).toLocaleString()} is out against this order. Nothing was saved. ` +
+          'Check the figure, or record a stock adjustment if the book figure is wrong.',
+        );
+      }
+    }
+  }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Order-level material position
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1043,14 +1162,19 @@ export async function getOrderMaterialPosition(orderId: string, db: Db = prisma)
     where: { orderId },
     include: {
       material: { include: MATERIAL_INCLUDE },
-      reservations: { where: { status: ReservationStatus.ACTIVE } },
+      reservations: { where: { status: { in: [ReservationStatus.ACTIVE, ReservationStatus.PENDING] } } },
     },
     orderBy: { position_: 'asc' },
   });
 
   const inputs: RequirementInput[] = bomItems.map((b) => {
+    const active = b.reservations.filter((r) => r.status === ReservationStatus.ACTIVE);
     const reservedQty = qtyAdd(
-      ...b.reservations.map((r) => Math.max(0, qtySub(decOr0(r.qty), decOr0(r.consumedQty)))),
+      ...active.map((r) => Math.max(0, qtySub(decOr0(r.qty), decOr0(r.consumedQty)))),
+    );
+    // Requests waiting on a decider: already asked for, so not offered again.
+    const requestedQty = qtyAdd(
+      ...b.reservations.filter((r) => r.status === ReservationStatus.PENDING).map((r) => decOr0(r.qty)),
     );
     const availableQty = b.material ? toMaterialRow(b.material).position.availableQty : null;
 
@@ -1066,6 +1190,7 @@ export async function getOrderMaterialPosition(orderId: string, db: Db = prisma)
       // Reserved and available are in the material's unit; the calculation
       // converts them into the line's before comparing.
       stockUnit: b.material?.unit ?? null,
+      requestedQty,
     };
   });
 
@@ -1178,18 +1303,7 @@ export async function reconcileStock(
         difference: qtySub(ledger, stored),
       });
 
-      if (options.fix) {
-        // The ledger wins. It is the record of what actually happened.
-        const primary = m.stock[0];
-        if (primary) {
-          await prisma.materialStock.update({
-            where: { id: primary.id },
-            data: { physicalQty: qtyAdd(decOr0(primary.physicalQty), qtySub(ledger, stored)) },
-          });
-        } else {
-          await prisma.materialStock.create({ data: { materialId: m.id, physicalQty: ledger } });
-        }
-      }
+      if (options.fix) await correctDrift(m.id);
     }
   }
 
@@ -1207,9 +1321,128 @@ export async function reconcileStock(
   return { checked: materials.length, drifted, fixed: options.fix === true };
 }
 
+/**
+ * Bring one material's balance back to its ledger.
+ *
+ * The ledger wins: it is the record of what actually happened. The drift is
+ * measured again inside a serializable transaction and applied as an
+ * increment, never as a figure worked out from the read the report was built
+ * on. A receipt landing between that read and the fix used to be overwritten
+ * by the stale total — the reconciliation itself losing stock.
+ */
+async function correctDrift(materialId: string): Promise<void> {
+  await withSerializableRetry(() => prisma.$transaction(async (tx) => {
+    const stock = await tx.materialStock.findMany({
+      where: { materialId }, select: { id: true, physicalQty: true }, orderBy: { id: 'asc' },
+    });
+    const movements = await tx.materialMovement.findMany({
+      where: { materialId }, select: { id: true, type: true, qty: true, occurredAt: true },
+    });
+    const stored = qtyAdd(...stock.map((s) => decOr0(s.physicalQty)));
+    const ledger = replayMovements(movements.map((mv) => ({
+      id: mv.id, type: mv.type as MovementType, qty: decOr0(mv.qty), occurredAt: mv.occurredAt,
+    })));
+    const difference = qtySub(ledger, stored);
+    if (qtyCmp(difference, 0) === 0) return;
+    const primary = stock[0];
+    if (primary) {
+      await tx.materialStock.update({ where: { id: primary.id }, data: { physicalQty: { increment: difference } } });
+    } else {
+      await tx.materialStock.create({ data: { materialId, physicalQty: ledger } });
+    }
+  }, { isolationLevel: 'Serializable' }));
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Orders that have nothing left to hold stock for. Read from the order's
+ * cached status, which every write refreshes — the same test the rest of the
+ * server uses to tell a live order from a finished one.
+ */
+const ORDER_DONE: ReadonlySet<string> = new Set(['SHIPPED', 'COMPLETED', 'CANCELLED']);
+
+/**
+ * Why a BOM line cannot be used with this order and material, or null when it
+ * can. The line id arrives from the client beside the order and material, and
+ * nothing tied the three together: an issue could name another order's line
+ * and move that line's issued figure, or a line for thread could have fabric
+ * drawn against it.
+ */
+export function bomLineMismatch(
+  line: { orderId: string; materialId: string | null; item: string } | null,
+  orderId: string,
+  materialId: string,
+): string | null {
+  if (!line) return 'That bill-of-materials line no longer exists. Reload and try again.';
+  if (line.orderId !== orderId) return `The bill-of-materials line "${line.item}" belongs to a different order.`;
+  if (line.materialId !== materialId) {
+    return `The bill-of-materials line "${line.item}" is not linked to this material. Link it first, or leave the line out.`;
+  }
+  return null;
+}
+
+async function assertBomLineFor(
+  db: Db, bomItemId: string | null | undefined, orderId: string, materialId: string,
+): Promise<void> {
+  if (!bomItemId) return;
+  const line = await db.bomItem.findUnique({
+    where: { id: bomItemId }, select: { orderId: true, materialId: true, item: true },
+  });
+  const problem = bomLineMismatch(line, orderId, materialId);
+  if (problem) throw new BadRequestError(problem);
+}
+
+/**
+ * An order's active reservations of a material, oldest first, as plain numbers.
+ *
+ * Scoped to the BOM line when one is given: two lines of the same order can
+ * require the same material for different purposes, and drawing one line's
+ * issue against the other's reservation would leave the second looking
+ * covered when its material has already gone. A reservation with no BOM line
+ * is a general allocation to the order and is fair game for either. Without a
+ * BOM line, only those general allocations are touched — unless `anyLine`
+ * says the movement is the order's as a whole, when the general allocation
+ * comes first and the lines' own after it.
+ */
+async function activeReservationsFor(
+  tx: Db,
+  input: { materialId: string; orderId: string; bomItemId: string | null; anyLine?: boolean },
+): Promise<Array<{ id: string; qty: number; consumedQty: number }>> {
+  const rows = await tx.materialReservation.findMany({
+    where: {
+      materialId: input.materialId,
+      orderId: input.orderId,
+      status: ReservationStatus.ACTIVE,
+      ...(input.bomItemId
+        ? { OR: [{ bomItemId: input.bomItemId }, { bomItemId: null }] }
+        : input.anyLine ? {} : { bomItemId: null }),
+    },
+    orderBy: { createdAt: 'asc' },
+  });
+  const ordered = input.anyLine
+    ? [...rows.filter((r) => r.bomItemId == null), ...rows.filter((r) => r.bomItemId != null)]
+    : rows;
+  return ordered.map((r) => ({ id: r.id, qty: decOr0(r.qty), consumedQty: decOr0(r.consumedQty) }));
+}
+
+/** Write a draw-down or restore plan. A reservation fully drawn is finished, not still pending. */
+async function applyReservationChanges(
+  tx: Prisma.TransactionClient,
+  changes: readonly ReservationChange[],
+): Promise<void> {
+  for (const c of changes) {
+    await tx.materialReservation.update({
+      where: { id: c.id },
+      data: {
+        consumedQty: c.consumedQty,
+        status: c.fulfilled ? ReservationStatus.FULFILLED : ReservationStatus.ACTIVE,
+      },
+    });
+  }
+}
 
 /**
  * Run a Serializable transaction, retrying when Postgres refuses to serialise it.
@@ -1244,11 +1477,6 @@ function isSerializationFailure(err: unknown): boolean {
   return e.code === 'P2034'
     || e.meta?.code === '40001' || e.meta?.code === '40P01'
     || /could not serialize access|deadlock detected/i.test(e.message ?? '');
-}
-
-/** Local zero test — the shared one takes the same rounding but reads oddly inline. */
-function qtyIsZeroLocal(v: number): boolean {
-  return qtyCmp(v, 0) === 0;
 }
 
 function humanStage(stage: string): string {

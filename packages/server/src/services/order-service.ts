@@ -67,9 +67,11 @@ const ORDER_INCLUDE = {
           },
         },
       },
+      // Pending requests as well, so a line already asked for is not offered
+      // for reserving again.
       reservations: {
-        where: { status: 'ACTIVE' as const },
-        select: { id: true, qty: true, consumedQty: true },
+        where: { status: { in: ['ACTIVE', 'PENDING'] as Array<'ACTIVE' | 'PENDING'> } },
+        select: { id: true, qty: true, consumedQty: true, status: true },
       },
     },
     orderBy: { position_: 'asc' },
@@ -158,8 +160,11 @@ function toBomInputs(order: FullOrder): BomItemInput[] {
 function toRequirementInputs(order: FullOrder): RequirementInput[] {
   return order.bomItems.map((b) => {
     const reservedQty = sum(
-      b.reservations.map((r) => Math.max(0, qtySub(Number(r.qty.toString()), Number(r.consumedQty.toString())))),
+      b.reservations
+        .filter((r) => r.status === 'ACTIVE')
+        .map((r) => Math.max(0, qtySub(Number(r.qty.toString()), Number(r.consumedQty.toString())))),
     );
+    const requestedQty = sum(b.reservations.filter((r) => r.status === 'PENDING').map((r) => Number(r.qty.toString())));
 
     let availableQty: number | null = null;
     if (b.material) {
@@ -189,6 +194,7 @@ function toRequirementInputs(order: FullOrder): RequirementInput[] {
       // Reservations and balances are counted in the material's unit; the
       // calculation converts them to the line's before comparing.
       stockUnit: b.material?.unit ?? null,
+      requestedQty,
     };
   });
 }

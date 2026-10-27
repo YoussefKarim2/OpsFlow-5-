@@ -343,6 +343,8 @@ export interface CostLineDto {
 }
 
 export interface CostingDto {
+  /** The version on the server. A save names it, and is refused if it has moved on. */
+  updatedAt: string;
   costingDate: string | null;
   /** The factory's daily running cost, in dollars. */
   dailyCostUsd: number | null;
@@ -936,7 +938,7 @@ export const api = {
     costing: (orderId: string) =>
       get<{ data: CostingDto | null; derived: CostLineDto[] }>(`/orders/${orderId}/costing`),
     saveCosting: (orderId: string, body: unknown) =>
-      put<{ ok: true; derived: number; manual: number }>(`/orders/${orderId}/costing`, body),
+      put<{ ok: true; derived: number; manual: number; updatedAt: string }>(`/orders/${orderId}/costing`, body),
     downloadCostingPdf: (orderId: string) =>
       downloadFile(`/orders/${orderId}/costing/export.pdf`, 'costing.pdf', 'Could not create the costing PDF.'),
     proforma: (orderId: string) => get<{ data: ProformaDto | null }>(`/orders/${orderId}/proforma`),
@@ -998,8 +1000,9 @@ export const api = {
     }>(`/materials/${orderId}/bom`),
     addBomItem: (orderId: string, body: unknown) => post<{ id: string }>(`/materials/${orderId}/bom`, body),
     /** Save the whole table at once — the Proforma Invoice's pattern. */
-    saveBom: (orderId: string, items: BomRowDto[]) =>
-      put<{ ok: true; count: number; removed: number }>(`/materials/${orderId}/bom`, { items }),
+    /** Only the lines named in `removeIds` are deleted; lines the editor did not send are left alone. */
+    saveBom: (orderId: string, items: BomRowDto[], removeIds: string[] = []) =>
+      put<{ ok: true; count: number; removed: number }>(`/materials/${orderId}/bom`, { items, removeIds }),
     updateBomItem: (id: string, body: unknown) => patch<unknown>(`/materials/bom/${id}`, body),
     removeBomItem: (id: string) => del(`/materials/bom/${id}`),
     issue: (bomItemId: string, body: { qty: number; issuedToName?: string; notes?: string }) =>

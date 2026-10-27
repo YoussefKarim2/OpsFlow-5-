@@ -991,6 +991,8 @@ stepsRouter.get('/:id/costing', requirePermission('costing:read'), asyncHandler(
 
   res.json({
     data: record && {
+      /** The version the screen is editing; sent back on save. */
+      updatedAt: record.updatedAt.toISOString(),
       costingDate: record.costingDate?.toISOString() ?? null,
       dailyCostUsd: record.dailyCostUsd == null ? null : Number(record.dailyCostUsd.toString()),
       machineCount: record.machineCount,
@@ -1092,7 +1094,37 @@ const costingSchema = z.object({
   manualLines: z.array(costLineSchema).max(500).default([]),
   /** Derived rows removed from the sheet, by source reference. */
   hiddenCostRefs: z.array(z.string().trim().max(200)).max(500).optional(),
+  /**
+   * The `updatedAt` of the costing the screen loaded, or null when it loaded
+   * none. A save against any other version is refused — see `costingIsStale`.
+   * Omitted only by a client from before the check, which is let through.
+   */
+  expectedUpdatedAt: z.string().datetime().nullable().optional(),
 });
+
+/**
+ * Whether a save was made against a costing that has changed since.
+ *
+ * The save replaces the whole record with what the screen sends, and the
+ * screen saves on its own a moment after typing stops. Two people on one
+ * costing — or one person on two tabs — each wrote their whole draft over the
+ * other's, and the later autosave silently undid the earlier person's work.
+ * So each save names the version it was edited from, and a mismatch is
+ * refused for the person to reload, rather than settled by whoever typed last.
+ */
+export function costingIsStale(
+  stored: Date | null,
+  expected: string | null | undefined,
+): boolean {
+  if (expected === undefined) return false;
+  if (stored == null) return expected !== null;
+  return expected === null || new Date(expected).getTime() !== stored.getTime();
+}
+
+/** Stable, so the screen can tell this refusal from any other 409. */
+export const COSTING_STALE_MESSAGE =
+  'Someone else changed this costing after you opened it, so your changes were not saved. ' +
+  'Reload to see their version, then make your changes again.';
 
 // Read as well as write. The save replaces the whole record — notes, figures,
 // hand-added rows — with what the screen sends, so a caller who could not load
@@ -1103,7 +1135,7 @@ stepsRouter.put('/:id/costing', requirePermission('costing:read'), requirePermis
   const user = currentUser(req);
 
   const fields = stripLines(body);
-  const { costingDate, overrides, ...rest } = fields;
+  const { costingDate, overrides, expectedUpdatedAt, ...rest } = fields;
   const overrideField = overrides === undefined
     ? {}
     : { overrides: sanitiseOverrides(overrides) as Prisma.InputJsonValue };
@@ -1113,11 +1145,9 @@ stepsRouter.put('/:id/costing', requirePermission('costing:read'), requirePermis
     ? {}
     : { costingDate: costingDate ? new Date(costingDate) : null };
 
-  await prisma.costingRecord.upsert({
-    where: { orderId },
-    create: { orderId, ...rest, ...dateField, ...overrideField },
-    update: { ...rest, ...dateField, ...overrideField },
-  });
+  // Read before the transaction: it reads the bill of materials, not the
+  // costing, and holding the lock while it runs would only queue other saves.
+  const derivable = await deriveFor(orderId);
 
   // A derived row the coordinator has edited or deleted must not come back. An
   // edited one arrives as a manual line carrying the same `sourceRef` and
@@ -1127,16 +1157,7 @@ stepsRouter.put('/:id/costing', requirePermission('costing:read'), requirePermis
   // same rule the order detail and the screen apply, so one row's edit reaches
   // that row alone. Hidden references are read back from the record, so a save
   // that did not send them still honours the ones stored.
-  const record = await prisma.costingRecord.findUniqueOrThrow({
-    where: { orderId }, select: { id: true, hiddenCostRefs: true },
-  });
-  const derived = visibleDerivedLines(
-    await deriveFor(orderId),
-    body.manualLines.map((m) => m.sourceRef),
-    record.hiddenCostRefs,
-  );
-
-  await prisma.$transaction(async (tx) => {
+  const { record, derived } = await prisma.$transaction(async (tx) => {
     /**
      * Two saves at once used to leave both sets of rows.
      *
@@ -1145,9 +1166,27 @@ stepsRouter.put('/:id/costing', requirePermission('costing:read'), requirePermis
      * lines twice over and a total to match. Debounced auto-save makes that
      * likelier, not less — two people on the same costing, or one person on
      * two tabs. Serialised on the order, so the second save waits for the
-     * first to finish rather than racing it.
+     * first to finish rather than racing it — and then finds, under the same
+     * lock, that the version it was edited from is gone.
      */
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${orderId}))`;
+    const current = await tx.costingRecord.findUnique({ where: { orderId }, select: { updatedAt: true } });
+    if (costingIsStale(current?.updatedAt ?? null, expectedUpdatedAt)) {
+      throw new ConflictError(COSTING_STALE_MESSAGE, { reason: 'COSTING_CHANGED' });
+    }
+
+    const record = await tx.costingRecord.upsert({
+      where: { orderId },
+      create: { orderId, ...rest, ...dateField, ...overrideField },
+      update: { ...rest, ...dateField, ...overrideField },
+      select: { id: true, hiddenCostRefs: true, updatedAt: true },
+    });
+    const derived = visibleDerivedLines(
+      derivable,
+      body.manualLines.map((m) => m.sourceRef),
+      record.hiddenCostRefs,
+    );
+
     await tx.costLine.deleteMany({ where: { costingId: record.id } });
     await tx.costLine.createMany({
       data: [
@@ -1165,6 +1204,7 @@ stepsRouter.put('/:id/costing', requirePermission('costing:read'), requirePermis
         })),
       ],
     });
+    return { record, derived };
   });
 
   await logActivity({
@@ -1174,7 +1214,11 @@ stepsRouter.put('/:id/costing', requirePermission('costing:read'), requirePermis
     entityType: 'CostingRecord', entityId: record.id,
   });
 
-  res.json({ ok: true, derived: derived.length, manual: body.manualLines.length });
+  res.json({
+    ok: true, derived: derived.length, manual: body.manualLines.length,
+    // The version this save made, for the screen's next save to name.
+    updatedAt: record.updatedAt.toISOString(),
+  });
 }));
 
 function stripLines(b: z.infer<typeof costingSchema>) {

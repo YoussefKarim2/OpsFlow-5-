@@ -10,6 +10,7 @@
  *
  *   Covered      nothing to do
  *   Reservable   the stock exists — one click commits it
+ *   Requested    already asked for; waiting on someone who decides reservations
  *   Short        the stock does not exist — purchase request, phone call
  *   Unlinked     the line names no catalogue material, so nothing can be checked
  */
@@ -30,6 +31,7 @@ import { ComboSelect } from '../../components/ComboSelect';
 const STATUS_STYLE: Record<RequirementResult['status'], { label: string; chip: string; hint: string }> = {
   COVERED:    { label: 'Covered',    chip: 'bg-emerald-50 text-emerald-700 ring-emerald-200', hint: 'Reserved or already issued' },
   RESERVABLE: { label: 'Reservable', chip: 'bg-blue-50 text-blue-700 ring-blue-200',          hint: 'In stock but not yet committed to this order' },
+  REQUESTED:  { label: 'Requested',  chip: 'bg-amber-50 text-amber-800 ring-amber-200',       hint: 'Reservation requested — waiting for a decision' },
   SHORT:      { label: 'Short',      chip: 'bg-red-50 text-red-700 ring-red-200',             hint: 'Not enough stock exists' },
   UNLINKED:   { label: 'Not linked', chip: 'bg-ink-100 text-ink-600 ring-ink-200',            hint: 'No catalogue material, so stock cannot be checked' },
 };
@@ -189,7 +191,15 @@ export function MaterialsTab({ order }: { order: OrderDetailDto }) {
                         )}
                       </td>
                       <td className="td tnum text-right">{fmtNumber(r.requiredQty, { places: 0 })} <span className="text-2xs text-ink-400">{r.unit}</span></td>
-                      <td className="td tnum text-right text-ink-600">{r.reservedQty > 0 ? fmtNumber(r.reservedQty, { places: 0 }) : <span className="text-ink-300">—</span>}</td>
+                      <td className="td tnum text-right text-ink-600">
+                        {r.reservedQty > 0 ? fmtNumber(r.reservedQty, { places: 0 }) : <span className="text-ink-300">—</span>}
+                        {/* A request holds nothing yet, so it is shown beside the reserved figure, not in it. */}
+                        {r.requestedQty > 0 && (
+                          <span className="block text-2xs text-amber-700" title="Waiting for a decision">
+                            +{fmtNumber(r.requestedQty, { places: 0 })} requested
+                          </span>
+                        )}
+                      </td>
                       <td className="td tnum text-right text-ink-600">{r.issuedQty > 0 ? fmtNumber(r.issuedQty, { places: 0 }) : <span className="text-ink-300">—</span>}</td>
                       <td className="td tnum text-right text-ink-600">
                         {r.availableQty == null ? <span className="text-ink-300">unknown</span> : fmtNumber(r.availableQty, { places: 0 })}

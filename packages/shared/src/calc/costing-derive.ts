@@ -81,18 +81,45 @@ export function bomSourceRef(category: string, bomItemId: string): string {
 }
 
 /**
+ * The BOM line a reference names, or null when it names none.
+ *
+ * `bom:<CATEGORY>:<id>` is the shape every derived BOM line carries. The id is
+ * everything after the second colon, so an id that itself contains a colon
+ * still reads whole.
+ */
+export function bomRefItemId(ref: string): string | null {
+  if (!ref.startsWith('bom:')) return null;
+  const rest = ref.slice(4);
+  const colon = rest.indexOf(':');
+  if (colon < 0) return null;
+  const id = rest.slice(colon + 1);
+  return id.length > 0 ? id : null;
+}
+
+/**
  * Whether a stored reference — a hidden row, or the `sourceRef` an edited
  * manual line claims — covers a derived line.
  *
- * Normally that is plain equality. The one exception is the reference BOM
- * lines carried before they named their row: `bom:<CATEGORY>` alone. Costings
- * saved then still hold it, and it meant every row of that category, so it goes
- * on meaning exactly that. Reading it as matching nothing would bring rows
- * somebody deleted back onto a saved costing; new edits and deletions name a
- * single row and cannot reach its neighbours.
+ * Normally that is plain equality, with two exceptions.
+ *
+ * A BOM line is matched on its row id alone. The category is in the reference
+ * for a reader's benefit, but it is not the row's identity: a line moved from
+ * ACCESSORY to LABEL on the bill of materials keeps its id, and when the match
+ * included the category, the row somebody had edited or removed on the costing
+ * stopped matching and reappeared beside the edited copy — the same material
+ * costed twice. References saved as `bom:<OLD CATEGORY>:<id>` therefore go on
+ * covering the line after the category changes.
+ *
+ * The other is the reference BOM lines carried before they named their row:
+ * `bom:<CATEGORY>` alone. Costings saved then still hold it, and it meant every
+ * row of that category, so it goes on meaning exactly that. Reading it as
+ * matching nothing would bring rows somebody deleted back onto a saved costing;
+ * new edits and deletions name a single row and cannot reach its neighbours.
  */
 export function sourceRefCovers(stored: string, ref: string): boolean {
   if (stored === ref) return true;
+  const storedId = bomRefItemId(stored);
+  if (storedId != null) return bomRefItemId(ref) === storedId;
   const parts = stored.split(':');
   return parts.length === 2 && parts[0] === 'bom' && ref.startsWith(`${stored}:`);
 }
