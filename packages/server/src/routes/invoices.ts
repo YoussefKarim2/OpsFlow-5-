@@ -344,9 +344,9 @@ const lineSchema = z.object({
 });
 
 /**
- * A proforma's carton, typed by hand or copied from the order's packing list
- * and then adjusted. An invoice's cartons are never edited here: they are the
- * packing list's, and the invoice is rebuilt to follow it.
+ * A document's carton, typed by hand or copied from the order's packing list
+ * and then adjusted. Rebuilding an invoice puts its packing list back, when
+ * the order has one.
  */
 const cartonSchema = z.object({
   cartonNumber: z.string().trim().max(60).default(''),
@@ -386,9 +386,6 @@ invoicesRouter.put('/:id', requirePermission('invoice:write'), asyncHandler(asyn
   const user = currentUser(req);
   const existing = await loadInvoice(req.params.id);
   assertDraft(existing);
-  if (body.cartons && existing.kind !== InvoiceKind.PROFORMA) {
-    throw new ValidationError('An invoice\'s cartons are its packing list. Change them on the order\'s Packing tab and rebuild.');
-  }
   const cartons = body.cartons?.map((c, i) => ({
     ...c, n: i + 1, netKg: c.netKg ?? null, grossKg: c.grossKg ?? null,
     cartonSize: c.cartonSize ?? null, contentsText: c.contentsText ?? null,
@@ -455,17 +452,15 @@ invoicesRouter.put('/:id', requirePermission('invoice:write'), asyncHandler(asyn
   res.json({ data: invoiceToDto(updated, await isStale(updated)) });
 }));
 
-// ── A proforma's cartons from the order's packing list ─────────────────────
+// ── A document's cartons from the order's packing list ─────────────────────
 
 /**
- * The cartons already packed for this document's orders, as an invoice would
- * list them, for a proforma to copy in and adjust. Read only: nothing is
- * saved until the draft is.
+ * The cartons already packed for this document's orders, as an invoice lists
+ * them, to copy in and adjust. Read only: nothing is saved until the draft is.
  */
 invoicesRouter.post('/:id/cartons-from-packing', requirePermission('invoice:write'), asyncHandler(async (req, res) => {
   const existing = await loadInvoice(req.params.id);
   assertDraft(existing);
-  if (existing.kind !== InvoiceKind.PROFORMA) throw new ValidationError('Only a proforma takes its cartons this way; an invoice is built from its packing list.');
   const { doc } = await buildFor(InvoiceKind.INVOICE, partsOf(existing).map((p) => ({ orderId: p.orderId })));
   if (doc.manifest.length === 0) {
     throw new ValidationError('No cartons have been packed for this order yet. Add them on the order\'s Packing tab, or type them here.');
@@ -510,9 +505,9 @@ invoicesRouter.post('/:id/rebuild', requirePermission('invoice:write'), asyncHan
         shippedOn: doc.shippedOn ?? existing.shippedOn,
         notes: existing.notes ?? doc.notes,
         seller: doc.seller as object, orderRef: doc.orderRef as object,
-        // A proforma's cartons are typed or copied in by hand; rebuilding
-        // reads the order again but does not throw them away.
-        manifest: (existing.kind === InvoiceKind.PROFORMA ? existing.manifest : doc.manifest) as object[], reconciliation: doc.reconciliation as object[],
+        // Cartons typed or copied in by hand are kept: a proforma's always,
+        // an invoice's until the order has a packing list, which then wins.
+        manifest: (existing.kind === InvoiceKind.INVOICE && doc.manifest.length > 0 ? doc.manifest : existing.manifest) as object[], reconciliation: doc.reconciliation as object[],
         warnings: doc.warnings, builtAt: new Date(),
       },
     });

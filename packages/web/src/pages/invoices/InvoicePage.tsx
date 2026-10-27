@@ -61,11 +61,11 @@ function fromServer(inv: InvoiceDto): Draft {
     customerReference: inv.customerReference ?? '', shipmentRef: inv.shipmentRef ?? '', shippedOn: day(inv.shippedOn),
     coverNote: inv.coverNote ?? '', terms: inv.terms ?? '', bankDetails: inv.bankDetails ?? '', notes: inv.notes ?? '',
     lineLayout: inv.lineLayout,
-    cartons: inv.kind === 'PROFORMA' ? inv.manifest.map((c) => ({
+    cartons: inv.manifest.map((c) => ({
       cartonNumber: c.cartonNumber, cartonSize: c.cartonSize ?? '', product: c.product, poNumber: c.poNumber,
       contents: c.contents, contentsText: c.contentsText ?? '',
       pieces: String(c.pieces), netKg: c.netKg == null ? '' : String(c.netKg), grossKg: c.grossKg == null ? '' : String(c.grossKg),
-    })) : [],
+    })),
     lines: inv.lines.map((l) => ({
       kind: l.kind, description: l.description, size: l.size ?? '',
       quantity: l.quantity == null ? '' : String(l.quantity),
@@ -125,12 +125,10 @@ function preview(inv: InvoiceDto, d: Draft): InvoiceDto {
     customerReference: nn(d.customerReference), shipmentRef: nn(d.shipmentRef),
     coverNote: nn(d.coverNote), terms: nn(d.terms), bankDetails: nn(d.bankDetails), notes: nn(d.notes),
     lineLayout: d.lineLayout,
-    manifest: inv.kind === 'PROFORMA'
-      ? d.cartons.map((c, i) => ({
-        n: i + 1, cartonNumber: c.cartonNumber, cartonSize: nn(c.cartonSize), product: c.product, poNumber: c.poNumber,
-        contents: c.contents, contentsText: nn(c.contentsText), pieces: cartonPieces(c), netKg: numOrNull(c.netKg), grossKg: numOrNull(c.grossKg),
-      }))
-      : inv.manifest,
+    manifest: d.cartons.map((c, i) => ({
+      n: i + 1, cartonNumber: c.cartonNumber, cartonSize: nn(c.cartonSize), product: c.product, poNumber: c.poNumber,
+      contents: c.contents, contentsText: nn(c.contentsText), pieces: cartonPieces(c), netKg: numOrNull(c.netKg), grossKg: numOrNull(c.grossKg),
+    })),
   };
 }
 
@@ -369,52 +367,50 @@ export function InvoicePage() {
               </div>
             </Card>
 
-            {inv.kind === 'PROFORMA' && (
-              <Card>
-                <div className="card-header"><h3 className="card-title">Cartons</h3>
-                  <div className="flex gap-1">
-                    <button type="button" className="btn-ghost btn-sm" onClick={() => fillCartons.mutate()} disabled={fillCartons.isPending}
-                      title="Copy the cartons entered on the order's Packing tab">
-                      <RefreshCw className="h-3.5 w-3.5" /> {fillCartons.isPending ? 'Copying…' : 'From packing list'}
-                    </button>
-                    <button type="button" className="btn-ghost btn-sm" onClick={addCarton}><Plus className="h-3.5 w-3.5" /> Carton</button>
-                  </div>
+            <Card>
+              <div className="card-header"><h3 className="card-title">Cartons</h3>
+                <div className="flex gap-1">
+                  <button type="button" className="btn-ghost btn-sm" onClick={() => fillCartons.mutate()} disabled={fillCartons.isPending}
+                    title="Copy the cartons entered on the order's Packing tab">
+                    <RefreshCw className="h-3.5 w-3.5" /> {fillCartons.isPending ? 'Copying…' : 'From packing list'}
+                  </button>
+                  <button type="button" className="btn-ghost btn-sm" onClick={addCarton}><Plus className="h-3.5 w-3.5" /> Carton</button>
                 </div>
-                <div className="divide-y divide-ink-100">
-                  {draft.cartons.length === 0 && (
-                    <p className="px-4 py-3 text-xs text-ink-500">No cartons on this proforma. Add them by hand, or copy them from the order's packing list. They print as a packing list under the invoice.</p>
-                  )}
-                  {draft.cartons.map((c, i) => (
-                    <div key={i} className="space-y-1.5 px-3 py-2.5 text-xs">
-                      <div className="grid grid-cols-[4.5rem_1fr_auto] items-center gap-1.5">
-                        <input className="input !py-1 text-xs" value={c.cartonNumber} placeholder="Carton no." aria-label="Carton number" onChange={(e) => setCarton(i, { cartonNumber: e.target.value })} />
-                        <input className="input !py-1 text-xs" dir="auto" value={c.product} placeholder="Product" aria-label="Product" onChange={(e) => setCarton(i, { product: e.target.value })} />
-                        <button type="button" className="btn-ghost btn-sm text-red-600 hover:bg-red-50" aria-label="Remove carton"
-                          onClick={() => setDraft({ ...draft, cartons: draft.cartons.filter((_, j) => j !== i) })}><Trash2 className="h-3.5 w-3.5" /></button>
-                      </div>
-                      <input className="input !py-1 text-xs" dir="auto" aria-label="Contents" placeholder="Contents, e.g. S × 10, M × 12"
-                        value={c.contents.length > 0 ? contentsLabel(c) : c.contentsText}
-                        onChange={(e) => setCarton(i, { contents: [], contentsText: e.target.value })} />
-                      <div className="grid grid-cols-4 gap-1.5">
-                        <input className="input !py-1 text-xs" value={c.cartonSize} placeholder="Size (cm)" aria-label="Carton size" onChange={(e) => setCarton(i, { cartonSize: e.target.value })} />
-                        <input className="input tnum !py-1 text-right text-xs" inputMode="numeric" aria-label="Pieces" placeholder="Pieces"
-                          value={c.contents.length > 0 ? String(cartonPieces(c)) : c.pieces} disabled={c.contents.length > 0}
-                          title={c.contents.length > 0 ? 'The sum of the sizes in this carton' : undefined}
-                          onChange={(e) => setCarton(i, { pieces: e.target.value })} />
-                        <input className="input tnum !py-1 text-right text-xs" inputMode="decimal" aria-label="Net kg" placeholder="Net kg" value={c.netKg} onChange={(e) => setCarton(i, { netKg: e.target.value })} />
-                        <input className="input tnum !py-1 text-right text-xs" inputMode="decimal" aria-label="Gross kg" placeholder="Gross kg" value={c.grossKg} onChange={(e) => setCarton(i, { grossKg: e.target.value })} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-                {draft.cartons.length > 0 && (
-                  <div className="flex items-baseline justify-between border-t border-ink-200 bg-ink-50 px-4 py-2 text-sm">
-                    <span className="font-medium text-ink-700">{draft.cartons.length} carton{draft.cartons.length === 1 ? '' : 's'}</span>
-                    <span className="tnum font-semibold">{draft.cartons.reduce((a, c) => a + cartonPieces(c), 0).toLocaleString()} pcs</span>
-                  </div>
+              </div>
+              <div className="divide-y divide-ink-100">
+                {draft.cartons.length === 0 && (
+                  <p className="px-4 py-3 text-xs text-ink-500">No cartons yet. Add them by hand, or copy them from the order's packing list. They print as a packing list under the document.</p>
                 )}
-              </Card>
-            )}
+                {draft.cartons.map((c, i) => (
+                  <div key={i} className="space-y-1.5 px-3 py-2.5 text-xs">
+                    <div className="grid grid-cols-[4.5rem_1fr_auto] items-center gap-1.5">
+                      <input className="input !py-1 text-xs" value={c.cartonNumber} placeholder="Carton no." aria-label="Carton number" onChange={(e) => setCarton(i, { cartonNumber: e.target.value })} />
+                      <input className="input !py-1 text-xs" dir="auto" value={c.product} placeholder="Product" aria-label="Product" onChange={(e) => setCarton(i, { product: e.target.value })} />
+                      <button type="button" className="btn-ghost btn-sm text-red-600 hover:bg-red-50" aria-label="Remove carton"
+                        onClick={() => setDraft({ ...draft, cartons: draft.cartons.filter((_, j) => j !== i) })}><Trash2 className="h-3.5 w-3.5" /></button>
+                    </div>
+                    <input className="input !py-1 text-xs" dir="auto" aria-label="Contents" placeholder="Contents, e.g. S × 10, M × 12"
+                      value={c.contents.length > 0 ? contentsLabel(c) : c.contentsText}
+                      onChange={(e) => setCarton(i, { contents: [], contentsText: e.target.value })} />
+                    <div className="grid grid-cols-4 gap-1.5">
+                      <input className="input !py-1 text-xs" value={c.cartonSize} placeholder="Size (cm)" aria-label="Carton size" onChange={(e) => setCarton(i, { cartonSize: e.target.value })} />
+                      <input className="input tnum !py-1 text-right text-xs" inputMode="numeric" aria-label="Pieces" placeholder="Pieces"
+                        value={c.contents.length > 0 ? String(cartonPieces(c)) : c.pieces} disabled={c.contents.length > 0}
+                        title={c.contents.length > 0 ? 'The sum of the sizes in this carton' : undefined}
+                        onChange={(e) => setCarton(i, { pieces: e.target.value })} />
+                      <input className="input tnum !py-1 text-right text-xs" inputMode="decimal" aria-label="Net kg" placeholder="Net kg" value={c.netKg} onChange={(e) => setCarton(i, { netKg: e.target.value })} />
+                      <input className="input tnum !py-1 text-right text-xs" inputMode="decimal" aria-label="Gross kg" placeholder="Gross kg" value={c.grossKg} onChange={(e) => setCarton(i, { grossKg: e.target.value })} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {draft.cartons.length > 0 && (
+                <div className="flex items-baseline justify-between border-t border-ink-200 bg-ink-50 px-4 py-2 text-sm">
+                  <span className="font-medium text-ink-700">{draft.cartons.length} carton{draft.cartons.length === 1 ? '' : 's'}</span>
+                  <span className="tnum font-semibold">{draft.cartons.reduce((a, c) => a + cartonPieces(c), 0).toLocaleString()} pcs</span>
+                </div>
+              )}
+            </Card>
 
             <Card>
               <div className="card-header"><h3 className="card-title">Bill to</h3></div>
