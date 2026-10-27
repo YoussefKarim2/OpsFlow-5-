@@ -16,6 +16,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
+import PDFDocument from 'pdfkit';
 import { groupIntoRows, rowToCells, findHeaderRow, extractFromPdf } from './pdf-extractor.js';
 
 const at = (text: string, x: number, y: number, width = text.length * 5) => ({ text, x, y, width });
@@ -780,5 +781,30 @@ describe('layouts from the third round of documents', () => {
     ]));
     assert.equal(r.fields.poNumber, 'LV-303');
     assert.equal(r.matrices.find((x) => x.ledger === 'ORDER')!.computedTotal, 725);
+  });
+});
+
+describe('PDFs that are too long, or locked', () => {
+  test('past 150 pages the rest are named, not read (2000-pages-of-lines)', async () => {
+    const grid = [at('Colour', 50, 700, 30), at('Size', 200, 700, 20), at('Quantity', 320, 700, 40),
+      at('Red', 50, 685, 20), at('S', 200, 685, 8), at('100', 320, 685, 18)];
+    const pages = Array.from({ length: 200 }, (_, i) => ({ pageNumber: i + 1, items: i === 0 ? grid : [] }));
+    const r = await extractFromPdf(Buffer.alloc(0), { reader: async () => pages, placeholderPoNumber: 'X' });
+    const w = r.issues.find((i) => /200 pages; only the first 150 were read/.test(i.message));
+    assert.ok(w, 'the pages left unread must be said');
+    assert.match(w!.message, /Pages 151–200 were not read/);
+    assert.equal(r.matrices.find((x) => x.ledger === 'ORDER')!.computedTotal, 100);
+  });
+
+  test('a password-protected PDF says so, not "damaged"', async () => {
+    const buf = await new Promise<Buffer>((resolve) => {
+      const doc = new PDFDocument({ userPassword: 'secret', ownerPassword: 'owner' });
+      const chunks: Buffer[] = [];
+      doc.on('data', (c: Buffer) => chunks.push(c));
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+      doc.text('PO Number: 9911');
+      doc.end();
+    });
+    await assert.rejects(extractFromPdf(buf), (e: Error) => /password-protected/.test(e.message) && !/damaged/.test(e.message));
   });
 });

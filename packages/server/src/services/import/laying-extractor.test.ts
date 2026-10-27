@@ -149,6 +149,17 @@ describe('laying sheets exported as CSV', () => {
     assert.equal(r.rows[0]!.layers, 140);
     assert.equal(r.rows[0]!.markerLengthM, 2.61);
   });
+
+  test('a European CSV reads "2,35" metres and "1.200" layers as written (t11)', async () => {
+    // Semicolons and decimal commas: Excel in a comma-decimal locale. It read
+    // as 235 m markers and 1.2 layers.
+    const csv = 'Marker No;Fabric;Colour;Size Ratio;Layers;Marker Length;Total Length\n'
+      + 'M1;Jersey;Navy;S-1 M-2;40;2,35;94,00\nM2;Jersey;Red;S-1 M-1;1.200;1,8;2.160,0\n';
+    const r = await extractLayingMarking(Buffer.from(csv));
+    assert.deepEqual(r.rows.map((x) => [x.markerNumber, x.layers, x.markerLengthM, x.totalLengthM]), [
+      ['M1', 40, 2.35, 94], ['M2', 1200, 1.8, 2160],
+    ]);
+  });
 });
 
 describe('a layer count that is not a whole number', () => {

@@ -35,11 +35,14 @@ import {
 import type { ImportIssue, ImportSheetInfo } from '@opsflow/shared';
 import type { ExtractionResult, ExtractedMatrix } from './extractor.js';
 import { detectFileKind } from './file-kind.js';
-import { cellText, toNumber, toDate, buildLineItems, parseFieldOverride } from './extractor.js';
+import {
+  cellText, toNumber, toDate, buildLineItems, parseFieldOverride, isUncachedFormula, uncachedFormulaIssue,
+} from './extractor.js';
 import { toIsoDayOrNull } from '@opsflow/shared';
 import { loadWorkbook, readCsvWorkbook } from './open-workbook.js';
 import { readAgeLayingSheet } from './age-laying-reader.js';
 import { orderSizes, splitColourSize } from './po-lines.js';
+import { BadRequestError } from '../../errors.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Sheet reading
@@ -53,6 +56,12 @@ export interface SheetTable {
   rows: unknown[][];
   /** How table-like this sheet looked. Used to pick the best sheet. */
   score: number;
+  /**
+   * The table's own "Total" row, read in the same columns as the rows, when
+   * it has exactly one — the figure the customer will quote back, and so the
+   * one the rows read are checked against.
+   */
+  totalsRow?: unknown[];
 }
 
 function rawValue(cell: ExcelJS.Cell | undefined): unknown {
@@ -346,6 +355,7 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
   // a right-hand table lost every row the left-hand one did not have.
   const sideEnded = sideMappings.map(() => false);
   let primaryEnded = false;
+  let totalsRow: unknown[] | undefined;
 
   for (let r = headerRowIndex + 1; r <= last; r++) {
     const repeat = repeats.get(r);
@@ -385,6 +395,9 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
       if (isTotalsLabel(firstFilled)) {
         if (r < lastRepeat) continue;
         primaryEnded = true;
+        // Kept for the cross-check only when it totals the whole table: a
+        // sheet in blocks, or with tables side by side, has one per block.
+        if (repeats.size === 0 && sideMappings.length === 0) totalsRow = values;
       } else {
         rows.push(values);
       }
@@ -401,6 +414,7 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
     headers,
     rows,
     score: scoreTable(headers, rows),
+    ...(totalsRow ? { totalsRow } : {}),
   };
 }
 
@@ -484,6 +498,21 @@ export function looksLikeSize(header: string): boolean {
 }
 
 /**
+ * A cell that says "nothing here" in words: blank, a dash, "n/a", "x", "nil".
+ *
+ * How a customer writes an empty size in a grid. Read as text, one "-" under
+ * L made the whole Navy row look like the start of another table and it was
+ * dropped, 60 pieces with it — and a size column where three colours had "-"
+ * was not a size column at all, so 2XL vanished from the order.
+ */
+const EMPTY_CELL_WORDS = new Set(['-', '–', '—', 'n/a', 'x', 'nil']);
+export function isEmptyCell(value: unknown): boolean {
+  if (value == null) return true;
+  const text = String(cellText(value)).trim().toLowerCase();
+  return text === '' || EMPTY_CELL_WORDS.has(text);
+}
+
+/**
  * Find a run of adjacent columns that are a size grid.
  *
  * Both halves matter: the headers must look like sizes, *and* the cells beneath
@@ -498,7 +527,9 @@ export function detectSizeColumns(
 
   headers.forEach((h, index) => {
     if (!h?.trim() || !looksLikeSize(h)) return;
-    const values = rows.slice(0, 30).map((r) => r[index]).filter((v) => v != null && String(v).trim() !== '');
+    // A formula with no saved result still counts: it is a number Excel has
+    // not written down, and the column is reported rather than lost.
+    const values = rows.slice(0, 30).map((r) => r[index]).filter((v) => isUncachedFormula(v) || !isEmptyCell(v));
     if (values.length === 0) return;
     const numeric = values.filter((v) => toNumber(v) != null).length;
     if (numeric / values.length >= 0.8) candidates.push({ index, name: h.trim() });
@@ -636,13 +667,19 @@ function buildLongMatrix(ctx: BuildContext, opts: { sizeFromColour?: boolean } =
     cells,
     total: Object.values(cells).reduce((a, b) => a + b, 0),
   }));
+  const computedTotal = rows.reduce((a, r) => a + r.total, 0);
+
+  // The Total row's quantity, when the table ends in one.
+  const totals = ctx.table.totalsRow;
+  const sheetTotal = totals ? toNumber(totals[qtyCol]) : null;
+  reportSheetTotal(ctx, sheetTotal, computedTotal);
 
   return {
     ledger: 'ORDER',
     sizes: orderSizes(sizeOrder),
     rows,
-    sheetTotal: null,
-    computedTotal: rows.reduce((a, r) => a + r.total, 0),
+    sheetTotal,
+    computedTotal,
   };
 }
 
@@ -658,37 +695,119 @@ function buildWideMatrix(ctx: BuildContext, sizeColumns: Array<{ index: number; 
   const colorCol = columnFor(ctx.analyses, ImportConcept.COLOR);
   if (colorCol == null) return null;
 
+  // The grid's own "Total" column, to the right of the sizes: each colour's
+  // figure as the customer added it up.
+  const lastSize = sizeColumns[sizeColumns.length - 1]!.index;
+  const totalCol = ctx.table.headers.findIndex((h, i) => i > lastSize && isTotalQuantityHeading(h));
+
   const rows: ExtractedMatrix['rows'] = [];
+  const stated: Array<{ color: string; stated: number | null; read: number }> = [];
+  let totalsRow = ctx.table.totalsRow;
   for (const row of ctx.table.rows) {
     const color = String(cellText(row[colorCol])).trim();
     if (!color) continue;
     // A totals row that survived the table read — labelled in the colour
     // column rather than the first one — is the grid restated, not a colour.
-    if (isTotalsLabel(color)) continue;
+    if (isTotalsLabel(color)) { totalsRow ??= row; continue; }
 
     const cells: Record<string, number> = {};
     let total = 0;
     // Words under the sizes mean the grid has ended and another table begun
     // — a bill of materials below the order, its units under S and M. Its
     // rows were read as colours called "Jersey fabric" and "Thread".
-    const wordy = sizeColumns.some((s) => { const v = row[s.index]; return v != null && String(cellText(v)).trim() !== '' && toNumber(v) == null; });
+    const wordy = sizeColumns.some((s) => { const v = row[s.index]; return !isEmptyCell(v) && toNumber(v) == null; });
     if (wordy) continue;
     for (const s of sizeColumns) {
       const qty = toNumber(row[s.index]);
-      if (qty != null && qty > 0) { cells[s.name] = qty; total += qty; }
+      // Added, not assigned: a heading written twice ("S M L S M L") is
+      // one size, and the second column's pieces are as real as the first's.
+      if (qty != null && qty > 0) { cells[s.name] = (cells[s.name] ?? 0) + qty; total += qty; }
     }
-    if (total > 0) rows.push({ color, cells, total });
+    if (total > 0) {
+      rows.push({ color, cells, total });
+      stated.push({ color, stated: totalCol === -1 ? null : toNumber(row[totalCol]), read: total });
+    }
   }
 
   if (rows.length === 0) return null;
 
+  // The same size heading twice. Its columns are added together above, and
+  // said so: they may be two sizes the file failed to tell apart.
+  const seen = new Map<string, number[]>();
+  for (const s of sizeColumns) seen.set(s.name, [...(seen.get(s.name) ?? []), s.index]);
+  const repeated = [...seen].filter(([, at]) => at.length > 1);
+  if (repeated.length > 0) {
+    const where = repeated.map(([name, at]) => `"${name}" in columns ${at.map((i) => columnLetter(i + 1)).join(' and ')}`);
+    ctx.issues.push({
+      level: 'WARNING', field: null, sheet: ctx.table.sheetName, cell: null,
+      message:
+        `${repeated.length === 1 ? 'A size heading appears' : 'Size headings appear'} more than once — ${where.join('; ')} — `
+        + 'so the quantities under each were added together. If they are different sizes (Youth and Adult, say), '
+        + 'rename the headings in the file and upload it again.',
+    });
+  }
+
+  const computedTotal = rows.reduce((a, r) => a + r.total, 0);
+
+  // The sheet's own total: the Total row (under the Total column if there is
+  // one, else across the sizes), or failing that the Total column summed.
+  let sheetTotal: number | null = null;
+  if (totalsRow) {
+    sheetTotal = totalCol !== -1 ? toNumber(totalsRow[totalCol]) : null;
+    if (sheetTotal == null) {
+      const across = sizeColumns.map((s) => toNumber(totalsRow![s.index])).filter((n): n is number => n != null);
+      sheetTotal = across.length > 0 ? across.reduce((a, b) => a + b, 0) : null;
+    }
+  } else if (totalCol !== -1 && stated.every((s) => s.stated != null)) {
+    sheetTotal = stated.reduce((a, s) => a + s.stated!, 0);
+  }
+  const offRows = stated.filter((s) => s.stated != null && Math.abs(s.stated - s.read) > 1e-6);
+  reportSheetTotal(ctx, sheetTotal, computedTotal, offRows);
+
   return {
     ledger: 'ORDER',
-    sizes: sizeColumns.map((s) => s.name),
+    sizes: [...seen.keys()],
     rows,
-    sheetTotal: null,
-    computedTotal: rows.reduce((a, r) => a + r.total, 0),
+    sheetTotal,
+    computedTotal,
   };
+}
+
+/**
+ * "Total", "Total Qty", "Total pcs", "Qty total" — a column of pieces, not
+ * "Total Price" or "Total Amount", which add up something else.
+ */
+function isTotalQuantityHeading(header: string | undefined): boolean {
+  const h = (header ?? '').trim().toLowerCase().replace(/[.:]+$/, '');
+  return /^(grand\s+)?totals?(\s+(qty|quantity|pcs|pieces|units))?$/.test(h) || /^(qty|quantity|pcs|pieces)\s+total$/.test(h);
+}
+
+/**
+ * Say so when the sheet's own total disagrees with the rows read.
+ *
+ * The total is what the customer will quote back; a difference means a cell
+ * the reader could not read as a number, a row it took for something else, or
+ * a total the customer's sheet got wrong — any of which is for a person to
+ * look at before the order exists. The rows are what is imported.
+ */
+function reportSheetTotal(
+  ctx: BuildContext,
+  sheetTotal: number | null,
+  computedTotal: number,
+  offRows: ReadonlyArray<{ color: string; stated: number | null; read: number }> = [],
+): void {
+  const totalOff = sheetTotal != null && Math.abs(sheetTotal - computedTotal) > 1e-6;
+  if (!totalOff && offRows.length === 0) return;
+  const rowsSaid = offRows.slice(0, 3).map((r) => `${r.color} (its total says ${r.stated!.toLocaleString('en-US')}, read ${r.read.toLocaleString('en-US')})`);
+  ctx.issues.push({
+    level: 'WARNING', field: null, sheet: ctx.table.sheetName, cell: null,
+    message:
+      (totalOff
+        ? `The sheet's total says ${sheetTotal.toLocaleString('en-US')} pieces, but the rows read add to ${computedTotal.toLocaleString('en-US')}. `
+        : 'A colour\'s own total disagrees with its sizes. ')
+      + (rowsSaid.length > 0 ? `Check ${rowsSaid.join('; ')}${offRows.length > 3 ? ` and ${offRows.length - 3} more` : ''}. ` : '')
+      + 'Compare the grid with the file before confirming; the rows as read are what will be imported.',
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -908,6 +1027,12 @@ export async function extractTabular(
   const columns = analyseColumns(chosen.headers, chosen.rows, options.savedMapping ?? {});
   if (options.overrides) {
     for (const [indexRaw, concept] of Object.entries(options.overrides)) {
+      // The mapping arrives from the browser as plain strings. One that is
+      // not a concept failed further down as "Cannot read properties of
+      // undefined" — a 500 for what is a bad request.
+      if (!Object.prototype.hasOwnProperty.call(CONCEPT_META, concept)) {
+        throw new BadRequestError(`"${String(concept)}" is not a column type the importer knows. Pick the column's meaning from the list.`);
+      }
       const column = columns.find((c) => c.index === Number(indexRaw));
       if (!column) continue;
       column.concept = concept;
@@ -965,6 +1090,15 @@ export async function extractTabular(
             + 'so no quantities were read.',
     });
   }
+
+  // Quantity cells that are formulas with no saved result read as empty.
+  const quantityColumns = new Set([
+    ...(layout === 'WIDE' ? sizeColumns.map((s) => s.index) : []),
+    ...columns.filter((c) => c.concept === ImportConcept.QUANTITY).map((c) => c.index),
+  ]);
+  let uncached = 0;
+  for (const row of chosen.rows) for (const i of quantityColumns) if (isUncachedFormula(row[i])) uncached++;
+  if (uncached > 0) issues.push(uncachedFormulaIssue(uncached, chosen.sheetName));
 
   // Scalars: the header block above the table, then any column mapped to a
   // scalar concept (its first value), then whatever the coordinator typed.
@@ -1026,6 +1160,10 @@ export async function extractTabular(
     // WIDE files legitimately have no size *column* — the sizes are headers —
     // and a file whose sizes sit inside the colour text has already been read.
     if (missing === ImportConcept.SIZE && (layout === 'WIDE' || sizesFromColour)) continue;
+    // Nor a quantity column: in a size grid the quantities are the cells
+    // under the sizes, and saying none was found beside a grid that was read
+    // in full sent people looking for a problem that was not there.
+    if (missing === ImportConcept.QUANTITY && layout === 'WIDE') continue;
     issues.push({
       level: 'WARNING', field: missing, sheet: chosen.sheetName, cell: null,
       message: `No column was identified as ${CONCEPT_META[missing].label}. `

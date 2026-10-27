@@ -24,6 +24,15 @@ const WORKBOOK_MIME_TYPES = new Set([
 /** And for a PDF, which customers send at least as often as a workbook. */
 const PDF_MIME_TYPES = new Set(['application/pdf', 'application/octet-stream']);
 
+/**
+ * A file name that could name a path rather than a file: any separator, or a
+ * `..` segment. Separators are refused outright, so after that the only
+ * traversal left is a name that *is* `..` or begins with it.
+ */
+export function isUnsafeUploadName(name: string): boolean {
+  return /[/\\]/.test(name) || name.startsWith('..');
+}
+
 export const workbookUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024, files: 1 },
@@ -33,8 +42,10 @@ export const workbookUpload = multer({
     file.originalname = decodeUploadName(file.originalname);
 
     // A filename is attacker-controlled: reject any path separator or traversal
-    // before it can reach a storage key.
-    if (/[/\\]|\.\./.test(file.originalname)) {
+    // before it can reach a storage key. Traversal is a ".." *segment* — a
+    // leading one, or one before a separator — not two dots anywhere:
+    // "PO..final.xlsx" is a name people really type, and was refused.
+    if (isUnsafeUploadName(file.originalname)) {
       cb(new BadRequestError('That file name is not allowed.'));
       return;
     }

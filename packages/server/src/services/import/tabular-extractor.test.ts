@@ -924,3 +924,152 @@ describe('reading a customer workbook: fixes after the load-build template', () 
     );
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// System audit, 2026-10-27: the import findings, each pinned on its repro.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const warnings = (r: { issues: Array<{ level: string; message: string }> }) =>
+  r.issues.filter((i) => i.level === 'WARNING').map((i) => i.message);
+
+describe('a dash, "n/a" or "x" in a size grid is an empty cell', () => {
+  const head = [['PO Number', 'PO-7781'], ['Customer', 'Acme FC'], []];
+
+  test('one "-" no longer drops the colour row (dash-one-cell)', async () => {
+    const rows = [...head, ['Colour', 'XS', 'S', 'M', 'L', 'XL', 'Total'],
+      ['Navy', 10, 20, '-', 30, 10, 70], ['Red', 5, 5, 5, 5, 5, 25], ['White', 8, 8, 8, 8, 8, 40],
+      ['Black', 1, 2, 3, 4, 5, 15], ['Green', 2, 2, 2, 2, 2, 10], ['Total', 26, 37, 18, 49, 30, 160]];
+    const r = await extractTabular(await buildWorkbook([{ name: 'Order', rows }]));
+    const m = r.matrices[0]!;
+    assert.equal(m.computedTotal, 160, 'Navy\'s 70 pieces were dropped with the row');
+    assert.deepEqual(m.rows.find((x) => x.color === 'Navy')!.cells, { XS: 10, S: 20, L: 30, XL: 10 });
+    assert.equal(m.sheetTotal, 160);
+    assert.deepEqual(warnings(r), [], 'a total that agrees, and a grid read in full, need no warning');
+  });
+
+  test('a size column of mostly "-" is still a size column (dash-sparse-size)', async () => {
+    const rows = [...head, ['Colour', 'S', 'M', 'L', 'XL', '2XL', 'Total'],
+      ['Navy', 10, 20, 30, 10, 12, 82], ['Red', 5, 5, 5, 5, '-', 20], ['White', 8, 8, 8, 8, '-', 32],
+      ['Black', 1, 2, 3, 4, '-', 10], ['Total', 24, 35, 46, 27, 12, 144]];
+    const m = (await extractTabular(await buildWorkbook([{ name: 'Order', rows }]))).matrices[0]!;
+    assert.deepEqual(m.sizes, ['S', 'M', 'L', 'XL', '2XL']);
+    assert.equal(m.computedTotal, 144);
+  });
+
+  test('"n/a", "x", "nil" and an en dash read as empty too', async () => {
+    const rows = [['Colour', 'S', 'M', 'L'], ['Navy', 10, 'n/a', 30], ['Red', 'X', 5, ' nil '], ['Teal', '–', 2, 2]];
+    const m = (await extractTabular(await buildWorkbook([{ name: 'PO', rows }]))).matrices[0]!;
+    assert.deepEqual(m.rows.map((x) => [x.color, x.cells]), [['Navy', { S: 10, L: 30 }], ['Red', { M: 5 }], ['Teal', { M: 2, L: 2 }]]);
+  });
+
+  test('a size grid is not told it has no Quantity column', async () => {
+    const r = await extractTabular(await buildWorkbook([{ name: 'PO', rows: [['Colour', 'S', 'M'], ['Navy', 1, 2]] }]));
+    assert.ok(!warnings(r).some((w) => /identified as Quantity/.test(w)));
+  });
+});
+
+describe('the sheet\'s own total is checked against the rows read', () => {
+  test('a Total column that disagrees is a warning naming the colour', async () => {
+    const rows = [['Colour', 'S', 'M', 'L', 'Total'], ['Navy', 10, 20, 30, 60], ['Red', 5, 5, 5, 99]];
+    const r = await extractTabular(await buildWorkbook([{ name: 'PO', rows }]));
+    assert.equal(r.matrices[0]!.sheetTotal, 159);
+    assert.equal(r.matrices[0]!.computedTotal, 75);
+    const w = warnings(r).find((m) => /total says 159/.test(m));
+    assert.ok(w, 'the difference must be said');
+    assert.match(w!, /Red \(its total says 99, read 15\)/);
+  });
+
+  test('a Total row under a long table is read and compared', async () => {
+    const rows = [['Colour', 'Size', 'Qty'], ['Navy', 'S', 10], ['Navy', 'M', 10], ['Total', '', 25]];
+    const r = await extractTabular(await buildWorkbook([{ name: 'PO', rows }]));
+    assert.equal(r.matrices[0]!.sheetTotal, 25);
+    assert.ok(warnings(r).some((m) => /total says 25 pieces, but the rows read add to 20/.test(m)));
+  });
+
+  test('a "Total Price" column is not a total of pieces', async () => {
+    const rows = [['Colour', 'S', 'M', 'Total Price'], ['Navy', 10, 20, 450]];
+    const r = await extractTabular(await buildWorkbook([{ name: 'PO', rows }]));
+    assert.equal(r.matrices[0]!.sheetTotal, null);
+    assert.ok(!warnings(r).some((m) => /total says/.test(m)));
+  });
+});
+
+describe('a size heading written twice', () => {
+  test('its columns are added, said so, and the size listed once (t10b)', async () => {
+    const rows = [['PO Number', 'PO-88'], [], ['Colour', 'S', 'M', 'L', 'S', 'M', 'L'], ['Navy', 10, 10, 10, 20, 20, 20], ['Red', 5, 5, 5, 7, 7, 7]];
+    const r = await extractTabular(await buildWorkbook([{ name: 'PO', rows }]));
+    const m = r.matrices[0]!;
+    assert.deepEqual(m.sizes, ['S', 'M', 'L']);
+    assert.deepEqual(m.rows.map((x) => [x.color, x.cells]), [['Navy', { S: 30, M: 30, L: 30 }], ['Red', { S: 12, M: 12, L: 12 }]]);
+    const cellSum = m.rows.reduce((a, x) => a + Object.values(x.cells).reduce((b, q) => b + q, 0), 0);
+    assert.equal(cellSum, 126, 'the grid carried 81 while the total said 126');
+    assert.equal(m.computedTotal, cellSum);
+    assert.ok(warnings(r).some((w) => /"S" in columns B and E/.test(w)));
+  });
+
+  test('Youth and Adult over the same sizes stay six sizes, with no warning', async () => {
+    const rows = [['PO Number', 'PO-88'], [], ['', 'Youth', '', '', 'Adult', '', ''], ['Colour', 'S', 'M', 'L', 'S', 'M', 'L'], ['Navy', 10, 10, 10, 20, 20, 20]];
+    const r = await extractTabular(await buildWorkbook([{ name: 'PO', rows }]));
+    assert.equal(r.matrices[0]!.sizes.length, 6);
+    assert.ok(!warnings(r).some((w) => /more than once/.test(w)));
+  });
+});
+
+describe('a formula with no saved result', () => {
+  test('is counted and the coordinator told to re-save in Excel', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('PO');
+    ws.addRow(['Colour', 'S', 'M']);
+    ws.addRow(['Navy', { formula: '5*2' }, 20]);
+    const r = await extractTabular(Buffer.from(await wb.xlsx.writeBuffer()));
+    assert.deepEqual(r.matrices[0]!.rows[0]!.cells, { M: 20 });
+    assert.ok(warnings(r).some((w) => /1 quantity cell on PO holds a formula with no saved result.*re-save/.test(w)));
+  });
+});
+
+describe('a column mapping that names no concept', () => {
+  test('is a 400, not a TypeError (t9)', async () => {
+    await assert.rejects(
+      extractTabular(Buffer.from('Colour,Size,Quantity\nNavy,S,10\n'), { overrides: { 0: 'NOT_A_CONCEPT' as ImportConcept } }),
+      (e: Error & { status?: number }) => e.status === 400 && /NOT_A_CONCEPT/.test(e.message),
+    );
+  });
+});
+
+describe('CSV values are read as written', () => {
+  test('a PO with leading zeros and a style like 2E5 stay as text (t8)', async () => {
+    const r = await extractTabular(Buffer.from('PO Number,000123\n\nColour,Size,Quantity\nNavy,S,10\n'), { fileName: 'po.csv' });
+    assert.equal(r.fields.poNumber, '000123');
+    const r2 = await extractTabular(Buffer.from('Style,Colour,Size,Quantity\n0012345,Navy,S,10\n2E5,Red,M,4\n'), { fileName: 'po.csv' });
+    assert.equal(r2.fields.styleNumber, '0012345');
+    assert.deepEqual(r2.matrices[0]!.rows.map((x) => x.color), ['0012345 — Navy', '2E5 — Red']);
+  });
+
+  test('a semicolon CSV reads "1.200" as twelve hundred', async () => {
+    const r = await extractTabular(Buffer.from('Colour;Size;Quantity\nNavy;S;1.200\nNavy;M;800\nRed;S;1.500\n'));
+    assert.equal(r.matrices[0]!.computedTotal, 3500, 'it read 802.7 pieces');
+  });
+
+  test('a European size grid reads its thousands', async () => {
+    const r = await extractTabular(Buffer.from('Colour;S;M;L\nNavy;1.200;2.400;600\n'));
+    assert.deepEqual(r.matrices[0]!.rows[0]!.cells, { S: 1200, M: 2400, L: 600 });
+  });
+
+  test('an English CSV is untouched: "1,200" quoted is twelve hundred', async () => {
+    const r = await extractTabular(Buffer.from('Colour,Size,Quantity,Unit Price\nNavy,S,"1,200",4.90\n'));
+    assert.equal(r.matrices[0]!.computedTotal, 1200);
+  });
+
+  test('a UTF-16 CSV (Excel "Unicode Text") is read', async () => {
+    const buf = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('Colour,Size,Quantity\r\nNavy,S,10\r\n', 'utf16le')]);
+    assert.equal((await extractTabular(buf)).matrices[0]!.computedTotal, 10);
+  });
+
+  test('an Arabic CSV saved as Windows-1256 keeps its colours apart (t13)', async () => {
+    // أسود (black) and أحمر (red) in code page 1256.
+    const black = [0xc3, 0xd3, 0xe6, 0xcf], red = [0xc3, 0xcd, 0xe3, 0xd1];
+    const buf = Buffer.from([...Buffer.from('Colour,Size,Quantity\n'), ...black, ...Buffer.from(',S,10\n'), ...red, ...Buffer.from(',S,25\n')]);
+    const m = (await extractTabular(buf)).matrices[0]!;
+    assert.deepEqual(m.rows.map((x) => [x.color, x.cells]), [['أسود', { S: 10 }], ['أحمر', { S: 25 }]]);
+  });
+});

@@ -145,6 +145,17 @@ export interface PdfPage {
  * perfectly ordinary thing for someone to attach, and it deserves a sentence,
  * not a crash.
  */
+/**
+ * The most pages read from one PDF.
+ *
+ * A purchase order is a few pages; the longest real one is under ten. A
+ * 2,000-page document took minutes and a great deal of memory to read, every
+ * time it was opened — preview, remap, commit — and holds no order the first
+ * 150 pages do not. The rest are named in a warning rather than dropped
+ * silently.
+ */
+export const MAX_PDF_PAGES = 150;
+
 const STANDARD_FONTS_DIR = join(dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json')), 'standard_fonts') + '/';
 
 async function readPdf(buffer: Buffer): Promise<PdfPage[]> {
@@ -163,9 +174,18 @@ async function readPdf(buffer: Buffer): Promise<PdfPage[]> {
       // warns on every document that uses one, which is most of them.
       standardFontDataUrl: STANDARD_FONTS_DIR,
     }).promise;
-  } catch {
+  } catch (err) {
     // Deliberately not re-thrown: pdf.js's own exception types are unknown to
     // the error handler and came back as a 500 carrying a stack trace.
+    //
+    // A PDF that needs a password to open is not damaged, and "download it
+    // again" would not help — it has to be sent without the password.
+    if ((err as { name?: string } | null)?.name === 'PasswordException') {
+      throw new BadRequestError(
+        'This PDF is password-protected, so it cannot be read. '
+        + 'Ask for a copy without a password, or open it, print it to a new PDF, and upload that.',
+      );
+    }
     throw new BadRequestError(
       'This PDF could not be opened — the file looks incomplete or damaged. '
       + 'Try downloading it again, or ask for it to be re-sent.',
@@ -174,6 +194,9 @@ async function readPdf(buffer: Buffer): Promise<PdfPage[]> {
 
   const pages: PdfPage[] = [];
   for (let n = 1; n <= doc.numPages; n++) {
+    // Past the cap a page is listed, not read, so the reader can say which
+    // pages it left — opening each one is the expensive part.
+    if (n > MAX_PDF_PAGES) { pages.push({ pageNumber: n, items: [] }); continue; }
     const page = await doc.getPage(n);
     const content = await page.getTextContent();
     const items: TextItem[] = [];
@@ -389,7 +412,19 @@ export async function extractFromPdf(
   options: PdfExtractionOptions = {},
 ): Promise<ExtractionResult> {
   const issues: ImportIssue[] = [];
-  const pages = await (options.reader ?? readPdf)(buffer);
+  const allPages = await (options.reader ?? readPdf)(buffer);
+  const pages = allPages.slice(0, MAX_PDF_PAGES);
+  if (allPages.length > MAX_PDF_PAGES) {
+    const first = allPages[MAX_PDF_PAGES]!.pageNumber;
+    const last = allPages[allPages.length - 1]!.pageNumber;
+    issues.push({
+      level: 'WARNING', field: null, sheet: null, cell: null,
+      message:
+        `This PDF has ${allPages.length.toLocaleString('en-US')} pages; only the first ${MAX_PDF_PAGES} were read. `
+        + `Page${first === last ? ` ${first} was` : `s ${first}–${last} were`} not read — if the order continues there, `
+        + 'upload those pages as a separate PDF.',
+    });
+  }
 
   const totalItems = pages.reduce((a, p) => a + p.items.length, 0);
 

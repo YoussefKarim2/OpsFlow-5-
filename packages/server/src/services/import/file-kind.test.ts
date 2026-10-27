@@ -13,6 +13,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { detectFileKind } from './file-kind.js';
+import { isUnsafeUploadName } from './upload-guard.js';
 
 const zip = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0, 0, 0, 0]);
 const pdf = Buffer.from('%PDF-1.7\n...');
@@ -50,5 +51,36 @@ describe('refusing what cannot be read, in words that help', () => {
 
   test('an empty file is refused rather than read as empty data', () => {
     assert.throws(() => detectFileKind(Buffer.alloc(0), 'empty.csv'));
+  });
+
+  test('a password-protected .xlsx is called that, not an older .xls', () => {
+    // Office wraps an encrypted workbook in the OLE2 container an .xls uses,
+    // with a stream named EncryptedPackage.
+    const encrypted = Buffer.concat([xls, Buffer.alloc(64), Buffer.from('EncryptedPackage', 'utf16le')]);
+    assert.throws(() => detectFileKind(encrypted, 'order.xlsx'), (e: Error) => /password-protected/.test(e.message) && !/older \.xls/.test(e.message));
+  });
+});
+
+describe('UTF-16 text is a CSV', () => {
+  test('little-endian, with its byte-order mark', () => {
+    const buf = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('Colour,Size,Qty\r\nNavy,S,10\r\n', 'utf16le')]);
+    assert.equal(detectFileKind(buf, 'order.csv'), 'csv');
+  });
+  test('big-endian, with its byte-order mark', () => {
+    const le = Buffer.from('Colour,Size,Qty\r\n', 'utf16le');
+    const be = Buffer.from(le.map((_, i) => le[i ^ 1]!));
+    assert.equal(detectFileKind(Buffer.concat([Buffer.from([0xfe, 0xff]), be]), 'order.csv'), 'csv');
+  });
+});
+
+describe('the upload name check', () => {
+  test('two dots inside a name are not traversal', () => {
+    assert.equal(isUnsafeUploadName('PO..final.xlsx'), false);
+    assert.equal(isUnsafeUploadName('order v2..csv'), false);
+  });
+  test('a path, or a name that starts as one, is refused', () => {
+    for (const n of ['../etc/passwd', '..\\boot.ini', '..', '..xlsx', 'a/b.xlsx', 'a\\b.xlsx']) {
+      assert.equal(isUnsafeUploadName(n), true, n);
+    }
   });
 });
