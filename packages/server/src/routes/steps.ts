@@ -297,11 +297,13 @@ stepsRouter.post(
 
     // A PO attached to an order with no Main Order fills it, and the Cut
     // Order with it. Never fails the upload: the file is attached either way.
-    let filled: { pieces: number; cut: number } | null = null;
+    // The reader's warnings travel with it: "filled 300 pcs" alone hid a
+    // total that disagreed with the sheet, or a row it could not read.
+    let filled: { pieces: number; cut: number; warnings: string[] } | null = null;
     if (['CUSTOMER_PO', 'CUSTOMER_REFERENCE'].includes(parsed.documentType)) {
       try {
         const r = await fillMainOrderFromDocuments(orderId, { id: user.id, name: user.name });
-        if (r.filled) filled = { pieces: r.pieces, cut: r.cut };
+        if (r.filled) filled = { pieces: r.pieces, cut: r.cut, warnings: r.warnings };
       } catch (err) {
         console.error('[attachments] filling the Main Order from the PO failed:', err);
       }

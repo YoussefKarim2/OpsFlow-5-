@@ -73,6 +73,8 @@ export function AttachmentsPanel({
       toast.success(`"${r.data.fileName}" attached` + (r.filledMainOrder
         ? `. Main Order filled from it: ${r.filledMainOrder.pieces.toLocaleString()} pcs; Cut Order ${r.filledMainOrder.cut.toLocaleString()}.`
         : ''));
+      // What the reader was unsure of, so the grid it wrote is checked.
+      for (const w of r.filledMainOrder?.warnings?.slice(0, 3) ?? []) toast.error(w);
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : 'Could not attach that file.'),
   });

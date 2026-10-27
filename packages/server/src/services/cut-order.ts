@@ -9,6 +9,7 @@
  */
 
 import { QtyLedger, computeCutMatrix, type QtyCell } from '@opsflow/shared';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
 import { ORDER_INCLUDE, deriveOrder, type FullOrder } from './order-service.js';
 
@@ -25,24 +26,31 @@ export const CUT_ORDER_INPUT_LEDGERS: readonly string[] = [QtyLedger.ORDER, QtyL
 
 /** Recalculate the CUT ledger and store it. Returns the new and previous totals. */
 export async function writeCutOrder(order: FullOrder): Promise<{ total: number; before: number }> {
+  return prisma.$transaction((tx) => writeCutOrderIn(tx, order));
+}
+
+/**
+ * The same, inside a transaction the caller already holds — so a Main Order
+ * and the Cut Order calculated from it are written together or not at all.
+ * `order` must have been loaded inside that transaction.
+ */
+export async function writeCutOrderIn(tx: Prisma.TransactionClient, order: FullOrder): Promise<{ total: number; before: number }> {
   const d = deriveOrder(order);
   const cutPct = Number(order.cutPercentage.toString());
   const cutCells: QtyCell[] = computeCutMatrix(d.cells, d.colors, d.sizes, cutPct);
 
-  await prisma.$transaction(async (tx) => {
-    // Recorded separately from the rows: when stock covers every cell the
-    // cut order is empty, and "generated, nothing to cut" must stay
-    // distinguishable from "never generated" — see `shouldRefreshCutOrder`.
-    await tx.order.update({ where: { id: order.id }, data: { cutOrderGeneratedAt: new Date() } });
-    await tx.stageQuantity.deleteMany({ where: { orderId: order.id, ledger: 'CUT' } });
-    if (cutCells.length > 0) {
-      await tx.stageQuantity.createMany({
-        data: cutCells.map((c) => ({
-          orderId: order.id, orderColorId: c.colorId, orderSizeId: c.sizeId, ledger: 'CUT' as const, qty: c.qty,
-        })),
-      });
-    }
-  });
+  // Recorded separately from the rows: when stock covers every cell the
+  // cut order is empty, and "generated, nothing to cut" must stay
+  // distinguishable from "never generated" — see `shouldRefreshCutOrder`.
+  await tx.order.update({ where: { id: order.id }, data: { cutOrderGeneratedAt: new Date() } });
+  await tx.stageQuantity.deleteMany({ where: { orderId: order.id, ledger: 'CUT' } });
+  if (cutCells.length > 0) {
+    await tx.stageQuantity.createMany({
+      data: cutCells.map((c) => ({
+        orderId: order.id, orderColorId: c.colorId, orderSizeId: c.sizeId, ledger: 'CUT' as const, qty: c.qty,
+      })),
+    });
+  }
 
   return { total: cutCells.reduce((a, c) => a + c.qty, 0), before: d.totals[QtyLedger.CUT] ?? 0 };
 }

@@ -68,6 +68,8 @@ export function CustomerReferenceTab({ orderId }: { orderId: string }) {
       );
       if (res.filledMainOrder) {
         for (const k of ['matrix', 'order']) void qc.invalidateQueries({ queryKey: [k, orderId] });
+        // What the reader was unsure of, so the grid it wrote is checked.
+        for (const w of res.filledMainOrder.warnings?.slice(0, 3) ?? []) toast.error(w);
       }
     },
     onError: (e) => toast.error(e),
