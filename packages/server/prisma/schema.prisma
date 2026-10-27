@@ -1344,6 +1344,9 @@ model Invoice {
   terms             String?
   bankDetails       String?
   notes             String?
+  /// DETAILED lists every colour and size; SUMMARY one line per order with its
+  /// total pieces, rate and amount. The stored lines are the same either way.
+  lineLayout        String        @default("DETAILED")
   /// The order's PO, name, style and client as they were when the document
   /// was last built — the header of an issued invoice does not follow a rename.
   orderRef          Json?

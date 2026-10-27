@@ -16,7 +16,7 @@
  * that is the document the office already knows how to read.
  */
 
-import { amountInWords, computeInvoiceTotals, fmtDate, fmtMoney, InvoiceKind, InvoiceLineKind, InvoiceStatus, type InvoiceDto } from '@opsflow/shared';
+import { amountInWords, computeInvoiceTotals, fmtDate, fmtMoney, InvoiceKind, InvoiceLineKind, InvoiceStatus, summariseGoods, type InvoiceDto } from '@opsflow/shared';
 import { clsx } from './ui';
 
 const money = (n: number | null | undefined) => (n == null ? '—' : fmtMoney(n, '', 2));
@@ -48,6 +48,9 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
   // Every order the document covers; a JSON saved before documents could
   // cover several orders has only the one.
   const orders = doc.orders?.length ? doc.orders : [doc.order];
+  // "Total only": one line per order, its pieces, rate and amount. The lines
+  // themselves and every total below are the same as the detailed listing.
+  const summary = doc.lineLayout === 'SUMMARY' ? summariseGoods(doc.lines, orders) : null;
   const title = isInvoice ? 'INVOICE' : 'PROFORMA INVOICE';
   const seller = doc.seller;
   const sellerLine = [seller.address, seller.taxId ? `Tax ID: ${seller.taxId}` : null, seller.email, seller.website]
@@ -135,7 +138,7 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
               <tr className="bg-[#1f2328] text-left text-[9.5px] font-semibold uppercase tracking-wider text-white">
                 <th className="w-7 px-3 py-2">#</th>
                 <th className="whitespace-nowrap px-2 py-2">Item &amp; description</th>
-                <th className="w-28 px-2 py-2">Size</th>
+                {!summary && <th className="w-28 px-2 py-2">Size</th>}
                 <th className="w-16 px-2 py-2 text-right">Qty</th>
                 <th className="w-20 px-2 py-2 text-right">Rate</th>
                 <th className="w-24 px-3 py-2 text-right">Amount</th>
@@ -143,9 +146,20 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
             </thead>
             <tbody>
               {goods.length === 0 && (
-                <tr><td colSpan={6} className="px-3 py-4 text-center italic text-ink-400">No goods lines.</td></tr>
+                <tr><td colSpan={summary ? 5 : 6} className="px-3 py-4 text-center italic text-ink-400">No goods lines.</td></tr>
               )}
-              {goods.map((l, i) => (
+              {summary?.map((l, i) => (
+                <tr key={i} className="border-b border-ink-200 align-top">
+                  <td className="px-3 py-2 text-ink-500">{i + 1}</td>
+                  <td className="px-2 py-2 font-semibold"><T>{l.description}</T></td>
+                  <td className="tnum px-2 py-2 text-right">{qty(l.quantity)}</td>
+                  <td className="tnum px-2 py-2 text-right" title={l.mixedRates ? 'Average rate: the lines of this order carry different rates' : undefined}>
+                    {rate(l.unitPrice)}{l.mixedRates && <span className="text-ink-400"> avg</span>}
+                  </td>
+                  <td className="tnum px-3 py-2 text-right font-medium">{money(l.lineTotal)}</td>
+                </tr>
+              ))}
+              {!summary && goods.map((l, i) => (
                 <tr key={l.id || i} className="border-b border-ink-200 align-top">
                   <td className="px-3 py-2 text-ink-500">{i + 1}</td>
                   <td className="px-2 py-2 font-semibold"><T>{l.description}</T></td>

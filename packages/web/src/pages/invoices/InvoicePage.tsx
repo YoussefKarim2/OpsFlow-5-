@@ -30,6 +30,7 @@ interface Draft {
   billTo: string; billToAddress: string; billToEmail: string;
   customerReference: string; shipmentRef: string; shippedOn: string;
   coverNote: string; terms: string; bankDetails: string; notes: string;
+  lineLayout: 'DETAILED' | 'SUMMARY';
   lines: LineDraft[];
 }
 
@@ -47,6 +48,7 @@ function fromServer(inv: InvoiceDto): Draft {
     billTo: inv.billTo, billToAddress: inv.billToAddress ?? '', billToEmail: inv.billToEmail ?? '',
     customerReference: inv.customerReference ?? '', shipmentRef: inv.shipmentRef ?? '', shippedOn: day(inv.shippedOn),
     coverNote: inv.coverNote ?? '', terms: inv.terms ?? '', bankDetails: inv.bankDetails ?? '', notes: inv.notes ?? '',
+    lineLayout: inv.lineLayout,
     lines: inv.lines.map((l) => ({
       kind: l.kind, description: l.description, size: l.size ?? '',
       quantity: l.quantity == null ? '' : String(l.quantity),
@@ -68,6 +70,7 @@ function toBody(d: Draft): InvoiceEditBody {
     billTo: d.billTo.trim(), billToAddress: nn(d.billToAddress), billToEmail: nn(d.billToEmail),
     customerReference: nn(d.customerReference), shipmentRef: nn(d.shipmentRef), shippedOn: d.shippedOn || null,
     coverNote: nn(d.coverNote), terms: nn(d.terms), bankDetails: nn(d.bankDetails), notes: nn(d.notes),
+    lineLayout: d.lineLayout,
     lines: d.lines.map((l) => ({
       kind: l.kind, description: l.description.trim(), size: nn(l.size),
       quantity: l.kind === 'ITEM' ? numOrNull(l.quantity) : null,
@@ -99,6 +102,7 @@ function preview(inv: InvoiceDto, d: Draft): InvoiceDto {
     paymentTerms: nn(d.paymentTerms), billTo: d.billTo, billToAddress: nn(d.billToAddress), billToEmail: nn(d.billToEmail),
     customerReference: nn(d.customerReference), shipmentRef: nn(d.shipmentRef),
     coverNote: nn(d.coverNote), terms: nn(d.terms), bankDetails: nn(d.bankDetails), notes: nn(d.notes),
+    lineLayout: d.lineLayout,
   };
 }
 
@@ -259,6 +263,26 @@ export function InvoicePage() {
       <div className={clsx('grid gap-5', editable && 'xl:grid-cols-[21rem_minmax(0,1fr)] 2xl:grid-cols-[26rem_minmax(0,1fr)]')}>
         {editable && (
           <div className="no-print space-y-4">
+            <Card>
+              <div className="card-header"><h3 className="card-title">On the document</h3></div>
+              <div className="space-y-2 p-4">
+                <div className="flex rounded-md border border-ink-300 p-0.5" role="radiogroup" aria-label="How the goods are listed">
+                  {([['DETAILED', 'By colour & size'], ['SUMMARY', 'Total only']] as const).map(([v, label]) => (
+                    <button
+                      key={v} type="button" role="radio" aria-checked={draft.lineLayout === v}
+                      onClick={() => set('lineLayout', v)}
+                      className={clsx('flex-1 rounded px-2.5 py-1 text-xs font-medium', draft.lineLayout === v ? 'bg-accent-600 text-white' : 'text-ink-600 hover:bg-ink-50')}
+                    >{label}</button>
+                  ))}
+                </div>
+                <p className="text-2xs text-ink-500">
+                  {draft.lineLayout === 'SUMMARY'
+                    ? 'One line per order: total pieces, rate and amount, without colours or sizes. The lines below and the totals are unchanged.'
+                    : 'Every colour with its sizes, pieces, rate and amount.'}
+                </p>
+              </div>
+            </Card>
+
             <Card>
               <div className="card-header"><h3 className="card-title">Lines</h3>
                 <div className="flex gap-1">

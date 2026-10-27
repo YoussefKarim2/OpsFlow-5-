@@ -1,10 +1,11 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  summariseGoods,
   amountInWords, computeInvoiceTotals, formatInvoiceNumber, integerInWords, lineTotal,
   reconcileShippedAgainstOrdered, summariseSizes,
 } from './invoice.js';
-import { INVOICE_NUMBER_PREFIX } from '../enums.js';
+import { INVOICE_NUMBER_PREFIX, InvoiceLineKind } from '../enums.js';
 
 const item = (quantity: number | null, unitPrice: number | null, description = 'Car stand printed cover') =>
   ({ kind: 'ITEM' as const, description, quantity, unitPrice, amount: null });
@@ -127,5 +128,30 @@ describe('the size cell', () => {
     assert.equal(summariseSizes(['M', 'Spare', 'S'], order), 'S, M, Spare');
     assert.equal(summariseSizes([], order), null);
     assert.equal(summariseSizes(['Sample'], order), 'Sample');
+  });
+});
+
+describe('summary layout', () => {
+  const item = (description: string, quantity: number | null, unitPrice: number | null) =>
+    ({ kind: InvoiceLineKind.ITEM, description, quantity, unitPrice, amount: null });
+
+  test('one order becomes one line with its total pieces, rate and amount', () => {
+    const lines = [item('TRANMERE SHIRT — HUNTER/WHT', 268, 3), item('TRANMERE SHIRT — LIME/BLACK', 289, 3), { kind: InvoiceLineKind.EXTRA, description: 'Freight', quantity: null, unitPrice: null, amount: 50 }];
+    assert.deepEqual(summariseGoods(lines, [{ poNumber: 'A1', orderName: 'TRANMERE SHIRT', styleNumber: 'XRA-1003' }]), [
+      { description: 'TRANMERE SHIRT · Style XRA-1003', quantity: 557, unitPrice: 3, mixedRates: false, lineTotal: 1671 },
+    ]);
+  });
+
+  test('several orders: a line per PO, lines matched by their (PO x)', () => {
+    const lines = [item('Shirt — Navy (PO 1001)', 100, 5), item('Shirt — Red (PO 1002)', 40, 5), item('Shirt — Navy (PO 1002)', 60, 5)];
+    const out = summariseGoods(lines, [{ poNumber: '1001', orderName: 'Shirt' }, { poNumber: '1002', orderName: 'Shirt' }]);
+    assert.deepEqual(out.map((l) => [l.description, l.quantity, l.lineTotal]), [['Shirt · PO 1001', 100, 500], ['Shirt · PO 1002', 100, 500]]);
+  });
+
+  test('different rates are averaged and flagged; unpriced lines leave the amount blank', () => {
+    const mixed = summariseGoods([item('A', 10, 2), item('B', 10, 4)], [{ poNumber: '1', orderName: 'O' }])[0]!;
+    assert.equal(mixed.unitPrice, 3); assert.equal(mixed.mixedRates, true); assert.equal(mixed.lineTotal, 60);
+    const unpriced = summariseGoods([item('A', 10, null)], [{ poNumber: '1', orderName: 'O' }])[0]!;
+    assert.equal(unpriced.quantity, 10); assert.equal(unpriced.unitPrice, null); assert.equal(unpriced.lineTotal, null);
   });
 });

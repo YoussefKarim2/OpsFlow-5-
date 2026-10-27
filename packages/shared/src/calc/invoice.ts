@@ -267,3 +267,59 @@ export function issueBlockers(doc: {
   if (doc.stale) out.push('The cartons changed after this draft was built. Rebuild it so the document matches the packing list.');
   return out;
 }
+
+/**
+ * How a document lists its goods: every colour and size as built
+ * (`DETAILED`), or one line per order with only its total pieces, rate and
+ * amount (`SUMMARY`). Only the listing changes — the stored lines, the totals
+ * and the amount in words are the same either way.
+ */
+export const INVOICE_LINE_LAYOUTS = ['DETAILED', 'SUMMARY'] as const;
+export type InvoiceLineLayout = (typeof INVOICE_LINE_LAYOUTS)[number];
+
+export interface SummaryLine {
+  description: string;
+  quantity: number | null;
+  /** The rate when every line of the order has the same one; otherwise the average. */
+  unitPrice: number | null;
+  /** True when the order's lines carry different rates, so the rate shown is an average. */
+  mixedRates: boolean;
+  lineTotal: number | null;
+}
+
+/**
+ * The goods lines reduced to one per order, for a summary document. A line
+ * belongs to the order whose "(PO x)" it ends with; on a one-order document,
+ * or for a line typed without a PO, it belongs to the first order. An order
+ * none of whose lines is priced keeps a quantity and leaves rate and amount
+ * blank, as a detailed line would.
+ */
+export function summariseGoods(
+  lines: ReadonlyArray<InvoiceLineInput & { lineTotal?: number | null }>,
+  orders: ReadonlyArray<{ poNumber: string; orderName: string; styleNumber?: string | null }>,
+): SummaryLine[] {
+  const goods = lines.filter((l) => l.kind === InvoiceLineKind.ITEM);
+  if (orders.length === 0) return [];
+  const groups = orders.map(() => [] as typeof goods);
+  for (const l of goods) {
+    const i = orders.length === 1 ? 0 : orders.findIndex((o) => l.description.trim().endsWith(`(PO ${o.poNumber})`));
+    groups[i < 0 ? 0 : i]!.push(l);
+  }
+  return orders.flatMap((o, i) => {
+    const g = groups[i]!;
+    if (g.length === 0) return [];
+    const qty = g.reduce((a, l) => a + (l.quantity ?? 0), 0);
+    const priced = g.filter((l) => l.quantity != null && l.unitPrice != null);
+    const cents = priced.reduce((a, l) => a + toCents((l.quantity ?? 0) * (l.unitPrice ?? 0)), 0);
+    const rates = new Set(priced.map((l) => l.unitPrice));
+    const pricedQty = priced.reduce((a, l) => a + (l.quantity ?? 0), 0);
+    return [{
+      description: [o.orderName, o.styleNumber ? `Style ${o.styleNumber}` : null, orders.length > 1 ? `PO ${o.poNumber}` : null]
+        .filter(Boolean).join(' · '),
+      quantity: qty,
+      unitPrice: rates.size === 1 ? [...rates][0]! : pricedQty > 0 ? fromCents(cents) / pricedQty : null,
+      mixedRates: rates.size > 1,
+      lineTotal: priced.length ? fromCents(cents) : null,
+    }];
+  });
+}

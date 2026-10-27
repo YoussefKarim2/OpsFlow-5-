@@ -166,6 +166,7 @@ export interface InvoiceEditBody {
   terms?: string | null;
   bankDetails?: string | null;
   notes?: string | null;
+  lineLayout?: 'DETAILED' | 'SUMMARY';
   lines?: Array<{
     kind: InvoiceLineKind;
     description: string;

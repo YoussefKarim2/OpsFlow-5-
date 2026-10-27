@@ -754,6 +754,7 @@ export function invoiceToDto(inv: LoadedInvoice, stale = false): InvoiceDto {
     terms: inv.terms,
     bankDetails: inv.bankDetails,
     notes: inv.notes,
+    lineLayout: inv.lineLayout === 'SUMMARY' ? 'SUMMARY' : 'DETAILED',
     seller: inv.seller as unknown as CompanyProfileDto,
     lines,
     manifest: inv.manifest as unknown as InvoiceCartonDto[],

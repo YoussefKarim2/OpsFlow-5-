@@ -21,7 +21,7 @@
 
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { InvoiceKind, InvoiceLineKind, InvoiceStatus, computeInvoiceTotals, resolveShippedQty, type InvoiceCandidateDto } from '@opsflow/shared';
+import { INVOICE_LINE_LAYOUTS, InvoiceKind, InvoiceLineKind, InvoiceStatus, computeInvoiceTotals, resolveShippedQty, type InvoiceCandidateDto } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, currentUser, requirePermission } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
@@ -359,6 +359,7 @@ const editSchema = z.object({
   terms: text(4000),
   bankDetails: text(2000),
   notes: text(12000),
+  lineLayout: z.enum(INVOICE_LINE_LAYOUTS).optional(),
   lines: z.array(lineSchema).max(300).optional(),
 });
 
@@ -386,6 +387,7 @@ invoicesRouter.put('/:id', requirePermission('invoice:write'), asyncHandler(asyn
         terms: scalar(body.terms, existing.terms),
         bankDetails: scalar(body.bankDetails, existing.bankDetails),
         notes: scalar(body.notes, existing.notes),
+        lineLayout: scalar(body.lineLayout, existing.lineLayout),
       },
     });
     assertStillDraft(count, existing.number);
