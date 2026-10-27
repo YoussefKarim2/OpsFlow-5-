@@ -21,6 +21,7 @@ import { Prisma } from '@prisma/client';
 import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines, sanitiseOverrides, visibleDerivedLines } from '@opsflow/shared';
 import { detectFileKind, FILE_KIND_LABEL } from '../services/import/file-kind.js';
 import { extractFromPdf } from '../services/import/pdf-extractor.js';
+import { sizeRank } from '../services/import/po-lines.js';
 import { fillMainOrderFromDocuments } from '../services/fill-main-order.js';
 import { readInstructionFile } from '../services/import/instruction-reader.js';
 import { extractTabular } from '../services/import/tabular-extractor.js';
@@ -535,10 +536,15 @@ const stockSchema = z.object({
 
 stepsRouter.get('/:id/stock', requirePermission('order:read'), asyncHandler(async (req, res) => {
   const orderId = await resolveOrderId(req.params.id);
-  const rows = await prisma.stockRecord.findMany({
+  const found = await prisma.stockRecord.findMany({
     where: { orderId },
     orderBy: [{ colorName: 'asc' }, { sizeName: 'asc' }],
   });
+  // Sizes smallest first within a colour, as the grid above shows them; a
+  // label nobody can rank keeps its alphabetical place after the ranked ones.
+  const rows = [...found].sort((a, b) => a.colorName.localeCompare(b.colorName)
+    || (sizeRank(a.sizeName) ?? 1e6) - (sizeRank(b.sizeName) ?? 1e6)
+    || a.sizeName.localeCompare(b.sizeName));
   res.json({
     data: rows.map((r) => ({ ...r, recordedAt: r.recordedAt.toISOString() })),
     // Zero rows and zero stock are different answers. The UI says which.

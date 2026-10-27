@@ -1,5 +1,8 @@
 // AUTO-GENERATED type stub for offline typechecking. Not the real client.
 declare module '@prisma/client' {
+  export type InvoiceKind = 'PROFORMA' | 'INVOICE';
+  export type InvoiceStatus = 'DRAFT' | 'ISSUED' | 'VOID';
+  export type InvoiceLineKind = 'ITEM' | 'EXTRA';
   export type ImportTarget = 'NEW_ORDER' | 'LAYING_MARKING';
   export type Department = 'COORDINATOR' | 'FACTORY_MANAGER' | 'PRODUCTION_MANAGER' | 'CUTTING_MARKER' | 'WAREHOUSE' | 'EXTERNAL_OPS' | 'PACKING' | 'QUALITY' | 'FOLLOW_UP' | 'FINANCE' | 'ADMIN';
   export type RefKind = 'SEASON' | 'FABRIC' | 'FIT' | 'BLOCK_PATTERN' | 'ITEM_TYPE' | 'GENDER' | 'SHIPPING_METHOD' | 'EXTERNAL_WORK_SORT' | 'EXTERNAL_WORK_TYPE' | 'POSITION' | 'UNIT' | 'ITEM_SORT' | 'THREAD_COLOR' | 'REFERENCE' | 'COLLAR' | 'CUFF' | 'SIZE_LABEL' | 'FABRIC_COMPOSITION' | 'BRAND_LOGO' | 'BOM_ITEM_TYPE' | 'SHIPPING_ADDRESS';
@@ -84,6 +87,9 @@ declare module '@prisma/client' {
     productionRecords: ProductionRecord[];
     productionDayLogs: ProductionDayLog[];
     proformaInvoices: ProformaInvoice[];
+    preparedInvoices: Invoice[];
+    issuedInvoices: Invoice[];
+    companyProfileEdits: CompanyProfile[];
     qualityAudits: QualityAudit[];
     savedColumnMappings: SavedColumnMapping[];
     taskComments: TaskComment[];
@@ -181,6 +187,7 @@ declare module '@prisma/client' {
     poDate: Date | null;
     internalPoDate: Date | null;
     productionSample: boolean | null;
+    productionSampleNote: string | null;
     promisedShippingDate: Date | null;
     requiredDeliveryDate: Date | null;
     fabricDeliveryToSupplier: Date | null;
@@ -232,6 +239,8 @@ declare module '@prisma/client' {
     packingLists: PackingList[];
     productionRecords: ProductionRecord[];
     proformaInvoices: ProformaInvoice[];
+    invoices: Invoice[];
+    invoiceOrders: InvoiceOrder[];
     qualityAudits: QualityAudit[];
     shipments: Shipment[];
     quantities: StageQuantity[];
@@ -758,6 +767,8 @@ declare module '@prisma/client' {
     createdAt: Date;
     updatedAt: Date;
     cartons: Carton[];
+    invoices: Invoice[];
+    invoiceOrders: InvoiceOrder[];
     order: Order;
     _count: any;
   }
@@ -800,6 +811,8 @@ declare module '@prisma/client' {
     createdAt: Date;
     updatedAt: Date;
     attachments: Attachment[];
+    invoices: Invoice[];
+    invoiceOrders: InvoiceOrder[];
     order: Order;
     _count: any;
   }
@@ -818,8 +831,7 @@ declare module '@prisma/client' {
     id: string;
     orderId: string;
     costingDate: Date | null;
-    dollarRate: Prisma.Decimal | null;
-    dailyCostEgp: Prisma.Decimal | null;
+    dailyCostUsd: Prisma.Decimal | null;
     machineCount: number | null;
     machineDaysUsed: number | null;
     daysInLine: number | null;
@@ -845,7 +857,6 @@ declare module '@prisma/client' {
     quantity: Prisma.Decimal | null;
     unit: string;
     unitPriceUsd: Prisma.Decimal | null;
-    unitPriceEgp: Prisma.Decimal | null;
     source: CostSource;
     sourceRef: string | null;
     note: string | null;
@@ -867,7 +878,6 @@ declare module '@prisma/client' {
     shipmentFrom: string | null;
     shipmentTo: string | null;
     consolidatingVendor: string | null;
-    currency: string;
     terms: string | null;
     sentAt: Date | null;
     preparedById: string | null;
@@ -887,6 +897,99 @@ declare module '@prisma/client' {
     unitPrice: Prisma.Decimal | null;
     position: number;
     invoice: ProformaInvoice;
+    _count: any;
+  }
+  export interface CompanyProfile {
+    id: string;
+    name: string;
+    tagline: string | null;
+    address: string | null;
+    taxId: string | null;
+    email: string | null;
+    phone: string | null;
+    website: string | null;
+    bankDetails: string | null;
+    invoiceTerms: string | null;
+    paymentTerms: string | null;
+    updatedById: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    updatedBy: User | null;
+    _count: any;
+  }
+  export interface Invoice {
+    id: string;
+    kind: InvoiceKind;
+    status: InvoiceStatus;
+    number: string;
+    year: number;
+    sequence: number;
+    orderId: string;
+    shipmentId: string | null;
+    packingListId: string | null;
+    date: Date;
+    dueDate: Date | null;
+    paymentTerms: string | null;
+    billTo: string;
+    billToAddress: string | null;
+    billToEmail: string | null;
+    customerReference: string | null;
+    shipmentRef: string | null;
+    shippedOn: Date | null;
+    coverNote: string | null;
+    terms: string | null;
+    bankDetails: string | null;
+    notes: string | null;
+    lineLayout: string;
+    orderRef: Prisma.JsonValue | null;
+    seller: Prisma.JsonValue;
+    manifest: Prisma.JsonValue;
+    reconciliation: Prisma.JsonValue;
+    warnings: Prisma.JsonValue;
+    builtAt: Date;
+    issuedAt: Date | null;
+    issuedById: string | null;
+    sentAt: Date | null;
+    voidedAt: Date | null;
+    voidReason: string | null;
+    preparedById: string | null;
+    createdAt: Date;
+    updatedAt: Date;
+    lines: InvoiceLine[];
+    orders: InvoiceOrder[];
+    order: Order;
+    shipment: Shipment | null;
+    packingList: PackingList | null;
+    preparedBy: User | null;
+    issuedBy: User | null;
+    _count: any;
+  }
+  export interface InvoiceOrder {
+    id: string;
+    invoiceId: string;
+    orderId: string;
+    packingListId: string | null;
+    shipmentId: string | null;
+    position: number;
+    orderRef: Prisma.JsonValue | null;
+    qty: number | null;
+    invoice: Invoice;
+    order: Order;
+    packingList: PackingList | null;
+    shipment: Shipment | null;
+    _count: any;
+  }
+  export interface InvoiceLine {
+    id: string;
+    invoiceId: string;
+    kind: InvoiceLineKind;
+    description: string;
+    size: string | null;
+    quantity: Prisma.Decimal | null;
+    unitPrice: Prisma.Decimal | null;
+    amount: Prisma.Decimal | null;
+    position: number;
+    invoice: Invoice;
     _count: any;
   }
   export interface Attachment {
@@ -1377,6 +1480,30 @@ declare module '@prisma/client' {
     export type ProformaInvoiceLineCreateManyInput = Record<string, any>;
     export type ProformaInvoiceLineCreateInput = Record<string, any>;
     export type ProformaInvoiceLineUpdateInput = Record<string, any>;
+    export type CompanyProfileGetPayload<T = any> = CompanyProfile & Record<string, any>;
+    export type CompanyProfileInclude = Record<string, any>;
+    export type CompanyProfileWhereInput = Record<string, any>;
+    export type CompanyProfileCreateManyInput = Record<string, any>;
+    export type CompanyProfileCreateInput = Record<string, any>;
+    export type CompanyProfileUpdateInput = Record<string, any>;
+    export type InvoiceGetPayload<T = any> = Invoice & Record<string, any>;
+    export type InvoiceInclude = Record<string, any>;
+    export type InvoiceWhereInput = Record<string, any>;
+    export type InvoiceCreateManyInput = Record<string, any>;
+    export type InvoiceCreateInput = Record<string, any>;
+    export type InvoiceUpdateInput = Record<string, any>;
+    export type InvoiceOrderGetPayload<T = any> = InvoiceOrder & Record<string, any>;
+    export type InvoiceOrderInclude = Record<string, any>;
+    export type InvoiceOrderWhereInput = Record<string, any>;
+    export type InvoiceOrderCreateManyInput = Record<string, any>;
+    export type InvoiceOrderCreateInput = Record<string, any>;
+    export type InvoiceOrderUpdateInput = Record<string, any>;
+    export type InvoiceLineGetPayload<T = any> = InvoiceLine & Record<string, any>;
+    export type InvoiceLineInclude = Record<string, any>;
+    export type InvoiceLineWhereInput = Record<string, any>;
+    export type InvoiceLineCreateManyInput = Record<string, any>;
+    export type InvoiceLineCreateInput = Record<string, any>;
+    export type InvoiceLineUpdateInput = Record<string, any>;
     export type AttachmentGetPayload<T = any> = Attachment & Record<string, any>;
     export type AttachmentInclude = Record<string, any>;
     export type AttachmentWhereInput = Record<string, any>;
@@ -1516,6 +1643,10 @@ declare module '@prisma/client' {
     costLine: Delegate<CostLine>;
     proformaInvoice: Delegate<ProformaInvoice>;
     proformaInvoiceLine: Delegate<ProformaInvoiceLine>;
+    companyProfile: Delegate<CompanyProfile>;
+    invoice: Delegate<Invoice>;
+    invoiceOrder: Delegate<InvoiceOrder>;
+    invoiceLine: Delegate<InvoiceLine>;
     attachment: Delegate<Attachment>;
     activityLog: Delegate<ActivityLog>;
     auditTrail: Delegate<AuditTrail>;

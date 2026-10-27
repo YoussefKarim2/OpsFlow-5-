@@ -222,6 +222,24 @@ describe('sizes shown smallest on the left', () => {
     assert.deepEqual(shown(['M', 'S', 'Custom-Z', 'XS']), ['XS', 'S', 'Custom-Z', 'M']);
   });
 
+  test('waist / length sizes go by waist, then length', () => {
+    assert.deepEqual(shown(['30/34', '28/30', '28/34', '30/30', '28/32', '30/32']), ['28/30', '28/32', '28/34', '30/30', '30/32', '30/34']);
+  });
+
+  test('a combined youth size stays with the youth sizes', () => {
+    assert.deepEqual(shown(['Youth XL', 'Youth S/M', 'S', 'Youth XS']), ['Youth XS', 'Youth S/M', 'Youth XL', 'S']);
+    assert.deepEqual(shown(['YL', 'YS/M', 'YXS', 'S']), ['YXS', 'YS/M', 'YL', 'S']);
+  });
+
+  test('any count of X: 3XS and 4XS, 6XL and up', () => {
+    assert.deepEqual(shown(['6XL', '5XL', '4XL']), ['4XL', '5XL', '6XL']);
+    assert.deepEqual(shown(['4XS', 'XS', '6XL', 'XL', '3XS', 'XXS']), ['4XS', '3XS', 'XXS', 'XS', 'XL', '6XL']);
+  });
+
+  test('a combined size never ties with a single one', () => {
+    assert.deepEqual(shown(['M', 'S/M/L', 'S', 'L']), ['S', 'M', 'S/M/L', 'L']);
+  });
+
   test('positions are renumbered to match what is shown', () => {
     assert.deepEqual(inWearingOrder(axis(['L', 'S'])).map((s) => [s.name, s.position]), [['S', 0], ['L', 1]]);
   });

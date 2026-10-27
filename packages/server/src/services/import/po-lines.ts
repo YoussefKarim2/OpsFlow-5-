@@ -142,10 +142,22 @@ export function orderSizes(sizes: readonly string[]): string[] {
 export function sizeRank(label: string): number | null {
   // One-size goods (a bag, a bib) sit after every sized garment.
   if (/^(one size|os|osfa|free size|free)$/i.test(label.trim())) return 999;
-  // A combined size ("S/M", "L/XL") sits between its two halves.
   if (label.includes('/')) {
-    const halves = label.split('/').map((h) => sizeRank(h.trim()));
-    return halves.every((h): h is number => h != null) ? halves.reduce((a, h) => a + h, 0) / halves.length : null;
+    const halves = label.split('/').map((h) => h.trim());
+    // Waist / length ("28/30", "28/32"): by waist, then by length.
+    if (halves.length === 2 && halves.every((h) => /^\d+$/.test(h))) {
+      return 20 + Number(halves[0]) / 1000 + Number(halves[1]) / 1e7 + 400;
+    }
+    // A combined size ("S/M", "L/XL") sits between its halves; an age group
+    // on the first half covers the second ("Youth S/M" is youth S and M).
+    const lead = /^(\S+)\s+\S+$/.exec(halves[0]!)?.[1];
+    const youthCode = /^\d?Y[XSML]/i.test(halves[0]!);
+    const ranks = halves.map((h, i) => sizeRank(
+      i === 0 || /\s/.test(h) ? h : lead && SIZE_GROUPS[lead.toUpperCase()] ? `${lead} ${h}` : youthCode ? `Y${h}` : h,
+    ));
+    if (!ranks.every((r): r is number => r != null)) return null;
+    // Just after a single size of the same middle ("S/M/L" after "M").
+    return ranks.reduce((a, r) => a + r, 0) / ranks.length + 0.01;
   }
   // The factory's compact youth codes: YS, YM, YL, YXS, 2YXS — youth, then
   // the size, with a leading count of X's ("2YXS" is youth 2XS).
@@ -158,7 +170,11 @@ export function sizeRank(label: string): number | null {
   if (parts.length === 1 && SIZE_GROUPS[parts[0]!]) return (GROUP_RANK[SIZE_GROUPS[parts[0]!]!] ?? 4) * 100;
   const word = parts[parts.length - 1]!;
   const group = parts.length > 1 ? GROUP_RANK[SIZE_GROUPS[parts[0]!] ?? ''] ?? 4 : 4;
-  const rank = SIZE_WORDS[word]?.rank ?? (/^\d+$/.test(word) ? 20 + Number(word) / 1000 : null);
+  // Any count of X's: 3XS, 4XS before XXS; 6XL, 7XL after 5XL.
+  const many = /^(\d)X([SL])$/.exec(word);
+  const rank = SIZE_WORDS[word]?.rank
+    ?? (many ? (many[2] === 'S' ? 3 - (Number(many[1]) - 1) : 7 + (Number(many[1]) - 1)) : null)
+    ?? (/^\d+$/.test(word) ? 20 + Number(word) / 1000 : null);
   return rank == null ? null : group * 100 + rank;
 }
 
