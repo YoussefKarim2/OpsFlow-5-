@@ -223,6 +223,17 @@ describe('quantities — stock deduction and variance', () => {
     assert.equal(v.variance, 27);
   });
 
+  test('with the grid, the plan is the cut order itself — rounded up per cell — so cutting it shows no variance', () => {
+    // Rounding the order total once gave 2,071; the generated cut order rounds
+    // every cell up and comes to more. Cutting exactly the cut order used to
+    // read as a positive variance on the Overview.
+    const generated = computeCutOrderQty(orderCells(), COLORS, SIZES, CUT_PCT);
+    const v = computeCutVariance(orderCells(), CUT_PCT, generated, COLORS, SIZES);
+    assert.equal(v.plannedCutQty, generated);
+    assert.ok(generated > computeCutOrderTotal(1972, CUT_PCT));
+    assert.equal(v.variance, 0);
+  });
+
   test('funnel percentages are null-safe on an untouched order', () => {
     const f = computeFunnel(orderCells());
     assert.equal(f[0]!.qty, 1972);
