@@ -414,7 +414,9 @@ invoicesRouter.put('/:id', requirePermission('invoice:write'), asyncHandler(asyn
   const scalar = <T>(v: T | undefined, current: T): T => (v === undefined ? current : v);
   const updated = await prisma.$transaction(async (tx) => {
     const { count } = await tx.invoice.updateMany({
-      where: { id: existing.id, status: InvoiceStatus.DRAFT },
+      // The version the editor opened, in the write itself: two saves at the
+      // same moment cannot both pass a check made before it.
+      where: { id: existing.id, status: InvoiceStatus.DRAFT, ...(body.updatedAt ? { updatedAt: new Date(body.updatedAt) } : {}) },
       data: {
         date: body.date ? new Date(body.date) : existing.date,
         dueDate: body.dueDate === undefined ? existing.dueDate : body.dueDate === null ? null : new Date(body.dueDate),
@@ -569,9 +571,34 @@ invoicesRouter.post('/:id/issue', requirePermission('invoice:issue'), asyncHandl
   assertDraft(existing);
   assertIssuable(invoiceToDto(existing, await isStale(existing)));
 
-  const { count } = await prisma.invoice.updateMany({
-    where: { id: existing.id, status: InvoiceStatus.DRAFT, updatedAt: existing.updatedAt },
-    data: { status: InvoiceStatus.ISSUED, issuedAt: new Date(), issuedById: user.id },
+  const count = await prisma.$transaction(async (tx) => {
+    // One issue at a time, so two people issuing invoices for the same goods
+    // cannot both pass the check below.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext('invoice-issue'))`;
+    if (existing.kind === InvoiceKind.INVOICE) {
+      // The same packing list or consignment billed twice is the same goods
+      // billed twice. Different lists of one order (a split shipment) are fine.
+      for (const p of partsOf(existing).filter((x) => x.packingListId || x.shipmentId)) {
+        const twin = await tx.invoice.findFirst({
+          where: {
+            id: { not: existing.id }, kind: InvoiceKind.INVOICE, status: InvoiceStatus.ISSUED,
+            orders: { some: { orderId: p.orderId, OR: [
+              ...(p.packingListId ? [{ packingListId: p.packingListId }] : []),
+              ...(p.shipmentId ? [{ shipmentId: p.shipmentId }] : []),
+            ] } },
+          },
+          select: { number: true },
+        });
+        if (twin) {
+          throw new ConflictError(`These goods are already invoiced on ${twin.number}. Void that invoice first, or build this one from another packing list.`);
+        }
+      }
+    }
+    const { count: n } = await tx.invoice.updateMany({
+      where: { id: existing.id, status: InvoiceStatus.DRAFT, updatedAt: existing.updatedAt },
+      data: { status: InvoiceStatus.ISSUED, issuedAt: new Date(), issuedById: user.id },
+    });
+    return n;
   });
   // The updatedAt guard means what was validated is what gets issued: an edit
   // landing between the check and the write bumps updatedAt and this touches nothing.

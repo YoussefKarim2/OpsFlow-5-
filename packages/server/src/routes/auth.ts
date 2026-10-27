@@ -27,10 +27,38 @@ const loginLimiter = rateLimit({
   skipSuccessfulRequests: true,
 });
 
+/**
+ * Wrong current passwords on change-password, per signed-in person. Without
+ * it, someone holding a stolen session could guess the real password at
+ * leisure and keep the account after the session expired.
+ */
+const changePasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skipSuccessfulRequests: true,
+  keyGenerator: (req) => (req as { user?: { id: string } }).user?.id ?? 'anonymous',
+  message: { error: 'Too many attempts. Try again in 15 minutes.', code: 'RATE_LIMITED' },
+});
+
 const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1),
 });
+
+/**
+ * Failed sign-ins per account AND address. The lock follows the place the
+ * guessing comes from, not the account: an account-wide lock let anyone who
+ * knew a staff address keep that person, and every super admin, locked out
+ * for a day at a time with a handful of requests. Someone guessing from one
+ * address is locked out there; the owner signing in from anywhere else is not.
+ * In memory on purpose: a restart forgets a lock, and the per-address limiter
+ * above still bounds every caller.
+ */
+const pairFailures = new Map<string, number>();
+const pairLocks = new Map<string, number>();
+const pairKey = (userId: string, ip: string) => `${userId}|${ip}`;
 
 authRouter.post('/login', loginLimiter, asyncHandler(async (req, res) => {
   const { email, password } = loginSchema.parse(req.body);
@@ -49,8 +77,10 @@ authRouter.post('/login', loginLimiter, asyncHandler(async (req, res) => {
   // out otherwise keeps retrying a password that was never the problem, and
   // reaching this state at all costs an attacker LOGIN_MAX_ATTEMPTS tries
   // against a per-IP limit of ten per fifteen minutes.
-  if (user?.lockedUntil && user.lockedUntil > new Date()) {
-    const minutes = Math.max(1, Math.ceil((user.lockedUntil.getTime() - Date.now()) / 60_000));
+  const ip = clientIp(req) ?? 'unknown';
+  const lockedAt = user ? pairLocks.get(pairKey(user.id, ip)) : undefined;
+  if (user && lockedAt && lockedAt > Date.now()) {
+    const minutes = Math.max(1, Math.ceil((lockedAt - Date.now()) / 60_000));
     await logActivity({
       actorId: user.id, actorName: user.name, action: 'LOGIN_BLOCKED',
       summary: `sign-in refused — account locked for another ${minutes} minute(s)`,
@@ -82,20 +112,19 @@ authRouter.post('/login', loginLimiter, asyncHandler(async (req, res) => {
       // once all read the same count and recorded one failure between them, so
       // a parallel guessing run never reached the lock. Each request now gets
       // its own count back and the one that crosses the threshold locks.
-      const counted = await prisma.user.update({
+      // The account's own count is kept for administrators to see; the lock
+      // itself is per account and address (see pairFailures).
+      await prisma.user.update({
         where: { id: user.id },
         data: { failedLoginCount: { increment: 1 } },
-        select: { failedLoginCount: true },
       });
+      const key = pairKey(user.id, ip);
+      const before = pairFailures.get(key) ?? 0;
+      pairFailures.set(key, before + 1);
       const { attempts, locked, lockMinutes } = computeLockout(
-        counted.failedLoginCount - 1, config.LOGIN_MAX_ATTEMPTS, config.LOGIN_LOCKOUT_MINUTES,
+        before, config.LOGIN_MAX_ATTEMPTS, config.LOGIN_LOCKOUT_MINUTES,
       );
-      if (locked) {
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { lockedUntil: new Date(Date.now() + lockMinutes * 60_000) },
-        });
-      }
+      if (locked) pairLocks.set(key, Date.now() + lockMinutes * 60_000);
       await logActivity({
         actorId: user.id, actorName: user.name,
         action: locked ? 'LOGIN_LOCKED' : 'LOGIN_FAILED',
@@ -127,6 +156,8 @@ authRouter.post('/login', loginLimiter, asyncHandler(async (req, res) => {
     throw new UnauthorizedError('Incorrect email or password.');
   }
 
+  pairFailures.delete(pairKey(user.id, ip));
+  pairLocks.delete(pairKey(user.id, ip));
   await prisma.user.update({
     where: { id: user.id },
     data: { lastLoginAt: new Date(), failedLoginCount: 0, lockedUntil: null },
@@ -160,7 +191,7 @@ export const passwordSchema = z.object({
 // ahead of the /api chain that normally supplies it. Without it, a person
 // changing their own password would appear in the audit trail as "System" —
 // the one record you would reach for after a credential incident.
-authRouter.post('/change-password', authenticate, requestContextMiddleware, asyncHandler(async (req, res) => {
+authRouter.post('/change-password', authenticate, changePasswordLimiter, requestContextMiddleware, asyncHandler(async (req, res) => {
   const u = currentUser(req);
   // The rule's own sentence, not "Some fields are invalid": a person choosing a
   // password needs to know it was refused for being published or too short.

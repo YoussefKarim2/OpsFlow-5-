@@ -834,7 +834,7 @@ export function assertDraft(inv: { status: InvoiceStatus; number: string }): voi
  */
 export function assertStillDraft(count: number, number: string): void {
   if (count === 0) {
-    throw new ConflictError(`${number} changed while you were working on it — it was issued, voided or deleted by somebody else. Reload it.`);
+    throw new ConflictError(`${number} changed while you were working on it — saved, rebuilt, issued, voided or deleted by somebody else. Reload it.`);
   }
 }
 

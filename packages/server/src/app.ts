@@ -413,7 +413,12 @@ function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFun
 
   console.error('Unhandled error:', err);
   res.status(500).json({
-    error: isProd ? 'Something went wrong on our side.' : String(err instanceof Error ? err.stack : err),
+    // A stack trace only where it is asked for: an unset NODE_ENV defaults to
+    // "development", and a deployment that forgot to set it must not hand the
+    // internals of a failure to whoever caused it.
+    error: config.NODE_ENV === 'development' && process.env.NODE_ENV === 'development'
+      ? String(err instanceof Error ? err.stack : err)
+      : 'Something went wrong on our side.',
     code: 'INTERNAL_ERROR',
   });
 }

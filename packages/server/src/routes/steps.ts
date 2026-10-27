@@ -672,7 +672,7 @@ function withTotals(inv: {
   };
 }
 
-stepsRouter.get('/:id/proforma', requirePermission('order:read'), asyncHandler(async (req, res) => {
+stepsRouter.get('/:id/proforma', requirePermission('invoice:read'), asyncHandler(async (req, res) => {
   const orderId = await resolveOrderId(req.params.id);
   const invoice = await prisma.proformaInvoice.findFirst({
     where: { orderId },
@@ -685,7 +685,7 @@ stepsRouter.get('/:id/proforma', requirePermission('order:read'), asyncHandler(a
   res.json({ data: invoice ? withTotals(invoice) : null });
 }));
 
-stepsRouter.put('/:id/proforma', requirePermission('order:edit'), asyncHandler(async (req, res) => {
+stepsRouter.put('/:id/proforma', requirePermission('invoice:write'), asyncHandler(async (req, res) => {
   const orderId = await resolveOrderId(req.params.id);
   const body = proformaSchema.parse(req.body);
   const user = currentUser(req);
@@ -806,7 +806,7 @@ stepsRouter.post(
  * Works whether the invoice was imported or typed by hand — it reads what is
  * stored, and has no notion of where that came from.
  */
-stepsRouter.get('/:id/proforma/export.xlsx', requirePermission('order:read'), asyncHandler(async (req, res) => {
+stepsRouter.get('/:id/proforma/export.xlsx', requirePermission('invoice:read'), asyncHandler(async (req, res) => {
   const orderId = await resolveOrderId(req.params.id);
   const inv = await prisma.proformaInvoice.findFirst({
     where: { orderId },
@@ -895,7 +895,7 @@ stepsRouter.get('/:id/proforma/export.xlsx', requirePermission('order:read'), as
   res.end(Buffer.from(await wb.xlsx.writeBuffer()));
 }));
 
-stepsRouter.post('/:id/proforma/send', requirePermission('order:edit'), asyncHandler(async (req, res) => {
+stepsRouter.post('/:id/proforma/send', requirePermission('invoice:write'), asyncHandler(async (req, res) => {
   const orderId = await resolveOrderId(req.params.id);
   const invoice = await prisma.proformaInvoice.findFirst({
     where: { orderId },

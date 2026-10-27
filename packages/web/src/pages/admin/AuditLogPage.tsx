@@ -348,7 +348,10 @@ function downloadCsv(tab: Tab, rows: Array<Record<string, unknown>>): void {
   if (rows.length === 0) return;
   const columns = Object.keys(rows[0]!);
   const escape = (v: unknown) => {
-    const s = v == null ? '' : String(v);
+    // A value typed into OpsFlow that starts like a formula ("=HYPERLINK(…)")
+    // is made text, so opening the export in Excel cannot run it.
+    const raw = v == null ? '' : String(v);
+    const s = /^[=+\-@\t\r]/.test(raw) ? `'${raw}` : raw;
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const csv = [columns.join(','), ...rows.map((r) => columns.map((c) => escape(r[c])).join(','))].join('\n');

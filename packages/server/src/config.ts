@@ -56,7 +56,8 @@ const schema = z.object({
    * Where uploaded files go.
    *
    *   `db`    — in Postgres. Survives a redeploy on a container with no volume,
-   *             and is included in the backups. The safe default.
+   *             and is in the nightly offsite database backup (the in-app
+   *             dump leaves the file table out). The safe default.
    *   `local` — on the filesystem. Fast, and correct *only* if STORAGE_LOCAL_DIR
    *             is a mounted volume. On a plain container it silently loses
    *             every upload on the next deploy.
