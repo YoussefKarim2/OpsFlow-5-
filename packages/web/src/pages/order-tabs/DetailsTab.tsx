@@ -155,6 +155,7 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
                 <>
                   <ComboSelect
                     allowCustom
+                    maxLength={300}
                     className="input"
                     placeholder="Choose, or type a comment"
                     value={form.productionSampleNote || (form.productionSample == null ? '' : form.productionSample ? 'yes' : 'no')}

@@ -813,11 +813,12 @@ export async function listOrders(
   if (!filters.includeCancelled) where.cancelled = false;
   if (filters.clientId) where.clientId = filters.clientId;
   if (filters.coordinatorId) where.coordinatorId = filters.coordinatorId;
-  if (filters.season) where.season = filters.season;
+  // Text typed on orders, so matched without regard to capitals: "SEA" is "Sea".
+  if (filters.season) where.season = { equals: filters.season, mode: 'insensitive' };
   if (filters.factoryId) {
     where.OR = [{ factoryId: filters.factoryId }, { externalFactoryId: filters.factoryId }];
   }
-  if (filters.shippingMethod) where.shippingMethod = filters.shippingMethod;
+  if (filters.shippingMethod) where.shippingMethod = { equals: filters.shippingMethod, mode: 'insensitive' };
   if (filters.priority) where.priority = filters.priority as Prisma.EnumPriorityFilter['equals'];
   if (filters.dueBefore || filters.dueAfter) {
     where.requiredDeliveryDate = {

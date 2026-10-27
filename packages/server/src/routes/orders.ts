@@ -116,7 +116,9 @@ ordersRouter.get('/:id', requirePermission('order:read'), asyncHandler(async (re
 const createSchema = z.object({
   poNumber: z.string().min(1).max(64),
   orderName: z.string().min(1).max(200),
-  season: z.string().min(1).max(200),
+  // A cleared season is "Unspecified", as the import and the sheet call it,
+  // rather than a save refused with a validation error.
+  season: z.string().trim().max(200).transform((v) => (v === '' ? 'Unspecified' : v)),
   clientId: z.string().min(1),
   itemType: shortText(),
   gender: shortText(),
@@ -328,6 +330,11 @@ ordersRouter.patch('/:id', requirePermission('order:edit'), asyncHandler(async (
     }
     input.poNumber = wanted;
   }
+
+  // Production sample is one answer: a Yes/No sent without a comment clears
+  // the comment, and a comment clears the Yes/No.
+  if (input.productionSample !== undefined && input.productionSampleNote === undefined) input.productionSampleNote = null;
+  if (input.productionSampleNote) input.productionSample = null;
 
   const { notes, ...scalar } = input;
 

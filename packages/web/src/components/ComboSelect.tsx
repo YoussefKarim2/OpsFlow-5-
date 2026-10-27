@@ -8,9 +8,9 @@
  *
  * What typing can do depends on what the field stores:
  *   - `allowCustom`: the field is free text with suggestions (a season, a
- *     fabric, an item). Enter still takes the highlighted suggestion, so a
- *     half-typed word never becomes a value by accident; new text is kept from
- *     the "Use …" row (arrow up to it, or click it), or by Tab / leaving the box.
+ *     fabric, an item). Enter keeps exactly what was typed unless it matches an
+ *     option exactly; a suggestion is taken with the arrow keys or a click. So
+ *     a new fabric "Mesh Pro" is never saved as "Mesh Protime".
  *   - otherwise the value must be one of the list — an id, a status — so typing
  *     searches; text that matches no option is put back to the current choice
  *     when the box is left, rather than saving something the server would refuse.
@@ -67,11 +67,13 @@ export interface ComboSelectProps {
   name?: string;
   title?: string;
   autoFocus?: boolean;
+  /** For a free-text field: the most characters the server keeps. */
+  maxLength?: number;
   'aria-label'?: string;
 }
 
 export function ComboSelect({
-  value: rawValue, onChange, children, className, disabled, allowCustom, placeholder, id, name, title, autoFocus,
+  value: rawValue, onChange, children, className, disabled, allowCustom, placeholder, id, name, title, autoFocus, maxLength,
   'aria-label': ariaLabel,
 }: ComboSelectProps) {
   const options = useMemo(() => collect(children, []), [children]);
@@ -184,9 +186,11 @@ export function ComboSelect({
   const onType = (text: string) => {
     setQuery(text);
     setOpen(true);
-    // Enter takes the best match. Where free text is allowed and nothing
-    // matches, Enter keeps what was typed (the "Use …" row).
-    setActive(norm(text) ? 0 : -1);
+    // On a pick list Enter takes the best match. Where free text is allowed
+    // Enter keeps what was typed (the "Use …" row) unless it is an option
+    // exactly: replacing typed words with a longer suggestion lost them.
+    const exactNow = options.some((o) => !o.disabled && (norm(o.label) === norm(text) || o.value === text.trim()));
+    setActive(!norm(text) ? -1 : allowCustom && !exactNow ? -1 : 0);
     hovered.current = false;
   };
 
@@ -254,6 +258,7 @@ export function ComboSelect({
         autoComplete="off"
         spellCheck={false}
         autoFocus={autoFocus}
+        maxLength={maxLength}
         disabled={disabled}
         size={Math.max(4, Math.min(40, longest + 1))}
         className="min-w-0 flex-1 border-0 bg-transparent p-0 text-inherit outline-none [font:inherit] [letter-spacing:inherit] [text-transform:inherit] placeholder:text-ink-400 focus:ring-0 disabled:cursor-not-allowed"

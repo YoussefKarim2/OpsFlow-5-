@@ -245,9 +245,19 @@ export function ProductionRecords({ data, defaultDate }: { data: ProductivityDto
   const [adding, setAdding] = useState(false);
   const [orderId, setOrderId] = useState('');
   const [draft, setDraft] = useState<RecordDraft>({ date: defaultDate, operation: 'SEWING', qty: '', line: '', team: '' });
+  // Every order, not the first page: the list is sorted by due date, so a
+  // current PO could fall past the first hundred.
   const orders = useQuery({
     queryKey: ['orders', 'for-production'],
-    queryFn: () => api.orders.list({ pageSize: 100 }),
+    queryFn: async () => {
+      const all: Awaited<ReturnType<typeof api.orders.list>>['data'] = [];
+      for (let page = 1; page <= 20; page++) {
+        const res = await api.orders.list({ pageSize: 100, page });
+        all.push(...res.data);
+        if (page >= res.totalPages) break;
+      }
+      return { data: all };
+    },
     enabled: adding,
   });
   const create = useMutation({

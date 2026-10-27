@@ -90,7 +90,7 @@ export function OrdersPage() {
               options={(lookups?.clients ?? []).map((c) => ({ value: c.id, label: c.name }))} />
             <FilterSelect label="Coordinator" value={filters.coordinatorId} onChange={(v) => setFilter('coordinatorId', v)}
               options={(lookups?.users ?? []).filter((u) => u.department === 'COORDINATOR').map((u) => ({ value: u.id, label: u.name }))} />
-            <FilterSelect label="Season" value={filters.season} onChange={(v) => setFilter('season', v)}
+            <FilterSelect label="Season" allowCustom value={filters.season} onChange={(v) => setFilter('season', v)}
               options={(lookups?.values.SEASON ?? []).map((s) => ({ value: s.value, label: s.value }))} />
             <FilterSelect label="Status" value={filters.status} onChange={(v) => setFilter('status', v)}
               options={Object.entries(ORDER_STATUS_LABEL)
@@ -103,7 +103,7 @@ export function OrdersPage() {
                 .sort((a, b) => a[1].order - b[1].order).map(([value, m]) => ({ value, label: m.label }))} />
             <FilterSelect label="Factory" value={filters.factoryId} onChange={(v) => setFilter('factoryId', v)}
               options={(lookups?.factories ?? []).map((f) => ({ value: f.id, label: f.name }))} />
-            <FilterSelect label="Shipping" value={filters.shippingMethod} onChange={(v) => setFilter('shippingMethod', v)}
+            <FilterSelect label="Shipping" allowCustom value={filters.shippingMethod} onChange={(v) => setFilter('shippingMethod', v)}
               options={(lookups?.values.SHIPPING_METHOD ?? []).map((s) => ({ value: s.value, label: s.value }))} />
             <FilterSelect label="Priority" value={filters.priority} onChange={(v) => setFilter('priority', v)}
               options={['URGENT', 'HIGH', 'MEDIUM', 'LOW'].map((p) => ({ value: p, label: p }))} />
@@ -221,15 +221,17 @@ export function OrdersPage() {
 }
 
 function FilterSelect({
-  label, value, onChange, options,
+  label, value, onChange, options, allowCustom,
 }: {
   label: string; value: string; onChange: (v: string) => void;
   options: Array<{ value: string; label: string }>;
+  /** A text column: a value typed on an order (AW26) can be filtered on too. */
+  allowCustom?: boolean;
 }) {
   return (
     <div>
       <label className="label">{label}</label>
-      <ComboSelect value={value} onChange={(e) => onChange(e.target.value)} className="input">
+      <ComboSelect value={value} onChange={(e) => onChange(e.target.value)} className="input" allowCustom={allowCustom}>
         <option value="">All</option>
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </ComboSelect>
