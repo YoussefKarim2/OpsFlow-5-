@@ -167,6 +167,12 @@ export interface InvoiceEditBody {
   bankDetails?: string | null;
   notes?: string | null;
   lineLayout?: 'DETAILED' | 'SUMMARY';
+  /** A proforma's cartons, typed or copied from the packing list. Replaces the set. */
+  cartons?: Array<{
+    cartonNumber: string; cartonSize: string | null; product: string; poNumber?: string;
+    contents: Array<{ label: string; qty: number }>; contentsText: string | null;
+    pieces: number; netKg: number | null; grossKg: number | null;
+  }>;
   lines?: Array<{
     kind: InvoiceLineKind;
     description: string;
@@ -1040,6 +1046,7 @@ export const api = {
       post<{ data: InvoiceDto }>('/invoices', body),
     update: (id: string, body: InvoiceEditBody) => put<{ data: InvoiceDto }>(`/invoices/${id}`, body),
     rebuild: (id: string) => post<{ data: InvoiceDto }>(`/invoices/${id}/rebuild`),
+    cartonsFromPacking: (id: string) => post<{ data: InvoiceDto['manifest'] }>(`/invoices/${id}/cartons-from-packing`),
     issue: (id: string) => post<{ data: InvoiceDto }>(`/invoices/${id}/issue`),
     markSent: (id: string) => post<{ data: InvoiceDto }>(`/invoices/${id}/sent`),
     void: (id: string, reason: string) => post<{ data: InvoiceDto }>(`/invoices/${id}/void`, { reason }),

@@ -300,12 +300,12 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
       )}
 
       {/* ── Packing list / manifest ────────────────────────────────────── */}
-      {isInvoice && doc.manifest.length > 0 && (
+      {doc.manifest.length > 0 && (
         <section className="mt-6">
-          <SectionLabel>Packing list / manifest</SectionLabel>
+          <SectionLabel>{isInvoice ? 'Packing list / manifest' : 'Packing list'}</SectionLabel>
           <table className="mb-2 text-[11px]">
             <tbody>
-              <tr><td className="pr-4 font-bold">Shipment No.</td><td>{doc.shipmentRef ?? '—'}</td></tr>
+              {isInvoice && <tr><td className="pr-4 font-bold">Shipment No.</td><td>{doc.shipmentRef ?? '—'}</td></tr>}
               <tr><td className="pr-4 font-bold">Date</td><td>{doc.shippedOn ? fmtDate(doc.shippedOn) : fmtDate(doc.date)}</td></tr>
               {doc.customerReference && <tr><td className="pr-4 font-bold">Your reference(s)</td><td><T>{doc.customerReference}</T></td></tr>}
               <tr><td className="pr-4 font-bold">Consignee</td><td><T>{doc.billTo}</T></td></tr>
@@ -330,7 +330,9 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
                   <td className="border border-ink-200 px-2 py-1.5 font-mono text-[10px]">{c.cartonNumber}{c.cartonSize ? <><br /><span className="font-sans text-ink-500">{c.cartonSize}</span></> : null}</td>
                   <td className="border border-ink-200 px-2 py-1.5"><span className="font-medium">{c.poNumber ?? doc.order.poNumber}</span><br /><span className="text-ink-600"><T>{c.product}</T></span></td>
                   <td className="border border-ink-200 px-2 py-1.5">
-                    {c.contents.map((x, i) => <span key={i}>{i > 0 ? ', ' : ''}<T>{x.label}</T> × {qty(x.qty)}</span>)}
+                    {c.contents.length > 0
+                      ? c.contents.map((x, i) => <span key={i}>{i > 0 ? ', ' : ''}<T>{x.label}</T> × {qty(x.qty)}</span>)
+                      : <T>{c.contentsText || '—'}</T>}
                   </td>
                   <td className="tnum border border-ink-200 px-2 py-1.5 text-right font-medium">{qty(c.pieces)}</td>
                   <td className="tnum border border-ink-200 px-2 py-1.5 text-right">{kg(c.netKg)}</td>

@@ -693,6 +693,8 @@ export interface InvoiceCartonDto {
   /** The PO the carton belongs to. Absent on documents built before one document could cover several orders. */
   poNumber?: string;
   contents: Array<{ label: string; qty: number }>;
+  /** What is in a carton typed by hand on a proforma, when it is not a size list. */
+  contentsText?: string | null;
   pieces: number;
   netKg: number | null;
   grossKg: number | null;
