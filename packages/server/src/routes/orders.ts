@@ -11,7 +11,7 @@ import {
 import { storage } from '../services/storage/index.js';
 import { authenticate, requirePermission, requireSuperAdmin, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
-import { BadRequestError, ConflictError, NotFoundError, ValidationError } from '../errors.js';
+import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../errors.js';
 import { fillMainOrderFromDocuments } from '../services/fill-main-order.js';
 import { upsertRefSize, writeOrderMatrix } from '../services/import/committer.js';
 import { inWearingOrder, orderSizes, splitColourSize } from '../services/import/po-lines.js';
@@ -21,11 +21,13 @@ import {
 } from '../services/order-service.js';
 import { CUT_ORDER_INPUT_LEDGERS, refreshCutOrder, writeCutOrder } from '../services/cut-order.js';
 import { applyLedgerToStockRecords } from '../services/stock-sync.js';
-import { materialiseWorkflow } from '../services/workflow-service.js';
+import {
+  materialiseWorkflow, reassignOpenTasks, replanTaskDueDates, NAMED_OWNER_DEPARTMENT,
+} from '../services/workflow-service.js';
 import { logActivity } from '../services/activity-service.js';
 import { announceChange } from '../services/change-service.js';
 import {
-  normalisePoNumber, assertValidOrderDates, assertValidPercentage, assertValidQuantity,
+  normalisePoNumber, assertValidOrderDates, assertValidPercentage, assertValidQuantity, assertUnchangedSince,
 } from '../services/rules.js';
 
 /**
@@ -302,7 +304,13 @@ const updateSchema = createSchema
   .omit({ colors: true, sizes: true, quantities: true })
   // A blank client on an edit means the form had nothing to offer, not that the
   // order should lose its customer. See `requiredRelationId`.
-  .extend({ clientId: requiredRelationId });
+  .extend({
+    clientId: requiredRelationId,
+    // The order's `updatedAt` when the editor's copy was taken. Sent, the
+    // save is refused if the order has moved since; left out, it is not
+    // checked. See `assertUnchangedSince`.
+    expectedUpdatedAt: z.string().max(40).optional(),
+  });
 
 ordersRouter.patch('/:id', requirePermission('order:edit'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
@@ -336,42 +344,99 @@ ordersRouter.patch('/:id', requirePermission('order:edit'), asyncHandler(async (
   if (input.productionSample !== undefined && input.productionSampleNote === undefined) input.productionSampleNote = null;
   if (input.productionSampleNote) input.productionSample = null;
 
-  const { notes, ...scalar } = input;
+  const { notes, expectedUpdatedAt, ...scalar } = input;
 
-  await prisma.order.update({
-    where: { id: order.id },
-    data: {
-      ...scalar,
-      poDate: input.poDate ? new Date(input.poDate) : undefined,
-      promisedShippingDate: input.promisedShippingDate ? new Date(input.promisedShippingDate) : undefined,
-      requiredDeliveryDate: input.requiredDeliveryDate ? new Date(input.requiredDeliveryDate) : undefined,
-      // Present-and-empty clears the date; absent leaves it alone. A field the
-      // form did not send must not be wiped by the form not sending it.
-      internalPoDate: input.internalPoDate === undefined
-        ? undefined
-        : input.internalPoDate ? new Date(input.internalPoDate) : null,
-      fabricDeliveryToSupplier: input.fabricDeliveryToSupplier === undefined
-        ? undefined
-        : input.fabricDeliveryToSupplier ? new Date(input.fabricDeliveryToSupplier) : null,
-      supplierDeliveryDate: input.supplierDeliveryDate === undefined
-        ? undefined
-        : input.supplierDeliveryDate ? new Date(input.supplierDeliveryDate) : null,
-    },
+  const followed = await prisma.$transaction(async (tx) => {
+    // Under the order's row lock, so the version is checked and moved in one
+    // step: two people saving from the same copy cannot both pass the check.
+    await tx.$queryRaw`SELECT id FROM orders WHERE id = ${order.id} FOR UPDATE`;
+    const before = await tx.order.findUniqueOrThrow({
+      where: { id: order.id },
+      select: {
+        updatedAt: true, coordinatorId: true, outsideWorkManagerId: true,
+        poDate: true, promisedShippingDate: true, requiredDeliveryDate: true,
+      },
+    });
+    assertUnchangedSince(expectedUpdatedAt, before.updatedAt);
+
+    const after = await tx.order.update({
+      where: { id: order.id },
+      data: {
+        ...scalar,
+        poDate: input.poDate ? new Date(input.poDate) : undefined,
+        promisedShippingDate: input.promisedShippingDate ? new Date(input.promisedShippingDate) : undefined,
+        requiredDeliveryDate: input.requiredDeliveryDate ? new Date(input.requiredDeliveryDate) : undefined,
+        // Present-and-empty clears the date; absent leaves it alone. A field the
+        // form did not send must not be wiped by the form not sending it.
+        internalPoDate: input.internalPoDate === undefined
+          ? undefined
+          : input.internalPoDate ? new Date(input.internalPoDate) : null,
+        fabricDeliveryToSupplier: input.fabricDeliveryToSupplier === undefined
+          ? undefined
+          : input.fabricDeliveryToSupplier ? new Date(input.fabricDeliveryToSupplier) : null,
+        supplierDeliveryDate: input.supplierDeliveryDate === undefined
+          ? undefined
+          : input.supplierDeliveryDate ? new Date(input.supplierDeliveryDate) : null,
+        // Set outright, so a save that changed only the notes — another
+        // table — still moves the version the next save is checked against.
+        updatedAt: new Date(),
+      },
+    });
+
+    if (notes) {
+      const kinds = [
+        ['GENERAL', notes.general], ['SPREAD', notes.spread], ['CUT', notes.cut],
+        ['PACKING', notes.packing], ['EXTERNAL', notes.external],
+      ] as const;
+      for (const [kind, body] of kinds) {
+        if (body === undefined) continue;
+        await tx.orderNote.upsert({
+          where: { orderId_kind: { orderId: order.id, kind } },
+          create: { orderId: order.id, kind, body: body ?? '' },
+          update: { body: body ?? '' },
+        });
+      }
+    }
+
+    // The tasks follow the order. They were assigned and scheduled once, at
+    // creation, and a new coordinator or a moved shipping date left them with
+    // the old person and on the old plan.
+    const reassigned: string[] = [];
+    for (const field of ['coordinatorId', 'outsideWorkManagerId'] as const) {
+      const moved = await reassignOpenTasks(tx, {
+        orderId: order.id,
+        department: NAMED_OWNER_DEPARTMENT[field],
+        fromId: before[field],
+        toId: after[field],
+      });
+      if (moved > 0) reassigned.push(`${moved} ${field === 'coordinatorId' ? 'coordinator' : 'outside-work'} task${moved === 1 ? '' : 's'}`);
+    }
+
+    const sameInstant = (a: Date | null, b: Date | null) => (a?.getTime() ?? null) === (b?.getTime() ?? null);
+    const datesMoved = !sameInstant(before.poDate, after.poDate)
+      || !sameInstant(before.promisedShippingDate, after.promisedShippingDate)
+      || !sameInstant(before.requiredDeliveryDate, after.requiredDeliveryDate);
+    // Planned as at creation: from the PO date to the promised shipping date,
+    // or the required delivery date where no shipping date was promised.
+    const planEnd = after.promisedShippingDate ?? after.requiredDeliveryDate;
+    const replanned = datesMoved && after.poDate && planEnd
+      ? await replanTaskDueDates(tx, { orderId: order.id, poDate: after.poDate, promisedShippingDate: planEnd })
+      : 0;
+
+    return { reassigned, replanned };
   });
 
-  if (notes) {
-    const kinds = [
-      ['GENERAL', notes.general], ['SPREAD', notes.spread], ['CUT', notes.cut],
-      ['PACKING', notes.packing], ['EXTERNAL', notes.external],
-    ] as const;
-    for (const [kind, body] of kinds) {
-      if (body === undefined) continue;
-      await prisma.orderNote.upsert({
-        where: { orderId_kind: { orderId: order.id, kind } },
-        create: { orderId: order.id, kind, body: body ?? '' },
-        update: { body: body ?? '' },
-      });
-    }
+  if (followed.reassigned.length > 0 || followed.replanned > 0) {
+    const parts = [
+      ...followed.reassigned.map((r) => `moved ${r} to the new owner`),
+      ...(followed.replanned > 0 ? [`re-planned ${followed.replanned} task due date${followed.replanned === 1 ? '' : 's'}`] : []),
+    ];
+    await logActivity({
+      orderId: order.id, actorId: actor.id, actorName: actor.name,
+      action: 'TASKS_FOLLOWED_ORDER', summary: parts.join('; '),
+      entityType: 'Order', entityId: order.id,
+      meta: { reassigned: followed.reassigned, replanned: followed.replanned },
+    });
   }
 
   // The allowance is the cut order's third input, alongside the order quantity
@@ -432,7 +497,28 @@ ordersRouter.put('/:id/matrix', requirePermission('order:edit'), asyncHandler(as
   const order = await prisma.order.findUnique({ where: { id: req.params.id } });
   if (!order) throw new NotFoundError('Order');
 
+  // The cut order is calculated, not typed: no screen offers it, and the
+  // Quantity tab's own button needs the cutting permission. Writing it
+  // through the grid is held to the same.
+  if (ledger === QtyLedger.CUT && !actor.permissions.includes('cutting:write')) {
+    throw new ForbiddenError('Changing the cut order requires the "cutting:write" permission.');
+  }
+
   for (const c of cells) assertValidQuantity(c.qty, 'Quantity');
+
+  // Every cell must be one of this order's own colours and sizes. The ids
+  // arrive from the client, and a colour or size of another order would
+  // otherwise be written onto this one — a row no grid shows and every total
+  // counts.
+  const [ownColors, ownSizes] = await Promise.all([
+    prisma.orderColor.findMany({ where: { orderId: order.id }, select: { id: true } }),
+    prisma.orderSize.findMany({ where: { orderId: order.id }, select: { id: true } }),
+  ]);
+  const colorIds = new Set(ownColors.map((c) => c.id));
+  const sizeIds = new Set(ownSizes.map((s) => s.id));
+  if (cells.some((c) => !colorIds.has(c.orderColorId) || !sizeIds.has(c.orderSizeId))) {
+    throw new BadRequestError('Some of these quantities are for a colour or size that is not on this order. Reload the order and try again.');
+  }
 
   // The matrix is written cell by cell with `upsert`, which the audit
   // middleware does not intercept — and forty cell events would be the wrong
@@ -440,9 +526,12 @@ ordersRouter.put('/:id/matrix', requirePermission('order:edit'), asyncHandler(as
   // is read before and after and announced once.
   const totalBefore = await ledgerTotal(order.id, ledger);
 
-  await prisma.$transaction(
-    cells.map((c) =>
-      prisma.stageQuantity.upsert({
+  // Under the order's row lock, as the cut order is rewritten, so a cut order
+  // being recalculated never reads half of this save.
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT id FROM orders WHERE id = ${order.id} FOR UPDATE`;
+    for (const c of cells) {
+      await tx.stageQuantity.upsert({
         where: {
           orderId_orderColorId_orderSizeId_ledger: {
             orderId: order.id, orderColorId: c.orderColorId, orderSizeId: c.orderSizeId, ledger,
@@ -450,9 +539,9 @@ ordersRouter.put('/:id/matrix', requirePermission('order:edit'), asyncHandler(as
         },
         create: { orderId: order.id, orderColorId: c.orderColorId, orderSizeId: c.orderSizeId, ledger, qty: c.qty },
         update: { qty: c.qty },
-      }),
-    ),
-  );
+      });
+    }
+  }, { timeout: 30_000 });
 
   // The cut order is calculated from the order quantity, the finished stock and
   // the allowance. Change any of those and the stored figure is out of date, so

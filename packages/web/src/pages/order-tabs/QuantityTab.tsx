@@ -155,7 +155,9 @@ export function QuantityTab({
     onSuccess: () => {
       setPctDraft(null);
       setError(null);
-      void qc.invalidateQueries({ queryKey: ['order', order.id] });
+      // A new allowance rewrites a generated cut order on the server, so the
+      // grid and the steps are stale too, not only the order.
+      for (const k of ['order', 'matrix', 'order-steps']) void qc.invalidateQueries({ queryKey: [k, order.id] });
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not save the cut allowance.'),
   });

@@ -101,7 +101,7 @@ const iso = (d: Date | null | undefined): string | null => d?.toISOString() ?? n
 // Projection helpers — turn Prisma rows into the shapes @opsflow/shared expects.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function toAxes(order: FullOrder): { colors: AxisRef[]; sizes: AxisRef[] } {
+function toAxes(order: Pick<FullOrder, 'colors' | 'sizes'>): { colors: AxisRef[]; sizes: AxisRef[] } {
   return {
     colors: order.colors.map((c) => ({ id: c.id, name: c.color.name, position: c.position })),
     // Smallest on the left, whatever order the sizes were saved in.
@@ -109,7 +109,7 @@ function toAxes(order: FullOrder): { colors: AxisRef[]; sizes: AxisRef[] } {
   };
 }
 
-function toQtyCells(order: FullOrder): QtyCell[] {
+function toQtyCells(order: Pick<FullOrder, 'quantities'>): QtyCell[] {
   return order.quantities.map((q) => ({
     colorId: q.orderColorId,
     sizeId: q.orderSizeId,
@@ -802,6 +802,15 @@ export interface OrderFilters {
   includeCancelled?: boolean;
 }
 
+/**
+ * Whether the list keeps cancelled orders. Hidden by default — but asking for
+ * the Cancelled status is asking for exactly them, and hiding them first left
+ * that filter always empty.
+ */
+export function includesCancelled(filters: Pick<OrderFilters, 'includeCancelled' | 'status'>): boolean {
+  return filters.includeCancelled === true || filters.status === 'CANCELLED';
+}
+
 export async function listOrders(
   filters: OrderFilters,
   page = 1,
@@ -810,7 +819,7 @@ export async function listOrders(
 ): Promise<{ data: OrderSummaryDto[]; total: number }> {
   const where: Prisma.OrderWhereInput = {};
 
-  if (!filters.includeCancelled) where.cancelled = false;
+  if (!includesCancelled(filters)) where.cancelled = false;
   if (filters.clientId) where.clientId = filters.clientId;
   if (filters.coordinatorId) where.coordinatorId = filters.coordinatorId;
   // Text typed on orders, so matched without regard to capitals: "SEA" is "Sea".
@@ -875,19 +884,30 @@ export async function listOrders(
   return { data: summaries, total };
 }
 
-/** Refresh the advisory cache columns. Called after writes; never read as truth. */
+/**
+ * Refresh the advisory cache columns. Called after writes; never read as truth.
+ *
+ * Written with plain SQL so the order's `updatedAt` does not move. That column
+ * is the version an edit of the order's details is checked against (see PATCH
+ * /orders/:id), and a task completed on the floor while somebody had the
+ * details open is not a change to the details — through Prisma it bumped the
+ * version and refused their save. Nothing is written when nothing moved.
+ */
 export async function refreshOrderCache(orderId: string): Promise<void> {
   const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
   if (!order) return;
   const d = deriveOrder(order);
-  await prisma.order.update({
-    where: { id: orderId },
-    data: {
-      cachedProgressPct: d.progressPct,
-      cachedStatus: d.status,
-      cachedStageKey: d.currentStageKey,
-    },
-  });
+  if (
+    order.cachedProgressPct === d.progressPct
+    && order.cachedStatus === d.status
+    && order.cachedStageKey === d.currentStageKey
+  ) return;
+  await prisma.$executeRaw`
+    UPDATE orders
+       SET "cachedProgressPct" = ${d.progressPct},
+           "cachedStatus" = ${d.status}::"OrderStatus",
+           "cachedStageKey" = ${d.currentStageKey}::"StageKey"
+     WHERE id = ${orderId}`;
 }
 
 export { ORDER_INCLUDE, type FullOrder, toQtyCells, toAxes, buildMatrix };

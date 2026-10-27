@@ -8,7 +8,7 @@
 import type { Prisma, PrismaClient } from '@prisma/client';
 import {
   QuantityRuleError, TaskPrerequisiteError,
-  OverrideRequiredError, ValidationError,
+  OverrideRequiredError, ValidationError, ConflictError,
 } from '../errors.js';
 
 /** Quantity sanity — negative, absurd, or out-of-order values are refused. */
@@ -252,6 +252,28 @@ export function normalisePoNumber(po: string | null | undefined): string {
   if (!value) throw new ValidationError('PO number is required.');
   if (value.length > 64) throw new ValidationError('PO number is too long (max 64 characters).');
   return value;
+}
+
+/**
+ * An edit made from a copy that is no longer current is refused, not applied.
+ *
+ * The order's details form is filled when Edit is pressed and saved minutes
+ * later. Whatever somebody else saved in between used to be overwritten by the
+ * form's copy without either of them knowing. The client sends the version it
+ * started from (the order's `updatedAt`); a different version now means the
+ * order moved underneath it. Optional: a caller that sends none — an import,
+ * a script — is not checked, as before.
+ */
+export function assertUnchangedSince(expected: string | null | undefined, current: Date): void {
+  if (expected == null) return;
+  const at = new Date(expected);
+  if (Number.isNaN(at.getTime())) throw new ValidationError('The order version sent with this edit is not a valid date.');
+  if (at.getTime() !== current.getTime()) {
+    throw new ConflictError(
+      'Someone else changed this order while you were editing it, so your changes were not saved. '
+      + 'Press Cancel to see the order as it is now, then Edit and make your changes again.',
+    );
+  }
 }
 
 /** Cut percentage sanity: 0–50%, since a 5% allowance is typical and 500% is a typo. */
