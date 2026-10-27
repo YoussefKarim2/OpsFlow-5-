@@ -14,7 +14,7 @@ import { asyncHandler } from '../util/async-handler.js';
 import { BadRequestError, ConflictError, NotFoundError, ValidationError } from '../errors.js';
 import { fillMainOrderFromDocuments } from '../services/fill-main-order.js';
 import { upsertRefSize, writeOrderMatrix } from '../services/import/committer.js';
-import { orderSizes, splitColourSize } from '../services/import/po-lines.js';
+import { inWearingOrder, orderSizes, splitColourSize } from '../services/import/po-lines.js';
 import {
   getOrderDetail, listOrders, refreshOrderCache, ORDER_INCLUDE,
   buildOrderSummary, toTaskDto, deriveOrder,
@@ -403,7 +403,7 @@ ordersRouter.get('/:id/matrix', requirePermission('order:read'), asyncHandler(as
 
   res.json({
     colors: order.colors.map((c) => ({ id: c.id, name: c.color.name, hex: c.color.hex, position: c.position })),
-    sizes: order.sizes.map((s) => ({ id: s.id, name: s.size.name, position: s.position })),
+    sizes: inWearingOrder(order.sizes.map((s) => ({ id: s.id, name: s.size.name, position: s.position }))),
     matrices,
     totals: d.totals,
   });

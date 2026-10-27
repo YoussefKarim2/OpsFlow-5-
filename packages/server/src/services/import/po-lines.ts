@@ -129,21 +129,57 @@ export function sizeSortKey(label: string): number {
  * for the whole grid, since a half-sorted grid is worse than an unsorted one.
  */
 export function orderSizes(sizes: readonly string[]): string[] {
-  // Raw labels — "L", "Youth LG", "28" — rather than the canonical ones the
-  // sort key expects, so each is looked up by its word and group directly.
-  const key = (label: string): number | null => {
-    // One-size goods (a bag, a bib) sit after every sized garment.
-    if (/^(one size|os|osfa|free size|free)$/i.test(label.trim())) return 999;
-    const parts = label.trim().toUpperCase().split(/\s+/);
-    if (parts.length === 1 && SIZE_GROUPS[parts[0]!]) return (GROUP_RANK[SIZE_GROUPS[parts[0]!]!] ?? 4) * 100;
-    const word = parts[parts.length - 1]!;
-    const group = parts.length > 1 ? GROUP_RANK[SIZE_GROUPS[parts[0]!] ?? ''] ?? 4 : 4;
-    const rank = SIZE_WORDS[word]?.rank ?? (/^\d+$/.test(word) ? 20 + Number(word) / 1000 : null);
-    return rank == null ? null : group * 100 + rank;
-  };
-  const keys = sizes.map(key);
+  const keys = sizes.map(sizeRank);
   if (keys.some((k) => k == null)) return [...sizes];
   return sizes.map((s, i) => ({ s, k: keys[i]! })).sort((a, b) => a.k - b.k).map((x) => x.s);
+}
+
+/**
+ * Where a size is worn, smallest first, or null for a label nobody can rank
+ * (a customer's own "2X-SMALL"). Raw labels — "L", "Youth LG", "28" — rather
+ * than the canonical ones, so each is looked up by its word and group directly.
+ */
+export function sizeRank(label: string): number | null {
+  // One-size goods (a bag, a bib) sit after every sized garment.
+  if (/^(one size|os|osfa|free size|free)$/i.test(label.trim())) return 999;
+  // A combined size ("S/M", "L/XL") sits between its two halves.
+  if (label.includes('/')) {
+    const halves = label.split('/').map((h) => sizeRank(h.trim()));
+    return halves.every((h): h is number => h != null) ? halves.reduce((a, h) => a + h, 0) / halves.length : null;
+  }
+  // The factory's compact youth codes: YS, YM, YL, YXS, 2YXS — youth, then
+  // the size, with a leading count of X's ("2YXS" is youth 2XS).
+  const youth = /^(\d)?Y(X*[SML]|X+L)$/i.exec(label.trim());
+  if (youth) {
+    const adult = sizeRank(`${youth[1] ?? ''}${youth[2]}`);
+    if (adult != null) return 300 + (adult % 100);
+  }
+  const parts = label.trim().toUpperCase().split(/\s+/);
+  if (parts.length === 1 && SIZE_GROUPS[parts[0]!]) return (GROUP_RANK[SIZE_GROUPS[parts[0]!]!] ?? 4) * 100;
+  const word = parts[parts.length - 1]!;
+  const group = parts.length > 1 ? GROUP_RANK[SIZE_GROUPS[parts[0]!] ?? ''] ?? 4 : 4;
+  const rank = SIZE_WORDS[word]?.rank ?? (/^\d+$/.test(word) ? 20 + Number(word) / 1000 : null);
+  return rank == null ? null : group * 100 + rank;
+}
+
+/**
+ * An order's size columns as they are shown: smallest on the left. Sizes that
+ * can be ranked are put in wearing order among the places they occupy; a
+ * label nobody can rank keeps its own place. Positions are renumbered to
+ * match, so every screen that sorts by position shows the same order —
+ * whatever order the sizes were saved in, by an import or by hand.
+ */
+export function inWearingOrder<T extends { name: string; position: number }>(sizes: readonly T[]): T[] {
+  const saved = [...sizes].sort((a, b) => a.position - b.position);
+  const ranked = saved
+    .map((s) => ({ s, k: sizeRank(s.name) }))
+    .filter((x): x is { s: T; k: number } => x.k != null)
+    .sort((a, b) => a.k - b.k || a.s.position - b.s.position)
+    .map((x) => x.s);
+  let next = 0;
+  return saved
+    .map((s) => (sizeRank(s.name) == null ? s : ranked[next++]!))
+    .map((s, position) => ({ ...s, position }));
 }
 
 /**

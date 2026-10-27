@@ -29,6 +29,7 @@ import {
   type InvoiceListRowDto, type InvoiceOrderRefDto, type InvoiceReconciliationGroupDto,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
+import { inWearingOrder } from './import/po-lines.js';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
 
 const dec = (v: { toString(): string } | null | undefined): number | null =>
@@ -534,7 +535,7 @@ export function toBuildOrder(o: LoadedOrder): BuildOrder {
     promisedShippingDate: o.promisedShippingDate, billingAddress: o.billingAddress,
     client: o.client,
     colors: o.colors.map((c) => ({ id: c.id, name: c.color.name, productName: c.productName, position: c.position })),
-    sizes: o.sizes.map((s) => ({ id: s.id, name: s.size.name, position: s.position })),
+    sizes: inWearingOrder(o.sizes.map((s) => ({ id: s.id, name: s.size.name, position: s.position }))),
     orderCells: o.quantities,
   };
 }
@@ -713,7 +714,7 @@ async function partIsStale(orderId: string, packingListId: string | null, built:
     },
   });
   if (!list) return true;
-  const sizes = list.order.sizes.map((s) => ({ id: s.id, name: s.size.name, position: s.position }));
+  const sizes = inWearingOrder(list.order.sizes.map((s) => ({ id: s.id, name: s.size.name, position: s.position })));
   const order = { sizes } as BuildOrder;
   const now = toBuildPackingList(list).cartons.map((c, i): InvoiceCartonDto => {
     const contents = cartonContents(order, c);

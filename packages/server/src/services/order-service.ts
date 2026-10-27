@@ -26,6 +26,7 @@ import {
   type Blocker, type GateContext,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
+import { inWearingOrder } from './import/po-lines.js';
 import { NotFoundError } from '../errors.js';
 
 /** Everything needed to compute an order's derived state, in one query. */
@@ -103,7 +104,8 @@ const iso = (d: Date | null | undefined): string | null => d?.toISOString() ?? n
 function toAxes(order: FullOrder): { colors: AxisRef[]; sizes: AxisRef[] } {
   return {
     colors: order.colors.map((c) => ({ id: c.id, name: c.color.name, position: c.position })),
-    sizes: order.sizes.map((s) => ({ id: s.id, name: s.size.name, position: s.position })),
+    // Smallest on the left, whatever order the sizes were saved in.
+    sizes: inWearingOrder(order.sizes.map((s) => ({ id: s.id, name: s.size.name, position: s.position }))),
   };
 }
 

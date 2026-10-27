@@ -16,6 +16,7 @@ import assert from 'node:assert/strict';
 import {
   detectDayFirst, splitColourSize, findPricedNumbers, findBoilerplate, boilerplateKey,
   splitAtLabels, readPoHeader, readPoLines, poLinesToOrder, orderSizes,
+  inWearingOrder, sizeRank,
 } from './po-lines.js';
 import { extractFromPdf } from './pdf-extractor.js';
 
@@ -195,5 +196,33 @@ describe('sizes in wearing order', () => {
 
   test("a label the key cannot place keeps the document's order for the whole grid", () => {
     assert.deepEqual(orderSizes(['YOUTH 2X-SMALL', 'L', 'M']), ['YOUTH 2X-SMALL', 'L', 'M']);
+  });
+});
+
+describe('sizes shown smallest on the left', () => {
+  const axis = (names: string[]) => names.map((name, position) => ({ id: name, name, position }));
+  const shown = (names: string[]) => inWearingOrder(axis(names)).map((s) => s.name);
+
+  test('a reversed or shuffled grid is put in wearing order', () => {
+    assert.deepEqual(shown(['XL', 'L', 'M', 'S']), ['S', 'M', 'L', 'XL']);
+    assert.deepEqual(shown(['L', 'S', '3XL', 'M', 'XS', 'XL', '2XL']), ['XS', 'S', 'M', 'L', 'XL', '2XL', '3XL']);
+    assert.deepEqual(shown(['12', '8', '10']), ['8', '10', '12']);
+  });
+
+  test('the factory youth codes come before adult sizes', () => {
+    assert.deepEqual(shown(['S', 'YL', 'M', 'YS', '2YXS', 'YM', 'YXS']), ['2YXS', 'YXS', 'YS', 'YM', 'YL', 'S', 'M']);
+    assert.ok(sizeRank('YM')! < sizeRank('S')!);
+  });
+
+  test('combined sizes sit between their halves', () => {
+    assert.deepEqual(shown(['L/XL', 'S', 'S/M', 'M', 'L']), ['S', 'S/M', 'M', 'L', 'L/XL']);
+  });
+
+  test('a label nobody can rank keeps its place; the rest sort around it', () => {
+    assert.deepEqual(shown(['M', 'S', 'Custom-Z', 'XS']), ['XS', 'S', 'Custom-Z', 'M']);
+  });
+
+  test('positions are renumbered to match what is shown', () => {
+    assert.deepEqual(inWearingOrder(axis(['L', 'S'])).map((s) => [s.name, s.position]), [['S', 0], ['L', 1]]);
   });
 });
