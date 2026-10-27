@@ -5,7 +5,7 @@ import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
 import { NotFoundError, ForbiddenError, BadRequestError } from '../errors.js';
-import { completeTask, startTask, assignTask } from '../services/workflow-service.js';
+import { completeTask, startTask, assignTask, mayWorkTask } from '../services/workflow-service.js';
 import { refreshOrderCache } from '../services/order-service.js';
 import { logActivity } from '../services/activity-service.js';
 
@@ -128,8 +128,28 @@ tasksRouter.get('/:id', requirePermission('task:read'), asyncHandler(async (req,
   res.json(toDto(task));
 }));
 
+/**
+ * Refuse a person who may not work this task, with the sentence that says who
+ * can. Starting and completing are held to the same rule: starting a task in
+ * another department was open to anyone, and marked it as being worked by
+ * people who were not working it.
+ */
+async function assertMayWorkTask(taskId: string, actor: ReturnType<typeof currentUser>): Promise<void> {
+  const existing = await prisma.task.findUnique({
+    where: { id: taskId },
+    select: { assigneeId: true, department: true },
+  });
+  if (!existing) throw new NotFoundError('Task');
+  if (!mayWorkTask(existing, actor)) {
+    throw new ForbiddenError(
+      `This task belongs to ${DEPARTMENT_LABEL[existing.department].en}. Ask them to complete it, or reassign it first.`,
+    );
+  }
+}
+
 tasksRouter.post('/:id/start', requirePermission('task:complete'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
+  await assertMayWorkTask(req.params.id, actor);
   await startTask(prisma, req.params.id, actor.id, actor.name);
   const task = await prisma.task.findUniqueOrThrow({ where: { id: req.params.id }, include: TASK_INCLUDE });
   await refreshOrderCache(task.order.id);
@@ -145,23 +165,9 @@ tasksRouter.post('/:id/complete', requirePermission('task:complete'), asyncHandl
   const actor = currentUser(req);
   const input = completeSchema.parse(req.body ?? {});
 
-  const existing = await prisma.task.findUnique({
-    where: { id: req.params.id },
-    select: { assigneeId: true, department: true },
-  });
-  if (!existing) throw new NotFoundError('Task');
-
   // A task may be completed by its assignee, by someone in the responsible
   // department, or by anyone who can assign tasks (coordinator, admin).
-  const mayComplete =
-    existing.assigneeId === actor.id ||
-    existing.department === actor.department ||
-    actor.permissions.includes('task:assign');
-  if (!mayComplete) {
-    throw new ForbiddenError(
-      `This task belongs to ${DEPARTMENT_LABEL[existing.department].en}. Ask them to complete it, or reassign it first.`,
-    );
-  }
+  await assertMayWorkTask(req.params.id, actor);
 
   await completeTask(prisma, { taskId: req.params.id, actorId: actor.id, actorName: actor.name, ...input });
 
@@ -233,6 +239,9 @@ tasksRouter.patch('/:id', requirePermission('task:assign'), asyncHandler(async (
       ...input,
       ...(leavingBlocked ? { blockedReason: null } : {}),
       dueDate: input.dueDate === undefined ? undefined : input.dueDate ? new Date(input.dueDate) : null,
+      // A date set here is a person's decision, and re-planning after the
+      // order's dates move must not undo it (see `replanTaskDueDates`).
+      ...(input.dueDate !== undefined ? { dueDateManual: true } : {}),
     },
   });
 

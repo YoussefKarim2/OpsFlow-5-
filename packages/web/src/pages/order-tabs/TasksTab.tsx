@@ -19,12 +19,13 @@ import { useQuery } from '@tanstack/react-query';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import {
-  Card, CardHeader, Modal, Field, Avatar, PriorityBadge, FreeText, Spinner, clsx,
+  Card, CardHeader, Modal, Field, Avatar, PriorityBadge, FreeText, Spinner, clsx, useToast,
 } from '../../components/ui';
 
 export function TasksTab({ order }: { order: OrderDetailDto }) {
   const qc = useQueryClient();
   const { can, user } = useAuth();
+  const toast = useToast();
   const [refusal, setRefusal] = useState<{ title: string; message: string } | null>(null);
   const [detail, setDetail] = useState<TaskDto | null>(null);
 
@@ -51,8 +52,18 @@ export function TasksTab({ order }: { order: OrderDetailDto }) {
     },
   });
 
-  const start = useMutation({ mutationFn: (id: string) => api.tasks.start(id), onSuccess: invalidate });
-  const reopen = useMutation({ mutationFn: (id: string) => api.tasks.reopen(id), onSuccess: invalidate });
+  // A refusal is said, not swallowed: these used to fail silently and leave
+  // the row as it was with no reason given.
+  const start = useMutation({
+    mutationFn: (id: string) => api.tasks.start(id),
+    onSuccess: invalidate,
+    onError: (e) => { toast.error(e instanceof ApiError ? e : new Error('Could not start this task.')); invalidate(); },
+  });
+  const reopen = useMutation({
+    mutationFn: (id: string) => api.tasks.reopen(id),
+    onSuccess: invalidate,
+    onError: (e) => { toast.error(e instanceof ApiError ? e : new Error('Could not reopen this task.')); invalidate(); },
+  });
 
   if (isLoading) return <Spinner />;
   const tasks = data?.data ?? [];
@@ -101,7 +112,11 @@ export function TasksTab({ order }: { order: OrderDetailDto }) {
                 <ul className="ml-3 space-y-1.5 border-l border-ink-200 pl-4">
                   {group.map((t) => {
                     const mine = t.assignee?.id === user?.id || t.department === user?.department;
-                    const canAct = can('task:complete') && (mine || can('task:assign'));
+                    // Reopening is the assigners' to do (the server refuses
+                    // anyone else), so a done box is only clickable for them.
+                    const canAct = t.status === 'COMPLETED'
+                      ? can('task:assign')
+                      : can('task:complete') && (mine || can('task:assign'));
 
                     return (
                       <li
@@ -122,7 +137,7 @@ export function TasksTab({ order }: { order: OrderDetailDto }) {
                               if (t.status === 'COMPLETED') reopen.mutate(t.id);
                               else complete.mutate(t.id);
                             }}
-                            disabled={!canAct || complete.isPending}
+                            disabled={!canAct || complete.isPending || reopen.isPending}
                             className={clsx(
                               'mt-0.5 flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded border transition-colors',
                               t.status === 'COMPLETED'
@@ -133,8 +148,9 @@ export function TasksTab({ order }: { order: OrderDetailDto }) {
                               !canAct && 'cursor-not-allowed opacity-60',
                             )}
                             title={
-                              !canAct ? `Only ${DEPARTMENT_LABEL[t.department].en} can complete this`
-                              : t.status === 'COMPLETED' ? 'Reopen' : 'Mark complete'
+                              t.status === 'COMPLETED' ? (canAct ? 'Reopen' : 'Completed')
+                              : !canAct ? `Only ${DEPARTMENT_LABEL[t.department].en} can complete this`
+                              : 'Mark complete'
                             }
                           >
                             {t.status === 'COMPLETED' && <Check className="h-3 w-3" />}
