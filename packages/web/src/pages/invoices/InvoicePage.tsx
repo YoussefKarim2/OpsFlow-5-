@@ -348,11 +348,25 @@ export function InvoicePage() {
       )}
 
       {/* ── Editor + document ──────────────────────────────────────────── */}
-      {/* The editor takes a fixed column so the document keeps the width it
-          prints at; on a laptop screen the sheet still gets about 640px. */}
-      <div className={clsx('grid gap-5', editable && 'xl:grid-cols-[21rem_minmax(0,1fr)] 2xl:grid-cols-[26rem_minmax(0,1fr)]')}>
+      {/* The document first, at the width it prints; the editor beneath it,
+          its cards in a grid, the long lists full width. */}
+      <div className="space-y-5">
+        <div className="min-w-0">
+          {editable && dirty && (
+            <p className="no-print mb-2 text-center text-2xs text-amber-800">The preview shows unsaved edits. Save before issuing or printing the final copy.</p>
+          )}
+          <InvoiceDocument doc={shown} />
+          {!isDraft && (
+            <p className="no-print mt-3 flex items-center justify-center gap-1.5 text-2xs text-ink-500">
+              <Lock className="h-3 w-3" />
+              {inv.status === InvoiceStatus.ISSUED ? `Issued ${fmtDate(inv.issuedAt)}${inv.issuedByName ? ` by ${inv.issuedByName}` : ''}. This is the record; it cannot be edited.` : 'Void. Kept for the record.'}
+            </p>
+          )}
+        </div>
+
         {editable && (
-          <div className="no-print space-y-4">
+          <div className="no-print grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+
             <Card>
               <div className="card-header"><h3 className="card-title">On the document</h3></div>
               <div className="space-y-2 p-4">
@@ -373,10 +387,53 @@ export function InvoicePage() {
               </div>
             </Card>
 
+            <Card>
+              <div className="card-header"><h3 className="card-title">Bill to</h3></div>
+              <div className="grid gap-3 p-4">
+                <Field label="Name"><input className="input" dir="auto" value={draft.billTo} onChange={(e) => set('billTo', e.target.value)} /></Field>
+                <Field label="Address"><textarea className="input min-h-[3.5rem]" dir="auto" value={draft.billToAddress} onChange={(e) => set('billToAddress', e.target.value)} /></Field>
+                <Field label="Email"><input className="input" type="email" value={draft.billToEmail} onChange={(e) => set('billToEmail', e.target.value)} /></Field>
+              </div>
+            </Card>
+
+            <Card>
+              <div className="card-header"><h3 className="card-title">Dates &amp; references</h3></div>
+              <div className="grid grid-cols-2 gap-3 p-4">
+                <Field label={inv.kind === 'INVOICE' ? 'Invoice date' : 'Date'} hint={inv.kind === 'INVOICE' ? 'The day the goods left, unless agreed otherwise.' : undefined}>
+                  <input type="date" className="input" value={draft.date} onChange={(e) => set('date', e.target.value)} />
+                </Field>
+                <Field label={inv.kind === 'INVOICE' ? 'Due date' : 'Valid until'}><input type="date" className="input" value={draft.dueDate} onChange={(e) => set('dueDate', e.target.value)} /></Field>
+                <Field label="Payment terms"><input className="input" value={draft.paymentTerms} onChange={(e) => set('paymentTerms', e.target.value)} placeholder="COD" /></Field>
+                <Field label="Your reference" hint="The customer's own reference."><input className="input" dir="auto" value={draft.customerReference} onChange={(e) => set('customerReference', e.target.value)} /></Field>
+                {inv.kind === 'INVOICE' && (
+                  <>
+                    <Field label="Shipment no." hint="AWB, container or your own number."><input className="input" value={draft.shipmentRef} onChange={(e) => set('shipmentRef', e.target.value)} /></Field>
+                    <Field label="Shipped on"><input type="date" className="input" value={draft.shippedOn} onChange={(e) => set('shippedOn', e.target.value)} /></Field>
+                  </>
+                )}
+              </div>
+            </Card>
+
+            {isProforma && (
+              <ShipmentEditor draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} defaultTitle={defaultSheetTitle(inv.order.clientName, inv.number, shown.date)} />
+            )}
+
+            <Card>
+              <div className="card-header"><h3 className="card-title">Text</h3></div>
+              <div className="grid gap-3 p-4">
+                <Field label="Cover note" hint="Above the document, as the email reads."><textarea className="input min-h-[6rem] text-xs" dir="auto" value={draft.coverNote} onChange={(e) => set('coverNote', e.target.value)} /></Field>
+                <Field label="Terms & conditions" hint="One per line."><textarea className="input min-h-[5rem] text-xs" dir="auto" value={draft.terms} onChange={(e) => set('terms', e.target.value)} /></Field>
+                <Field label="Payment details"><textarea className="input min-h-[5rem] font-mono text-xs" value={draft.bankDetails} onChange={(e) => set('bankDetails', e.target.value)} /></Field>
+                <Field label="Notes" hint="Printed under the invoice when filled."><textarea className="input min-h-[3rem] text-xs" dir="auto" value={draft.notes} onChange={(e) => set('notes', e.target.value)} /></Field>
+              </div>
+            </Card>
+            <div className="md:col-span-2 xl:col-span-3">
             {isProforma && (
               <StylesEditor draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} rows={sheetRows} rates={sheetRates} onRate={setSheetRate} />
             )}
 
+            </div>
+            <div className="md:col-span-2 xl:col-span-3">
             <Card>
               <div className="card-header"><h3 className="card-title">Lines</h3>
                 <div className="flex gap-1">
@@ -384,7 +441,7 @@ export function InvoicePage() {
                   <button type="button" className="btn-ghost btn-sm" onClick={() => addLine('EXTRA')}><Plus className="h-3.5 w-3.5" /> Extra / discount</button>
                 </div>
               </div>
-              <div className="divide-y divide-ink-100">
+              <div className="grid md:grid-cols-2 xl:grid-cols-3 [&>*]:border-b [&>*]:border-ink-100">
                 {draft.lines.length === 0 && <p className="px-4 py-3 text-xs text-ink-500">No lines. Add goods, or rebuild from the order.</p>}
                 {draft.lines.map((l, i) => (
                   <div key={i} className="space-y-1.5 px-3 py-2.5">
@@ -418,6 +475,8 @@ export function InvoicePage() {
               </div>
             </Card>
 
+            </div>
+            <div className="md:col-span-2 xl:col-span-3">
             <Card>
               <div className="card-header"><h3 className="card-title">Cartons</h3>
                 {cartonsTyped(inv) && <div className="flex gap-1">
@@ -434,7 +493,7 @@ export function InvoicePage() {
                   edit the cartons on the order's Packing tab, then use <strong>Rebuild from order</strong>.
                 </p>
               ) : (
-              <div className="divide-y divide-ink-100">
+              <div className="grid md:grid-cols-2 xl:grid-cols-3 [&>*]:border-b [&>*]:border-ink-100">
                 {draft.cartons.length === 0 && (
                   <p className="px-4 py-3 text-xs text-ink-500">No cartons yet. Add them by hand, or copy them from the order's packing list. They print as a packing list under the document.</p>
                 )}
@@ -481,61 +540,9 @@ export function InvoicePage() {
               )}
             </Card>
 
-            <Card>
-              <div className="card-header"><h3 className="card-title">Bill to</h3></div>
-              <div className="grid gap-3 p-4">
-                <Field label="Name"><input className="input" dir="auto" value={draft.billTo} onChange={(e) => set('billTo', e.target.value)} /></Field>
-                <Field label="Address"><textarea className="input min-h-[3.5rem]" dir="auto" value={draft.billToAddress} onChange={(e) => set('billToAddress', e.target.value)} /></Field>
-                <Field label="Email"><input className="input" type="email" value={draft.billToEmail} onChange={(e) => set('billToEmail', e.target.value)} /></Field>
-              </div>
-            </Card>
-
-            <Card>
-              <div className="card-header"><h3 className="card-title">Dates &amp; references</h3></div>
-              <div className="grid grid-cols-2 gap-3 p-4">
-                <Field label={inv.kind === 'INVOICE' ? 'Invoice date' : 'Date'} hint={inv.kind === 'INVOICE' ? 'The day the goods left, unless agreed otherwise.' : undefined}>
-                  <input type="date" className="input" value={draft.date} onChange={(e) => set('date', e.target.value)} />
-                </Field>
-                <Field label={inv.kind === 'INVOICE' ? 'Due date' : 'Valid until'}><input type="date" className="input" value={draft.dueDate} onChange={(e) => set('dueDate', e.target.value)} /></Field>
-                <Field label="Payment terms"><input className="input" value={draft.paymentTerms} onChange={(e) => set('paymentTerms', e.target.value)} placeholder="COD" /></Field>
-                <Field label="Your reference" hint="The customer's own reference."><input className="input" dir="auto" value={draft.customerReference} onChange={(e) => set('customerReference', e.target.value)} /></Field>
-                {inv.kind === 'INVOICE' && (
-                  <>
-                    <Field label="Shipment no." hint="AWB, container or your own number."><input className="input" value={draft.shipmentRef} onChange={(e) => set('shipmentRef', e.target.value)} /></Field>
-                    <Field label="Shipped on"><input type="date" className="input" value={draft.shippedOn} onChange={(e) => set('shippedOn', e.target.value)} /></Field>
-                  </>
-                )}
-              </div>
-            </Card>
-
-            {isProforma && (
-              <ShipmentEditor draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} defaultTitle={defaultSheetTitle(inv.order.clientName, inv.number, shown.date)} />
-            )}
-
-            <Card>
-              <div className="card-header"><h3 className="card-title">Text</h3></div>
-              <div className="grid gap-3 p-4">
-                <Field label="Cover note" hint="Above the document, as the email reads."><textarea className="input min-h-[6rem] text-xs" dir="auto" value={draft.coverNote} onChange={(e) => set('coverNote', e.target.value)} /></Field>
-                <Field label="Terms & conditions" hint="One per line."><textarea className="input min-h-[5rem] text-xs" dir="auto" value={draft.terms} onChange={(e) => set('terms', e.target.value)} /></Field>
-                <Field label="Payment details"><textarea className="input min-h-[5rem] font-mono text-xs" value={draft.bankDetails} onChange={(e) => set('bankDetails', e.target.value)} /></Field>
-                <Field label="Notes" hint="Printed under the invoice when filled."><textarea className="input min-h-[3rem] text-xs" dir="auto" value={draft.notes} onChange={(e) => set('notes', e.target.value)} /></Field>
-              </div>
-            </Card>
+            </div>
           </div>
         )}
-
-        <div className="min-w-0">
-          {editable && dirty && (
-            <p className="no-print mb-2 text-center text-2xs text-amber-800">The preview shows unsaved edits. Save before issuing or printing the final copy.</p>
-          )}
-          <InvoiceDocument doc={shown} />
-          {!isDraft && (
-            <p className="no-print mt-3 flex items-center justify-center gap-1.5 text-2xs text-ink-500">
-              <Lock className="h-3 w-3" />
-              {inv.status === InvoiceStatus.ISSUED ? `Issued ${fmtDate(inv.issuedAt)}${inv.issuedByName ? ` by ${inv.issuedByName}` : ''}. This is the record; it cannot be edited.` : 'Void. Kept for the record.'}
-            </p>
-          )}
-        </div>
       </div>
 
       {/* ── Confirmations ──────────────────────────────────────────────── */}

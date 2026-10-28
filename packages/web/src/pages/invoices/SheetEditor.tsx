@@ -129,7 +129,7 @@ export function StylesEditor({ draft, onChange, rows, rates, onRate }: {
   return (
     <Card>
       <div className="card-header"><h3 className="card-title">Styles</h3><span className="text-2xs text-ink-500">{rows.length} style{rows.length === 1 ? '' : 's'}</span></div>
-      <div className="divide-y divide-ink-100">
+      <div className="grid md:grid-cols-2 xl:grid-cols-3 [&>*]:border-b [&>*]:border-ink-100">
         {rows.length === 0 && <p className="px-4 py-3 text-xs text-ink-500">No goods lines yet. Rebuild from the order.</p>}
         {rows.map((r) => {
           const d = draft.rows[r.key] ?? {};
