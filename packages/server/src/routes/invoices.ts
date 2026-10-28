@@ -334,7 +334,8 @@ invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async 
           orders: parts.map((p, i) => ({ poNumber: p.loaded.poNumber, orderName: p.loaded.orderName, qty: doc.qtyByOrder[i] ?? 0 })),
         }),
         terms: doc.terms, bankDetails: doc.bankDetails, notes: doc.notes,
-        ...(sheet ? { lineLayout: 'SHEET', sheet: sheet as object } : {}),
+        // A proforma prints as the factory's sheet does: one line per style.
+        ...(sheet ? { lineLayout: 'SUMMARY', sheet: sheet as object } : {}),
         seller: doc.seller as object, orderRef: doc.orderRef as object,
         manifest: doc.manifest as object[], reconciliation: doc.reconciliation as object[],
         warnings: doc.warnings,

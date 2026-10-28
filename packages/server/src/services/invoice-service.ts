@@ -758,7 +758,8 @@ export function invoiceToDto(inv: LoadedInvoice, stale = false): InvoiceDto {
     terms: inv.terms,
     bankDetails: inv.bankDetails,
     notes: inv.notes,
-    lineLayout: inv.lineLayout === 'SUMMARY' || inv.lineLayout === 'SHEET' ? inv.lineLayout : 'DETAILED',
+    // 'SHEET' was a layout of its own for a day; it reads as one line per style.
+    lineLayout: inv.lineLayout === 'SUMMARY' || inv.lineLayout === 'SHEET' ? 'SUMMARY' : 'DETAILED',
     sheet: (inv.sheet as ProformaSheetSettings | null) ?? null,
     seller: inv.seller as unknown as CompanyProfileDto,
     lines,

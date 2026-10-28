@@ -749,13 +749,13 @@ export interface InvoiceDto {
   terms: string | null;
   bankDetails: string | null;
   notes: string | null;
+  /** DETAILED: every colour and size. SUMMARY: one line per style (or per order) — total pieces, rate, amount. */
+  lineLayout: 'DETAILED' | 'SUMMARY';
   /**
-   * DETAILED: every colour and size. SUMMARY: one line per style (or per
-   * order) — total pieces, rate, amount. SHEET: the factory's proforma sheet,
-   * one row per style with PO, part number, HTS code, cartons and container share.
+   * A proforma's shipment and exporter details and each style's PO, part
+   * number, HTS code, weights and cartons — the factory's proforma sheet.
+   * Null on an invoice.
    */
-  lineLayout: 'DETAILED' | 'SUMMARY' | 'SHEET';
-  /** The proforma sheet's typed fields; null until the sheet is first saved. */
   sheet: ProformaSheetSettings | null;
 
   seller: CompanyProfileDto;

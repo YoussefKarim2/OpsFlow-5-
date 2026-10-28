@@ -166,8 +166,8 @@ export interface InvoiceEditBody {
   terms?: string | null;
   bankDetails?: string | null;
   notes?: string | null;
-  lineLayout?: 'DETAILED' | 'SUMMARY' | 'SHEET';
-  /** The factory proforma sheet's typed fields. */
+  lineLayout?: 'DETAILED' | 'SUMMARY';
+  /** A proforma's shipment, exporter and per-style details (the factory sheet's fields). */
   sheet?: ProformaSheetSettings | null;
   /** The version the editor opened; a save on a newer one is refused. */
   updatedAt?: string;

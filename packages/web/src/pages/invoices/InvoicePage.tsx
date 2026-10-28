@@ -24,7 +24,7 @@ import { useAuth } from '../../lib/auth';
 import { Card, ConfirmDialog, ErrorNote, Field, Num, Spinner, clsx, useToast } from '../../components/ui';
 import { InvoiceDocument } from '../../components/InvoiceDocument';
 import { ComboSelect } from '../../components/ComboSelect';
-import { SheetEditor, sheetDraftFrom, sheetProblem, sheetSettingsFrom, type SheetDraft } from './SheetEditor';
+import { ShipmentEditor, StylesEditor, sheetDraftFrom, sheetProblem, sheetSettingsFrom, type SheetDraft } from './SheetEditor';
 
 interface LineDraft { kind: LineKind; description: string; size: string; quantity: string; unitPrice: string; amount: string }
 /**
@@ -43,7 +43,8 @@ interface Draft {
   billTo: string; billToAddress: string; billToEmail: string;
   customerReference: string; shipmentRef: string; shippedOn: string;
   coverNote: string; terms: string; bankDetails: string; notes: string;
-  lineLayout: 'DETAILED' | 'SUMMARY' | 'SHEET';
+  lineLayout: 'DETAILED' | 'SUMMARY';
+  /** A proforma's shipment, exporter and per-style details. */
   sheet: SheetDraft;
   cartons: CartonDraft[];
   lines: LineDraft[];
@@ -109,8 +110,7 @@ function toBody(d: Draft, inv: InvoiceDto): InvoiceEditBody {
     customerReference: nn(d.customerReference), shipmentRef: nn(d.shipmentRef), shippedOn: d.shippedOn || null,
     coverNote: nn(d.coverNote), terms: nn(d.terms), bankDetails: nn(d.bankDetails), notes: nn(d.notes),
     lineLayout: d.lineLayout,
-    // The sheet's fields are kept once it has been used, whichever layout prints.
-    sheet: d.lineLayout === 'SHEET' || inv.sheet ? sheetSettingsFrom(d.sheet) : undefined,
+    sheet: inv.kind === 'PROFORMA' ? sheetSettingsFrom(d.sheet) : undefined,
     updatedAt: inv.updatedAt,
     cartons: !cartonsTyped(inv) ? undefined : d.cartons.map((c) => ({
       cartonNumber: c.cartonNumber.trim(), cartonSize: nn(c.cartonSize), product: c.product.trim(), poNumber: c.poNumber,
@@ -190,7 +190,7 @@ export function InvoicePage() {
 
   const save = useMutation({
     mutationFn: (d: Draft) => {
-      const problem = cartonProblem(d) ?? (d.lineLayout === 'SHEET' ? sheetProblem(d.sheet) : null);
+      const problem = cartonProblem(d) ?? (inv!.kind === 'PROFORMA' ? sheetProblem(d.sheet) : null);
       if (problem) throw new Error(problem);
       return api.invoices.update(id, toBody(d, inv!));
     },
@@ -243,7 +243,8 @@ export function InvoicePage() {
   }] });
   const addLine = (kind: LineKind) => setDraft({ ...draft, lines: [...draft.lines, { kind, description: '', size: '', quantity: '', unitPrice: '', amount: '' }] });
 
-  const sheetRows: SheetRow[] = draft.lineLayout === 'SHEET' ? buildSheet(shown.lines, shown.orders, shown.sheet).rows : [];
+  const isProforma = inv.kind === 'PROFORMA';
+  const sheetRows: SheetRow[] = isProforma ? buildSheet(shown.lines, shown.orders, shown.sheet).rows : [];
   // A row's rate as its goods lines have it, when they agree; blank when they differ.
   const sheetRates = Object.fromEntries(sheetRows.map((r) => {
     const typed = [...new Set(r.lineIndexes.map((i) => draft.lines[i]?.unitPrice ?? ''))];
@@ -285,9 +286,9 @@ export function InvoicePage() {
               </button>
             </>
           )}
-          {inv.lineLayout === 'SHEET' && (
+          {isProforma && (
             <button className="btn-secondary btn-sm" disabled={dirty || downloadXlsx.isPending} onClick={() => downloadXlsx.mutate()}
-              title={dirty ? 'Save the draft first: the Excel file is made from the saved document' : 'The proforma sheet as Excel: the invoice sheet and one sheet per style, with formulas'}>
+              title={dirty ? 'Save the draft first: the Excel file is made from the saved document' : 'The proforma as Excel: one row per style, and a sheet per style with its colours and sizes, with formulas'}>
               <FileSpreadsheet className="h-3.5 w-3.5" /> {downloadXlsx.isPending ? 'Preparing…' : 'Excel'}
             </button>
           )}
@@ -356,9 +357,7 @@ export function InvoicePage() {
               <div className="card-header"><h3 className="card-title">On the document</h3></div>
               <div className="space-y-2 p-4">
                 <div className="flex rounded-md border border-ink-300 p-0.5" role="radiogroup" aria-label="How the goods are listed">
-                  {((inv.kind === 'PROFORMA' || inv.lineLayout === 'SHEET'
-                    ? [['SHEET', 'Proforma sheet'], ['DETAILED', 'By colour & size'], ['SUMMARY', 'Total only']]
-                    : [['DETAILED', 'By colour & size'], ['SUMMARY', 'Total only']]) as ReadonlyArray<readonly [Draft['lineLayout'], string]>).map(([v, label]) => (
+                  {([['DETAILED', 'By colour & size'], ['SUMMARY', 'Total only']] as const).map(([v, label]) => (
                     <button
                       key={v} type="button" role="radio" aria-checked={draft.lineLayout === v}
                       onClick={() => set('lineLayout', v)}
@@ -367,21 +366,15 @@ export function InvoicePage() {
                   ))}
                 </div>
                 <p className="text-2xs text-ink-500">
-                  {draft.lineLayout === 'SHEET'
-                    ? 'The factory\'s proforma layout: one row per style with PO, part no., HTS code, cartons and % of container. Download it as Excel with its formulas.'
-                    : draft.lineLayout === 'SUMMARY'
-                    ? 'One line per style (per order when it is a single style): total pieces, rate and amount, without colours or sizes. The lines below and the totals are unchanged.'
-                    : 'Every colour with its sizes, pieces, rate and amount.'}
+                  {draft.lineLayout === 'SUMMARY'
+                    ? `One line per style (per order when it is a single style): total pieces, rate and amount, without colours or sizes.${isProforma ? ' Each line carries its PO, part no., HTS code, cartons and share of the container.' : ' The lines below and the totals are unchanged.'}`
+                    : `Every colour with its sizes, pieces, rate and amount${isProforma ? ', under a heading for its style with PO, part no., HTS code and cartons.' : '.'}`}
                 </p>
               </div>
             </Card>
 
-            {draft.lineLayout === 'SHEET' && (
-              <SheetEditor
-                draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} rows={sheetRows}
-                defaultTitle={defaultSheetTitle(inv.order.clientName, inv.number, shown.date)}
-                rates={sheetRates} onRate={setSheetRate}
-              />
+            {isProforma && (
+              <StylesEditor draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} rows={sheetRows} rates={sheetRates} onRate={setSheetRate} />
             )}
 
             <Card>
@@ -514,6 +507,10 @@ export function InvoicePage() {
                 )}
               </div>
             </Card>
+
+            {isProforma && (
+              <ShipmentEditor draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} defaultTitle={defaultSheetTitle(inv.order.clientName, inv.number, shown.date)} />
+            )}
 
             <Card>
               <div className="card-header"><h3 className="card-title">Text</h3></div>

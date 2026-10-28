@@ -16,8 +16,11 @@
  * that is the document the office already knows how to read.
  */
 
-import { ProformaSheetDocument } from './ProformaSheetDocument';
-import { amountInWords, computeInvoiceTotals, fmtDate, fmtMoney, InvoiceKind, InvoiceLineKind, InvoiceStatus, summariseGoods, type InvoiceDto } from '@opsflow/shared';
+import { Fragment } from 'react';
+import {
+  amountInWords, buildSheet, computeInvoiceTotals, fmtDate, fmtMoney, InvoiceKind, InvoiceLineKind, InvoiceStatus,
+  SHEET_DEFAULTS, sheetEta, styleText, summariseGoods, type InvoiceDto,
+} from '@opsflow/shared';
 import { clsx } from './ui';
 
 const money = (n: number | null | undefined) => (n == null ? '—' : fmtMoney(n, '', 2));
@@ -42,12 +45,6 @@ const joined = (values: Array<string | null>): string =>
   [...new Set(values.map((v) => v?.trim()).filter((v): v is string => !!v))].join(', ');
 
 export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
-  // The factory's own proforma layout is a document of its own.
-  if (doc.lineLayout === 'SHEET') return <ProformaSheetDocument doc={doc} />;
-  return <StandardDocument doc={doc} />;
-}
-
-function StandardDocument({ doc }: { doc: InvoiceDto }) {
   const totals = computeInvoiceTotals(doc.lines);
   const goods = doc.lines.filter((l) => l.kind === InvoiceLineKind.ITEM);
   const extras = doc.lines.filter((l) => l.kind === InvoiceLineKind.EXTRA);
@@ -58,6 +55,18 @@ function StandardDocument({ doc }: { doc: InvoiceDto }) {
   // "Total only": one line per style (or order), its pieces, rate and amount. The lines
   // themselves and every total below are the same as the detailed listing.
   const summary = doc.lineLayout === 'SUMMARY' ? summariseGoods(doc.lines, orders) : null;
+  // A proforma carries the factory sheet's details: the shipment block, each
+  // style's PO, part number, HTS code, cartons and share of the container,
+  // the exporter block and the signature — in either listing.
+  const s = doc.sheet ?? {};
+  const sheet = !isInvoice ? buildSheet(doc.lines, orders, s) : null;
+  const lead = s.leadDays ?? SHEET_DEFAULTS.leadDays;
+  const eta = sheetEta(s.etd, lead);
+  const dayOf = (d: string | null | undefined) => (d ? fmtDate(`${d.slice(0, 10)}T00:00:00.000Z`) : '');
+  const exporter = s.exporterName ?? doc.seller.name;
+  const cartonsNote = sheet && sheet.totals.cartons > 0
+    ? `${sheet.totals.cartons.toLocaleString()} carton${sheet.totals.cartons === 1 ? '' : 's'}${sheet.totals.nw ? ` · NW ${kg(sheet.totals.nw)} kg` : ''}${sheet.totals.gw ? ` · GW ${kg(sheet.totals.gw)} kg` : ''}${s.cartonSize ? ` · ${s.cartonSize}` : ''}`
+    : '';
   const title = isInvoice ? 'INVOICE' : 'PROFORMA INVOICE';
   const seller = doc.seller;
   const sellerLine = [seller.address, seller.taxId ? `Tax ID: ${seller.taxId}` : null, seller.email, seller.website]
@@ -115,10 +124,17 @@ function StandardDocument({ doc }: { doc: InvoiceDto }) {
             </div>
           )}
 
+          {sheet && (
+            <div className="border-b border-ink-100 bg-ink-50 px-5 py-2 text-center">
+              {s.title && <p className="text-[11.5px] font-bold"><T>{s.title}</T></p>}
+              <p className="text-[10.5px] font-semibold text-ink-800"><T>{s.statement ?? SHEET_DEFAULTS.statement}</T></p>
+            </div>
+          )}
+
           {/* Bill to + meta */}
           <div className="grid grid-cols-2 gap-6 px-5 pb-4 pt-4">
             <div>
-              <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-ink-500">Bill to</p>
+              <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-ink-500">{sheet ? 'Shipment to' : 'Bill to'}</p>
               <p className="mt-1 text-[13px] font-bold"><T>{doc.billTo}</T></p>
               {doc.billToAddress && <p className="mt-0.5 text-ink-700"><T>{doc.billToAddress}</T></p>}
               {doc.billToEmail && <p className="mt-0.5 text-ink-700">{doc.billToEmail}</p>}
@@ -135,11 +151,24 @@ function StandardDocument({ doc }: { doc: InvoiceDto }) {
                   <Meta label="Shipment" value={[doc.shipmentRef, doc.shippedOn ? fmtDate(doc.shippedOn) : null].filter(Boolean).join(' · ')} />
                 )}
                 {!isInvoice && doc.shippedOn && <Meta label="Shipping" value={fmtDate(doc.shippedOn)} />}
+                {sheet && (
+                  <>
+                    <Meta label="Shipment from" value={s.shipmentFrom ?? SHEET_DEFAULTS.shipmentFrom} />
+                    <Meta label="Container" value={s.container ?? SHEET_DEFAULTS.container} />
+                    {s.onBoardDate && <Meta label="On board" value={dayOf(s.onBoardDate)} />}
+                    {s.etd && <Meta label="ETD" value={dayOf(s.etd)} />}
+                    {eta && <Meta label="ETA" value={`${dayOf(eta)} · ${lead} days lead time`} />}
+                    {(s.portFrom || s.portTo) && <Meta label="Route" value={[s.portFrom, s.portTo].filter(Boolean).join(' → ')} />}
+                    {s.consolidatingVendor && <Meta label="Consolidating vendor" value={s.consolidatingVendor} />}
+                    {cartonsNote && <Meta label="Cartons" value={cartonsNote} />}
+                  </>
+                )}
               </tbody>
             </table>
           </div>
 
           {/* Lines */}
+          {sheet ? <ProformaLines doc={doc} sheet={sheet} summary={!!summary} /> : (
           <table className="w-full border-collapse">
             <thead>
               <tr className="bg-[#1f2328] text-left text-[9.5px] font-semibold uppercase tracking-wider text-white">
@@ -178,11 +207,18 @@ function StandardDocument({ doc }: { doc: InvoiceDto }) {
               ))}
             </tbody>
           </table>
+          )}
 
           {/* Totals */}
           <div className="avoid-break flex justify-end px-5 pb-4 pt-3">
             <table className="w-64 text-right">
               <tbody>
+                {sheet && sheet.totals.cartons > 0 && (
+                  <tr className="border-b border-ink-200">
+                    <td className="py-1 text-left font-semibold text-ink-600">Cartons</td>
+                    <td className="tnum py-1">{sheet.totals.cartons.toLocaleString()}{sheet.totals.containerShare != null && <span className="text-ink-500"> · {Math.round(sheet.totals.containerShare * 100)}% of container</span>}</td>
+                  </tr>
+                )}
                 <tr className="border-b border-ink-200">
                   <td className="py-1 text-left font-semibold text-ink-600">Subtotal</td>
                   <td className="tnum py-1">{money(totals.subtotal)}</td>
@@ -217,6 +253,17 @@ function StandardDocument({ doc }: { doc: InvoiceDto }) {
             )}
           </div>
 
+          {sheet && (
+            <div className="avoid-break mx-5 mb-4 rounded border border-ink-200 p-3">
+              <p className="mb-1.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-ink-500">Exporter</p>
+              <div className="grid grid-cols-2 gap-x-6 gap-y-0.5">
+                {([['Name', exporter], ['Address', s.exporterAddress ?? doc.seller.address ?? ''], ['QIZ Ref. No.', s.qizRef ?? ''], ['Destination', s.destination ?? '']] as const).map(([l, v]) => (
+                  v ? <p key={l}><span className="text-ink-500">{l}: </span><span className="font-semibold"><T>{v}</T></span></p> : null
+                ))}
+              </div>
+            </div>
+          )}
+
           {(termLines.length > 0 || doc.bankDetails) && (
             <div className="avoid-break mx-5 mb-4 grid grid-cols-2 gap-3">
               <div className="rounded border border-ink-200 p-3">
@@ -231,6 +278,13 @@ function StandardDocument({ doc }: { doc: InvoiceDto }) {
                   ? <pre className="whitespace-pre-wrap font-mono text-[10px] leading-relaxed text-ink-800">{doc.bankDetails}</pre>
                   : <p className="italic text-ink-400">—</p>}
               </div>
+            </div>
+          )}
+
+          {sheet && (
+            <div className="avoid-break mx-5 mb-5 mt-2 text-[11px]">
+              <p className="font-semibold">For and in behalf of <T>{exporter}</T></p>
+              {s.signatory && <p className="mt-7 inline-block min-w-[14rem] border-t border-ink-500 pt-1 font-semibold"><T>{s.signatory}</T></p>}
             </div>
           )}
 
@@ -364,6 +418,113 @@ function StandardDocument({ doc }: { doc: InvoiceDto }) {
         {sellerLine ? <><br />{seller.name} · {sellerLine}</> : null}
       </p>
     </div>
+  );
+}
+
+/**
+ * A proforma's goods with the factory sheet's columns. "Total only" is one
+ * row per style — PO#, part no., HTS code, weights, cartons, unit, pieces,
+ * rate, amount, share of the container. "By colour & size" keeps every
+ * colour line under a heading for its style that carries the same details.
+ */
+function ProformaLines({ doc, sheet, summary }: { doc: InvoiceDto; sheet: ReturnType<typeof buildSheet>; summary: boolean }) {
+  const pctOf = (n: number | null) => (n == null ? '—' : `${Math.round(n * 100)}%`);
+  const head = 'bg-[#1f2328] text-left text-[9px] font-semibold uppercase tracking-wider text-white';
+  if (summary) {
+    return (
+      <table className="w-full border-collapse text-[10px]">
+        <thead>
+          <tr className={head}>
+            <th className="px-2 py-2">PO#</th>
+            <th className="px-1.5 py-2">Part No.</th>
+            <th className="px-1.5 py-2">Description</th>
+            <th className="px-1.5 py-2">HTS Code</th>
+            <th className="px-1.5 py-2 text-right">G.W</th>
+            <th className="px-1.5 py-2 text-right">N.W</th>
+            <th className="px-1.5 py-2 text-right">Cartons</th>
+            <th className="px-1.5 py-2">Unit</th>
+            <th className="px-1.5 py-2 text-right">Qty</th>
+            <th className="px-1.5 py-2 text-right">Rate</th>
+            <th className="px-2 py-2 text-right">Amount</th>
+            <th className="px-2 py-2 text-right" title="Share of the container">% cont.</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sheet.rows.length === 0 && <tr><td colSpan={12} className="px-3 py-4 text-center italic text-ink-400">No goods lines.</td></tr>}
+          {sheet.rows.map((r) => (
+            <tr key={r.key} className="border-b border-ink-200 align-top">
+              <td className="px-2 py-1.5 font-mono text-[9.5px]">{r.po}</td>
+              <td className="px-1.5 py-1.5 font-mono text-[9.5px]">{r.partNo}</td>
+              <td className="px-1.5 py-1.5 font-semibold"><T>{r.description}</T></td>
+              <td className="tnum px-1.5 py-1.5">{r.hts}</td>
+              <td className="tnum px-1.5 py-1.5 text-right">{kg(r.gw)}</td>
+              <td className="tnum px-1.5 py-1.5 text-right">{kg(r.nw)}</td>
+              <td className="tnum px-1.5 py-1.5 text-right">{r.cartons.toLocaleString()}</td>
+              <td className="px-1.5 py-1.5">{r.unit}</td>
+              <td className="tnum px-1.5 py-1.5 text-right">{qty(r.qty)}</td>
+              <td className="tnum px-1.5 py-1.5 text-right" title={r.mixedRates ? 'Average rate: this style has colours at different rates' : undefined}>{rate(r.unitPrice)}{r.mixedRates && <span className="text-ink-400"> avg</span>}</td>
+              <td className="tnum px-2 py-1.5 text-right font-medium">{money(r.total)}</td>
+              <td className="tnum px-2 py-1.5 text-right">{pctOf(r.containerShare)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    );
+  }
+  let n = 0;
+  const orderNames = (doc.orders?.length ? doc.orders : [doc.order]).map((o) => o.orderName);
+  // Under its style's heading a line is its colour: "HUNTER/WHT", not
+  // "AGE Spring buy — TRANMERE SHIRT — HUNTER/WHT" again on every row.
+  const colourOf = (description: string, style: string) => {
+    const texts = orderNames.map((name) => styleText(description, name));
+    const t = texts.reduce((a, b) => (b.length < a.length ? b : a), texts[0] ?? description);
+    const rest = t.toUpperCase().startsWith(style.toUpperCase()) ? t.slice(style.length).replace(/^\s*[—-]?\s*/, '') : t;
+    return rest || t;
+  };
+  return (
+    <table className="w-full border-collapse">
+      <thead>
+        <tr className={clsx(head, 'text-[9.5px]')}>
+          <th className="w-7 px-3 py-2">#</th>
+          <th className="whitespace-nowrap px-2 py-2">Item &amp; description</th>
+          <th className="w-28 px-2 py-2">Size</th>
+          <th className="w-16 px-2 py-2 text-right">Qty</th>
+          <th className="w-20 px-2 py-2 text-right">Rate</th>
+          <th className="w-24 px-3 py-2 text-right">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        {sheet.rows.length === 0 && <tr><td colSpan={6} className="px-3 py-4 text-center italic text-ink-400">No goods lines.</td></tr>}
+        {sheet.rows.map((r) => (
+          <Fragment key={r.key}>
+            <tr className="border-b border-ink-200 bg-ink-50">
+              <td colSpan={6} className="px-3 py-1.5 text-[10px]">
+                <span className="font-bold"><T>{r.description}</T></span>
+                <span className="text-ink-600">
+                  {' '}· PO {r.po}{r.partNo ? ` · Part No. ${r.partNo}` : ''} · HTS {r.hts} · {r.cartons.toLocaleString()} carton{r.cartons === 1 ? '' : 's'}
+                  {r.containerShare != null ? ` (${pctOf(r.containerShare)} of container)` : ''}
+                  {r.gw != null || r.nw != null ? ` · GW ${kg(r.gw)} / NW ${kg(r.nw)} kg` : ''}
+                </span>
+              </td>
+            </tr>
+            {r.lineIndexes.map((i) => {
+              const l = doc.lines[i]!;
+              n += 1;
+              return (
+                <tr key={l.id || i} className="border-b border-ink-200 align-top">
+                  <td className="px-3 py-2 text-ink-500">{n}</td>
+                  <td className="px-2 py-2 font-semibold"><T>{colourOf(l.description, r.style)}</T></td>
+                  <td className="px-2 py-2 text-ink-700"><T>{l.size ?? '—'}</T></td>
+                  <td className="tnum px-2 py-2 text-right">{qty(l.quantity)}</td>
+                  <td className="tnum px-2 py-2 text-right">{rate(l.unitPrice)}</td>
+                  <td className="tnum px-3 py-2 text-right font-medium">{money(l.lineTotal)}</td>
+                </tr>
+              );
+            })}
+          </Fragment>
+        ))}
+      </tbody>
+    </table>
   );
 }
 

@@ -270,13 +270,13 @@ export function issueBlockers(doc: {
 
 /**
  * How a document lists its goods: every colour and size as built
- * (`DETAILED`); one line per style (per order when it is a single style)
- * with only its total pieces, rate and amount (`SUMMARY`); or the factory's
- * proforma sheet — one row per style with PO, part number, HTS code, cartons
- * and share of the container (`SHEET`). Only the listing changes — the stored lines, the totals
+ * (`DETAILED`), or one line per style (per order when it is a single style)
+ * with only its total pieces, rate and amount (`SUMMARY`). A proforma adds
+ * the factory sheet's columns to either — PO, part number, HTS code,
+ * cartons, share of the container — from `ProformaSheetSettings`. Only the listing changes — the stored lines, the totals
  * and the amount in words are the same either way.
  */
-export const INVOICE_LINE_LAYOUTS = ['DETAILED', 'SUMMARY', 'SHEET'] as const;
+export const INVOICE_LINE_LAYOUTS = ['DETAILED', 'SUMMARY'] as const;
 export type InvoiceLineLayout = (typeof INVOICE_LINE_LAYOUTS)[number];
 
 export interface SummaryLine {
