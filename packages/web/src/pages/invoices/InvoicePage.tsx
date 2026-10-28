@@ -24,7 +24,7 @@ import { useAuth } from '../../lib/auth';
 import { Card, ConfirmDialog, ErrorNote, Field, Num, Spinner, clsx, useToast } from '../../components/ui';
 import { InvoiceDocument } from '../../components/InvoiceDocument';
 import { ComboSelect } from '../../components/ComboSelect';
-import { ShipmentEditor, StylesEditor, sheetDraftFrom, sheetProblem, sheetSettingsFrom, type SheetDraft } from './SheetEditor';
+import { ExporterEditor, ShipmentEditor, StylesEditor, sheetDraftFrom, sheetProblem, sheetSettingsFrom, type SheetDraft } from './SheetEditor';
 
 interface LineDraft { kind: LineKind; description: string; size: string; quantity: string; unitPrice: string; amount: string }
 /**
@@ -110,7 +110,7 @@ function toBody(d: Draft, inv: InvoiceDto): InvoiceEditBody {
     customerReference: nn(d.customerReference), shipmentRef: nn(d.shipmentRef), shippedOn: d.shippedOn || null,
     coverNote: nn(d.coverNote), terms: nn(d.terms), bankDetails: nn(d.bankDetails), notes: nn(d.notes),
     lineLayout: d.lineLayout,
-    sheet: inv.kind === 'PROFORMA' ? sheetSettingsFrom(d.sheet) : undefined,
+    sheet: sheetSettingsFrom(d.sheet),
     updatedAt: inv.updatedAt,
     cartons: !cartonsTyped(inv) ? undefined : d.cartons.map((c) => ({
       cartonNumber: c.cartonNumber.trim(), cartonSize: nn(c.cartonSize), product: c.product.trim(), poNumber: c.poNumber,
@@ -190,7 +190,7 @@ export function InvoicePage() {
 
   const save = useMutation({
     mutationFn: (d: Draft) => {
-      const problem = cartonProblem(d) ?? (inv!.kind === 'PROFORMA' ? sheetProblem(d.sheet) : null);
+      const problem = cartonProblem(d) ?? sheetProblem(d.sheet);
       if (problem) throw new Error(problem);
       return api.invoices.update(id, toBody(d, inv!));
     },
@@ -414,9 +414,8 @@ export function InvoicePage() {
               </div>
             </Card>
 
-            {isProforma && (
-              <ShipmentEditor draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} defaultTitle={defaultSheetTitle(inv.order.clientName, inv.number, shown.date)} />
-            )}
+            {isProforma && <ShipmentEditor draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} />}
+            <ExporterEditor draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} defaultTitle={defaultSheetTitle(inv.order.clientName, inv.number, shown.date)} letterhead={inv.seller} wording={isProforma} />
 
             <Card>
               <div className="card-header"><h3 className="card-title">Text</h3></div>

@@ -465,8 +465,30 @@ type ProfileDraft = Omit<CompanyProfileDto, 'updatedAt'>;
 
 const EMPTY_PROFILE: ProfileDraft = {
   name: 'Soccertex', tagline: null, address: null, taxId: null, email: null, phone: null, website: null,
-  bankDetails: null, invoiceTerms: null, paymentTerms: null,
+  bankDetails: null, invoiceTerms: null, paymentTerms: null, qizRef: null, signatory: null, stampDataUrl: null,
 };
+
+/**
+ * A stamp image as a small data URL: drawn down to 600px wide at most, so a
+ * phone photo of the stamp does not become a megabyte on every document.
+ */
+function readStamp(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, 600 / img.width);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(url);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('That file is not an image.')); };
+    img.src = url;
+  });
+}
 
 function CompanyPanel() {
   const { can, isSuperAdmin } = useAuth();
@@ -517,11 +539,32 @@ function CompanyPanel() {
         <Field label="Website"><input className="input" value={val('website')} onChange={(e) => set('website', e.target.value)} /></Field>
         <Field label="Phone"><input className="input" value={val('phone')} onChange={(e) => set('phone', e.target.value)} /></Field>
         <Field label="Default payment terms" hint="Copied onto each new document; editable there."><input className="input" value={val('paymentTerms')} onChange={(e) => set('paymentTerms', e.target.value)} placeholder="COD · 50% in advance, balance before shipping" /></Field>
+        <Field label="QIZ Ref. No." hint="In the exporter block of every document."><input className="input" value={val('qizRef')} onChange={(e) => set('qizRef', e.target.value)} placeholder="259" /></Field>
+        <Field label="Signed by" hint="Printed under “For and in behalf of …”."><input className="input" value={val('signatory')} onChange={(e) => set('signatory', e.target.value)} placeholder="Dr. Amr Sheha" /></Field>
+        <Field label="Company stamp" hint="PNG or JPEG; printed by the signature.">
+          <div className="flex items-center gap-3">
+            {draft.stampDataUrl
+              ? <img src={draft.stampDataUrl} alt="Company stamp" className="h-12 max-w-[10rem] object-contain" />
+              : <span className="text-2xs text-ink-400">No stamp</span>}
+            {editable && (
+              <>
+                <label className="btn-secondary btn-sm cursor-pointer">
+                  {draft.stampDataUrl ? 'Replace' : 'Upload'}
+                  <input type="file" accept="image/png,image/jpeg" className="sr-only" onChange={(e) => {
+                    const f = e.target.files?.[0]; e.target.value = '';
+                    if (f) readStamp(f).then((d) => setDraft({ ...draft, stampDataUrl: d })).catch((err: Error) => toast.error(err));
+                  }} />
+                </label>
+                {draft.stampDataUrl && <button type="button" className="btn-ghost btn-sm text-red-700" onClick={() => setDraft({ ...draft, stampDataUrl: null })}>Remove</button>}
+              </>
+            )}
+          </div>
+        </Field>
         <div className="sm:col-span-2 lg:col-span-3 grid gap-3 sm:grid-cols-2">
-          <Field label="Payment details" hint="Bank, account name, SWIFT, IBAN — one per line, printed as written.">
+          <Field label="Payment details" hint="One per line as “Bank: National Bank of Egypt”; each prints as label : value.">
             <textarea className="input min-h-[7rem] font-mono text-xs" value={val('bankDetails')} onChange={(e) => set('bankDetails', e.target.value)} placeholder={'Bank name\nA/C name: …\nSWIFT: …\nUSD IBAN: …'} />
           </Field>
-          <Field label="Default terms & conditions" hint="One per line; each prints as a bullet.">
+          <Field label="Default terms & conditions" hint="One per line; numbered on the document, with the bank details under them.">
             <textarea className="input min-h-[7rem] text-xs" value={val('invoiceTerms')} onChange={(e) => set('invoiceTerms', e.target.value)} placeholder={'Goods are of Egyptian origin.\nPrices are valid for 14 days.\nPayment 50% in advance, balance before shipping.'} />
           </Field>
         </div>

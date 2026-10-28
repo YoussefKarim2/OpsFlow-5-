@@ -72,6 +72,11 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
   const sellerLine = [seller.address, seller.taxId ? `Tax ID: ${seller.taxId}` : null, seller.email, seller.website]
     .filter(Boolean).join('  ·  ');
   const termLines = (doc.terms ?? '').split('\n').map((s) => s.trim()).filter(Boolean);
+  const bankLines = (doc.bankDetails ?? '').split('\n').map((s) => s.trim()).filter(Boolean);
+  // Letterhead facts a document built before they existed still prints from the live letterhead.
+  const qizRef = doc.sheet?.qizRef ?? doc.seller.qizRef ?? '';
+  const signatory = doc.sheet?.signatory ?? doc.seller.signatory ?? '';
+  const stamp = doc.seller.stampDataUrl ?? null;
   const watermark = doc.status === InvoiceStatus.VOID ? 'VOID' : doc.status === InvoiceStatus.DRAFT ? 'DRAFT' : null;
   const initials = seller.name.split(/\s+/).map((w) => w[0]).join('').slice(0, 2).toUpperCase();
 
@@ -253,40 +258,50 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
             )}
           </div>
 
-          {sheet && (
-            <div className="avoid-break mx-5 mb-4 rounded border border-ink-200 p-3">
-              <p className="mb-1.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-ink-500">Exporter</p>
-              <div className="grid grid-cols-2 gap-x-6 gap-y-0.5">
-                {([['Name', exporter], ['Address', s.exporterAddress ?? doc.seller.address ?? ''], ['QIZ Ref. No.', s.qizRef ?? ''], ['Destination', s.destination ?? '']] as const).map(([l, v]) => (
-                  v ? <p key={l}><span className="text-ink-500">{l}: </span><span className="font-semibold"><T>{v}</T></span></p> : null
+          {/* The bottom of the factory's sheet, on every document: exporter
+              block, numbered terms with the bank account under them, the
+              stamp and the signature. */}
+          <div className="avoid-break mx-5 mb-5 text-[10.5px] text-ink-900">
+            <table className="text-[11px] font-semibold">
+              <tbody>
+                {([['Name', exporter], ['Address', s.exporterAddress ?? seller.address ?? ''], ['QIZ Ref. No.', qizRef], ['Destination', s.destination ?? ''], ['Exporter Name', exporter]] as const).map(([l, v]) => (
+                  v ? <tr key={l}><td className="w-32 py-[1px] pr-2 align-top">{l}</td><td className="w-3 py-[1px] pr-3 align-top">:</td><td className="py-[1px]"><T>{v}</T></td></tr> : null
                 ))}
-              </div>
-            </div>
-          )}
+              </tbody>
+            </table>
 
-          {(termLines.length > 0 || doc.bankDetails) && (
-            <div className="avoid-break mx-5 mb-4 grid grid-cols-2 gap-3">
-              <div className="rounded border border-ink-200 p-3">
-                <p className="mb-1.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-ink-500">Terms &amp; conditions</p>
-                {termLines.length === 0
-                  ? <p className="italic text-ink-400">—</p>
-                  : <ul className="list-disc space-y-0.5 pl-4 text-ink-800">{termLines.map((t, i) => <li key={i}><T>{t}</T></li>)}</ul>}
+            {(termLines.length > 0 || bankLines.length > 0) && (
+              <div className="mt-4 text-[11px] font-semibold">
+                <p>Terms and conditions</p>
+                <table className="mt-0.5">
+                  <tbody>
+                    {termLines.map((t, i) => (
+                      <tr key={`t${i}`}><td className="w-8 py-[1px] pr-2 text-right align-top">{i + 1}</td><td colSpan={3} className="py-[1px]"><T>{t.replace(/^\d+[.)]\s*/, '')}</T></td></tr>
+                    ))}
+                    {bankLines.map((b, i) => {
+                      const m = /^([^:]{1,40}):\s*(.*)$/.exec(b);
+                      return (
+                        <tr key={`b${i}`}>
+                          <td />
+                          <td className="w-28 py-[1px] pr-2 align-top">{m ? m[1]!.trim() : ''}</td>
+                          <td className="w-3 py-[1px] pr-2 align-top">{m ? ':' : ''}</td>
+                          <td className="py-[1px] font-mono text-[10.5px]"><T>{m ? m[2]! : b}</T></td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
-              <div className="rounded border border-ink-200 p-3">
-                <p className="mb-1.5 text-[9px] font-semibold uppercase tracking-[0.18em] text-ink-500">Payment details</p>
-                {doc.bankDetails
-                  ? <pre className="whitespace-pre-wrap font-mono text-[10px] leading-relaxed text-ink-800">{doc.bankDetails}</pre>
-                  : <p className="italic text-ink-400">—</p>}
-              </div>
-            </div>
-          )}
+            )}
 
-          {sheet && (
-            <div className="avoid-break mx-5 mb-5 mt-2 text-[11px]">
-              <p className="font-semibold">For and in behalf of <T>{exporter}</T></p>
-              {s.signatory && <p className="mt-7 inline-block min-w-[14rem] border-t border-ink-500 pt-1 font-semibold"><T>{s.signatory}</T></p>}
+            <div className="mt-5 flex items-end justify-between gap-6">
+              <div className="text-[11px] font-semibold">
+                <p>For and in behalf of <T>{exporter}</T></p>
+                {signatory && <p className="mt-6 inline-block min-w-[14rem] border-t border-ink-500 pt-1"><T>{signatory}</T></p>}
+              </div>
+              {stamp && <img src={stamp} alt="Company stamp" className="h-20 max-w-[12rem] object-contain" />}
             </div>
-          )}
+          </div>
 
           {sellerLine && (
             <p className="border-t border-ink-100 px-5 py-2 text-center text-[9px] text-ink-500">

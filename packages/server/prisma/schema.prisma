@@ -1310,6 +1310,12 @@ model CompanyProfile {
   invoiceTerms String?
   /// Default payment terms: "COD", "50% in advance, balance before shipping".
   paymentTerms String?
+  /// The QIZ reference printed in the exporter block of every document.
+  qizRef       String?
+  /// Who signs: printed under "For and in behalf of <company>".
+  signatory    String?
+  /// The company stamp, a small PNG/JPEG as a data URL, printed by the signature.
+  stampDataUrl String?
   updatedById  String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt

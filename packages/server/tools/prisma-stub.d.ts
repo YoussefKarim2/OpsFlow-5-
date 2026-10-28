@@ -913,6 +913,9 @@ declare module '@prisma/client' {
     bankDetails: string | null;
     invoiceTerms: string | null;
     paymentTerms: string | null;
+    qizRef: string | null;
+    signatory: string | null;
+    stampDataUrl: string | null;
     updatedById: string | null;
     createdAt: Date;
     updatedAt: Date;

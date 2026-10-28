@@ -260,7 +260,7 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
   r++;
   footer('Name :', s.exporterName ?? inv.seller.name);
   footer('Address :', s.exporterAddress ?? inv.seller.address ?? '');
-  footer('QIZ Ref. No. :', s.qizRef ?? '');
+  footer('QIZ Ref. No. :', s.qizRef ?? inv.seller.qizRef ?? '');
   footer('Destination :', s.destination ?? '');
   footer('Exporter Name :', s.exporterName ?? inv.seller.name);
   r++;
@@ -280,8 +280,15 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
     footer(m ? m[1]!.trim() : b, m ? `: ${m[2]}` : null, 'B');
   }
   r++;
+  // The stamp beside the signature, as the factory's sheet places it.
+  const stamp = /^data:image\/(png|jpeg);base64,(.+)$/.exec(inv.seller.stampDataUrl ?? '');
+  if (stamp) {
+    const imageId = wb.addImage({ base64: stamp[2]!, extension: stamp[1] === 'jpeg' ? 'jpeg' : 'png' });
+    ws.addImage(imageId, { tl: { col: 4, row: r - 3 }, ext: { width: 200, height: 104 } });
+  }
   footer(`For and in behalf of ${s.exporterName ?? inv.seller.name}`);
-  if (s.signatory) footer(s.signatory);
+  const signatory = s.signatory ?? inv.seller.signatory;
+  if (signatory) footer(signatory);
 
   // ── One sheet per style ─────────────────────────────────────────────────
   for (const { row, name, grid } of styleSheets) {

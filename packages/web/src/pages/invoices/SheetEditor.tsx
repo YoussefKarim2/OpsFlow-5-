@@ -65,15 +65,19 @@ export function sheetProblem(d: SheetDraft): string | null {
   return null;
 }
 
-/** The shipment block and the exporter block, as two cards. */
-export function ShipmentEditor({ draft, onChange, defaultTitle }: { draft: SheetDraft; onChange: (d: SheetDraft) => void; defaultTitle: string }) {
+type TopField = (k: keyof SheetDraft['top'], label: string, placeholder?: string, hint?: string) => JSX.Element;
+const topField = (draft: SheetDraft, onChange: (d: SheetDraft) => void): TopField => (k, label, placeholder, hint) => (
+  <Field label={label} hint={hint}>
+    <input className="input text-xs" dir="auto" value={draft.top[k]} placeholder={placeholder} onChange={(e) => onChange({ ...draft, top: { ...draft.top, [k]: e.target.value } })} />
+  </Field>
+);
+
+/** The shipment block of a proforma. */
+export function ShipmentEditor({ draft, onChange }: { draft: SheetDraft; onChange: (d: SheetDraft) => void }) {
   const top = (k: keyof SheetDraft['top'], v: string) => onChange({ ...draft, top: { ...draft.top, [k]: v } });
   const eta = sheetEta(draft.top.etd || null, num(draft.top.leadDays) ?? SHEET_DEFAULTS.leadDays);
-  const text = (k: keyof SheetDraft['top'], label: string, placeholder?: string, hint?: string) => (
-    <Field label={label} hint={hint}><input className="input text-xs" dir="auto" value={draft.top[k]} placeholder={placeholder} onChange={(e) => top(k, e.target.value)} /></Field>
-  );
+  const text = topField(draft, onChange);
   return (
-    <>
       <Card>
         <div className="card-header"><h3 className="card-title">Shipment</h3></div>
         <div className="grid grid-cols-2 gap-3 p-4">
@@ -94,20 +98,31 @@ export function ShipmentEditor({ draft, onChange, defaultTitle }: { draft: Sheet
         </div>
         <p className="border-t border-ink-100 px-4 py-2 text-2xs text-ink-500">Shipment to and its address are the Bill to block.</p>
       </Card>
+  );
+}
 
+/** The exporter block and the wording at the bottom of every document; blank fields print the letterhead's. */
+export function ExporterEditor({ draft, onChange, defaultTitle, letterhead, wording }: {
+  draft: SheetDraft; onChange: (d: SheetDraft) => void; defaultTitle: string;
+  letterhead: { name: string; address: string | null; qizRef?: string | null; signatory?: string | null };
+  /** The title line and the QIZ statement print on a proforma only. */
+  wording: boolean;
+}) {
+  const text = topField(draft, onChange);
+  return (
       <Card>
-        <div className="card-header"><h3 className="card-title">Exporter &amp; wording</h3></div>
+        <div className="card-header"><h3 className="card-title">{wording ? 'Exporter & wording' : 'Exporter'}</h3></div>
         <div className="grid grid-cols-2 gap-3 p-4">
-          <div className="col-span-2">{text('title', 'Title line', defaultTitle, 'Printed under the letterhead when filled.')}</div>
-          <div className="col-span-2">{text('statement', 'Statement', SHEET_DEFAULTS.statement)}</div>
-          {text('exporterName', 'Exporter name')}
-          {text('qizRef', 'QIZ Ref. No.')}
-          <div className="col-span-2">{text('exporterAddress', 'Exporter address')}</div>
+          {wording && <div className="col-span-2">{text('title', 'Title line', defaultTitle, 'Printed under the letterhead when filled.')}</div>}
+          {wording && <div className="col-span-2">{text('statement', 'Statement', SHEET_DEFAULTS.statement)}</div>}
+          {text('exporterName', 'Exporter name', letterhead.name)}
+          {text('qizRef', 'QIZ Ref. No.', letterhead.qizRef ?? '')}
+          <div className="col-span-2">{text('exporterAddress', 'Exporter address', letterhead.address ?? '')}</div>
           {text('destination', 'Destination', 'Los Angeles, USA')}
-          {text('signatory', 'Signed by')}
+          {text('signatory', 'Signed by', letterhead.signatory ?? '')}
         </div>
+        <p className="border-t border-ink-100 px-4 py-2 text-2xs text-ink-500">The stamp, terms and bank details come from the letterhead; terms and bank details can be edited under Text.</p>
       </Card>
-    </>
   );
 }
 

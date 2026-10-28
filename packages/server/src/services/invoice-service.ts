@@ -42,11 +42,12 @@ export const PROFILE_ID = 'default';
 export function profileToDto(p: {
   name: string; tagline: string | null; address: string | null; taxId: string | null; email: string | null;
   phone: string | null; website: string | null; bankDetails: string | null; invoiceTerms: string | null;
-  paymentTerms: string | null; updatedAt?: Date | null;
+  paymentTerms: string | null; qizRef?: string | null; signatory?: string | null; stampDataUrl?: string | null; updatedAt?: Date | null;
 }): CompanyProfileDto {
   return {
     name: p.name, tagline: p.tagline, address: p.address, taxId: p.taxId, email: p.email, phone: p.phone,
     website: p.website, bankDetails: p.bankDetails, invoiceTerms: p.invoiceTerms, paymentTerms: p.paymentTerms,
+    qizRef: p.qizRef ?? null, signatory: p.signatory ?? null, stampDataUrl: p.stampDataUrl ?? null,
     updatedAt: p.updatedAt ? p.updatedAt.toISOString() : null,
   };
 }

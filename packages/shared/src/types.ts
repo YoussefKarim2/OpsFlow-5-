@@ -668,6 +668,12 @@ export interface CompanyProfileDto {
   invoiceTerms: string | null;
   /** Default payment terms ("COD", "50% in advance, balance before shipping"). */
   paymentTerms: string | null;
+  /** The QIZ reference printed in the exporter block. */
+  qizRef: string | null;
+  /** Who signs the documents: printed under "For and in behalf of <company>". */
+  signatory: string | null;
+  /** The company stamp as a data URL (PNG/JPEG, kept small), printed by the signature. */
+  stampDataUrl: string | null;
   updatedAt: string | null;
 }
 

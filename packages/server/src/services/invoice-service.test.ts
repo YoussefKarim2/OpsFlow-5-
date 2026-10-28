@@ -15,7 +15,7 @@ const profile: CompanyProfileDto = {
   name: 'Soccertex', tagline: 'Readymade garments', address: 'Giza, Egypt', taxId: '000-000-000',
   email: 'sales@soccertex.biz', phone: null, website: null,
   bankDetails: 'Bank: AAIB\nIBAN: EG00', invoiceTerms: 'Goods are of Egyptian origin.\nPrices are valid for 14 days.',
-  paymentTerms: 'COD', updatedAt: null,
+  paymentTerms: 'COD', qizRef: null, signatory: null, stampDataUrl: null, updatedAt: null,
 };
 
 const order = (over: Partial<BuildOrder> = {}): BuildOrder => ({

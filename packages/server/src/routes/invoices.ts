@@ -69,6 +69,10 @@ const profileSchema = z.object({
   bankDetails: text(2000),
   invoiceTerms: text(4000),
   paymentTerms: text(200),
+  qizRef: text(60),
+  signatory: text(120),
+  /** A small PNG/JPEG data URL; 300 KB is a generous stamp. */
+  stampDataUrl: z.string().regex(/^data:image\/(png|jpeg);base64,[A-Za-z0-9+/=]+$/, 'The stamp must be a PNG or JPEG image.').max(400_000, 'The stamp image is too large: keep it under 300 KB.').nullable().optional(),
 });
 
 invoicesRouter.put('/company', requirePermission('settings:manage'), requireLetterheadEditor, asyncHandler(async (req, res) => {
@@ -79,6 +83,7 @@ invoicesRouter.put('/company', requirePermission('settings:manage'), requireLett
     tagline: body.tagline ?? null, address: body.address ?? null, taxId: body.taxId ?? null,
     email: body.email ?? null, phone: body.phone ?? null, website: body.website ?? null,
     bankDetails: body.bankDetails ?? null, invoiceTerms: body.invoiceTerms ?? null, paymentTerms: body.paymentTerms ?? null,
+    qizRef: body.qizRef ?? null, signatory: body.signatory ?? null, stampDataUrl: body.stampDataUrl ?? null,
     updatedById: user.id,
   };
   const row = await prisma.companyProfile.upsert({
@@ -263,9 +268,9 @@ async function buildFor(kind: InvoiceKind, choices: SourceChoice[]) {
  * A new proforma's sheet fields: the customer's last proforma sheet without
  * its dates and title, or the factory's defaults with the letterhead as exporter.
  */
-async function seedSheet(clientId: string, seller: { name?: string; address?: string | null }): Promise<ProformaSheetSettings> {
+async function seedSheet(clientId: string, seller: { name?: string; address?: string | null; qizRef?: string | null; signatory?: string | null }): Promise<ProformaSheetSettings> {
   const last = await prisma.invoice.findFirst({
-    where: { kind: InvoiceKind.PROFORMA, sheet: { not: Prisma.DbNull }, order: { clientId } },
+    where: { sheet: { not: Prisma.DbNull }, order: { clientId } },
     orderBy: { createdAt: 'desc' }, select: { sheet: true },
   });
   if (last?.sheet) {
@@ -283,6 +288,7 @@ async function seedSheet(clientId: string, seller: { name?: string; address?: st
     statement: SHEET_DEFAULTS.statement, shipmentFrom: SHEET_DEFAULTS.shipmentFrom,
     container: SHEET_DEFAULTS.container, cartonsPerContainer: SHEET_DEFAULTS.cartonsPerContainer, leadDays: SHEET_DEFAULTS.leadDays,
     consolidatingVendor: seller.name ?? null, exporterName: seller.name ?? null, exporterAddress: seller.address ?? null,
+    qizRef: seller.qizRef ?? null, signatory: seller.signatory ?? null,
     rows: {},
   };
 }
@@ -316,9 +322,10 @@ invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async 
   // numbers belongs to the year the office is working in.
   const year = new Date().getUTCFullYear();
   const qty = computeInvoiceTotals(doc.lines).totalQty;
-  // A proforma is laid out as the factory's own sheet, its typed fields
-  // carried from the customer's last one.
-  const sheet = body.kind === InvoiceKind.PROFORMA ? await seedSheet(first.loaded.clientId, doc.seller as { name?: string; address?: string | null }) : null;
+  // Every document carries the exporter block and signature; a proforma is
+  // also laid out as the factory's own sheet. Typed fields carry over from
+  // the customer's last document.
+  const sheet = await seedSheet(first.loaded.clientId, doc.seller as { name?: string; address?: string | null; qizRef?: string | null; signatory?: string | null });
 
   const created = await withAllocatedNumber(body.kind, year, async (tx, number, sequence) =>
     tx.invoice.create({
@@ -335,7 +342,8 @@ invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async 
         }),
         terms: doc.terms, bankDetails: doc.bankDetails, notes: doc.notes,
         // A proforma prints as the factory's sheet does: one line per style.
-        ...(sheet ? { lineLayout: 'SUMMARY', sheet: sheet as object } : {}),
+        sheet: sheet as object,
+        ...(body.kind === InvoiceKind.PROFORMA ? { lineLayout: 'SUMMARY' } : {}),
         seller: doc.seller as object, orderRef: doc.orderRef as object,
         manifest: doc.manifest as object[], reconciliation: doc.reconciliation as object[],
         warnings: doc.warnings,
