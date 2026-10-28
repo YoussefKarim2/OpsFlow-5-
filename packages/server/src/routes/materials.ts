@@ -1,15 +1,16 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
-import { computeBomSummary, groupBomByCategory, computeMarkerPlan, computeFabricPosition, type BomItemInput, type LayInput } from '@opsflow/shared';
+import { computeBomSummary, groupBomByCategory, computeMarkerPlan, computeFabricPosition, unitsCompatible, type BomItemInput, type CutSize, type LayInput } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
-import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../errors.js';
 import { refreshOrderCache, ORDER_INCLUDE, deriveOrder } from '../services/order-service.js';
 import { logActivity, logAndNotify } from '../services/activity-service.js';
 import { issueToProduction, returnFromProduction, assertIssueCorrectionsPossible } from '../services/inventory-service.js';
 import { clearLayPlan } from '../services/import/laying-committer.js';
+import { inWearingOrder } from '../services/import/po-lines.js';
 import type { AuthUser } from '../middleware/auth.js';
 
 export const materialsRouter = Router();
@@ -26,6 +27,28 @@ const CATEGORIES = [
 
 // ── BOM ─────────────────────────────────────────────────────────────────────
 
+/**
+ * The order's sizes with the cut order's pieces in each, smallest first.
+ *
+ * The bill of materials' per-size breakdown is filled from these: a size
+ * label or a hang tag is needed per cut piece of each size.
+ */
+async function cutSizesOf(orderId: string): Promise<CutSize[]> {
+  const sizes = await prisma.orderSize.findMany({
+    where: { orderId },
+    select: {
+      id: true, position: true, size: { select: { name: true } },
+      quantities: { where: { ledger: { in: ['CUT', 'ORDER'] } }, select: { ledger: true, qty: true } },
+    },
+  });
+  return inWearingOrder(sizes.map((s) => ({ id: s.id, name: s.size.name, position: s.position, quantities: s.quantities })))
+    .map((s) => ({
+      name: s.name,
+      cutQty: s.quantities.filter((q) => q.ledger === 'CUT').reduce((a, q) => a + q.qty, 0),
+      orderQty: s.quantities.filter((q) => q.ledger === 'ORDER').reduce((a, q) => a + q.qty, 0),
+    }));
+}
+
 materialsRouter.get('/:orderId/bom', requirePermission('material:read'), asyncHandler(async (req, res) => {
   const order = await prisma.order.findFirst({
     where: { OR: [{ id: req.params.orderId }, { poNumber: req.params.orderId }] },
@@ -33,15 +56,22 @@ materialsRouter.get('/:orderId/bom', requirePermission('material:read'), asyncHa
   });
   if (!order) throw new NotFoundError('Order');
 
-  const items = await prisma.bomItem.findMany({
-    where: { orderId: order.id },
-    include: {
-      color: true,
-      sizes: { orderBy: { position: 'asc' } },
-      issues: { include: { issuedBy: true, issuedTo: true }, orderBy: { issuedAt: 'desc' } },
-    },
-    orderBy: [{ category: 'asc' }, { position_: 'asc' }],
-  });
+  const [items, sizes] = await Promise.all([
+    prisma.bomItem.findMany({
+      where: { orderId: order.id },
+      include: {
+        color: true,
+        sizes: { orderBy: { position: 'asc' } },
+        issues: { include: { issuedBy: true, issuedTo: true }, orderBy: { issuedAt: 'desc' } },
+      },
+      // The order the lines were written in — the sheet's, or the editor's.
+      // Sorted by category first, a line added at the bottom of the editor
+      // reopened somewhere in the middle, and the save then renumbered every
+      // line to the shuffled order.
+      orderBy: [{ position_: 'asc' }, { createdAt: 'asc' }],
+    }),
+    cutSizesOf(order.id),
+  ]);
 
   const inputs: BomItemInput[] = items.map((b) => ({
     id: b.id, category: b.category, position: b.position, item: b.item,
@@ -54,6 +84,7 @@ materialsRouter.get('/:orderId/bom', requirePermission('material:read'), asyncHa
 
   res.json({
     summary,
+    sizes,
     groups: groupBomByCategory(summary.items),
     items: summary.items.map((s) => {
       const row = items.find((i) => i.id === s.id)!;
@@ -131,8 +162,8 @@ const bomItemSchema = z.object({
 
 /** One size of one item: "Logo Badge / Medium / 150". */
 const bomSizeSchema = z.object({
-  sizeLabel: z.string().min(1, 'Every size row needs a size.'),
-  qty: z.number().nonnegative(),
+  sizeLabel: z.string().trim().min(1, 'Every size row needs a size.').max(60),
+  qty: z.number().nonnegative().max(99_999_999),
 });
 
 /**
@@ -146,11 +177,11 @@ const bomSizeSchema = z.object({
  */
 const bomRowSchema = bomItemSchema.extend({
   id: z.string().optional(),
-  sizes: z.array(bomSizeSchema).default([]),
+  sizes: z.array(bomSizeSchema).max(200).default([]),
 });
 
 const saveBomSchema = z.object({
-  items: z.array(bomRowSchema),
+  items: z.array(bomRowSchema).max(2000),
   /**
    * Lines removed in the editor. Only these are deleted: a line the editor did
    * not send is left alone. "Stored minus sent" used to be the rule, so a line
@@ -304,6 +335,7 @@ materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHa
     where: { orderId: order.id },
     select: {
       id: true, item: true, issuedQty: true, unit: true, materialId: true,
+      colorId: true, color: { select: { name: true } }, material: { select: { unit: true } },
       ...BOM_HISTORY_COUNT,
     },
   });
@@ -314,6 +346,28 @@ materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHa
   // updated here, and moved to this order's position list besides.
   if (rows.some((r) => r.id && !known.has(r.id))) {
     throw new ValidationError('One of the lines is no longer on this bill of materials. Reload and try again.');
+  }
+
+  // An issued figure typed here is an issue — stock leaves the shelf and the
+  // log gets a row — and issuing is the warehouse's permission, not the
+  // editor's. A coordinator may write the whole bill and still not issue it.
+  if (rows.some((r) => r.issuedQty != null) && !actor.permissions.includes('material:issue')) {
+    throw new ForbiddenError('Changing the issued figure requires the "material:issue" permission. Leave the Issued column as it was.');
+  }
+
+  // The unit a line is counted in is the unit its issues were recorded in.
+  // Once anything has been issued, "100 Met." does not become "100 Cm." by
+  // renaming the column; and a line drawn from stock must stay in a unit the
+  // material can be converted to, or every later issue is refused.
+  for (const r of rows) {
+    const before = r.id ? known.get(r.id) : undefined;
+    if (!before || r.unit.trim() === before.unit.trim()) continue;
+    if (Number(before.issuedQty.toString()) > 0 || before._count.issues > 0) {
+      throw new ConflictError(`${before.item} has already been issued in ${before.unit}, so its unit cannot be changed to ${r.unit}. Correct the issued figure to 0 first, or add a new line.`);
+    }
+    if (before.material && !unitsCompatible(r.unit, before.material.unit)) {
+      throw new ValidationError(`${before.item} is drawn from stock held in ${before.material.unit}; ${r.unit} cannot be converted to it. Unlink the material on the Materials tab first.`);
+    }
   }
   const sent = new Set(rows.map((r) => r.id).filter((id): id is string => !!id));
   const removedRows = removeIds
@@ -352,12 +406,23 @@ materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHa
         const total = sizes.length > 0
           ? sizes.reduce((a, s) => a + s.qty, 0)
           : fields.requiredQty;
-        const data = { ...fields, requiredQty: total, position_: i };
+        const before = id ? known.get(id) ?? null : null;
 
-        // What the row said before this save, so a changed issued quantity can
-        // be recorded as the movement it is rather than overwritten in place.
-        const before = id
-          ? await tx.bomItem.findUnique({ where: { id }, select: { issuedQty: true, unit: true, materialId: true } })
+        // A line linked to a colour on the master list shows that colour's
+        // name, whatever its text says. Retyping — or clearing — the colour
+        // in the editor changed only the text, so the line went on showing
+        // the old colour. A colour sent that is not the linked one drops the
+        // link; a request that does not mention the colour leaves it.
+        const typedColour = fields.colorText === undefined ? undefined : (fields.colorText ?? '').trim();
+        const unlinkColour = before?.colorId != null && fields.colorId === undefined && typedColour !== undefined
+          && typedColour.toLowerCase() !== (before.color?.name ?? '').trim().toLowerCase();
+        const data = { ...fields, requiredQty: total, position_: i, ...(unlinkColour ? { colorId: null } : {}) };
+
+        // The issued figure as it stands now, read inside the transaction:
+        // what the editor loaded may be behind an issue the warehouse
+        // recorded since, and the log row must carry the true difference.
+        const issuedNow = id && issuedQty != null && !before?.materialId
+          ? await tx.bomItem.findUniqueOrThrow({ where: { id }, select: { issuedQty: true } })
           : null;
 
         const itemId = id
@@ -368,7 +433,7 @@ materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHa
         // correction has to move the shelf and the reservation too. That was
         // gathered and checked above, and is applied once the rows are saved.
         if (issuedQty != null && !before?.materialId) {
-          const was = before ? Number(before.issuedQty.toString()) : 0;
+          const was = issuedNow ? Number(issuedNow.issuedQty.toString()) : 0;
           const delta = issuedQty - was;
           if (delta !== 0) {
             await tx.bomItem.update({
@@ -396,7 +461,9 @@ materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHa
           });
         }
       }
-    });
+    // A full bill is sixty lines, each written in three statements; the
+    // default five seconds was not always enough from the factory's link.
+    }, { timeout: 30_000 });
 
     for (const { id, issued } of linkedIssues) {
       const item = await prisma.bomItem.findUniqueOrThrow({

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { bomItemsFor, bomDepartmentOf, bomCategoryFor, BOM_DEPARTMENTS } from './bom-departments.js';
+import { bomItemsFor, bomDepartmentOf, bomCategoryFor, bomItemName, BOM_DEPARTMENTS } from './bom-departments.js';
 
 test('each department offers the template list', () => {
   assert.deepEqual(bomItemsFor('Production').slice(0, 7), ['Washing Inst.', 'Elastic', 'Tie Cord', 'Thread', 'Tape', 'Sponge', 'Side Woven']);
@@ -20,9 +20,21 @@ test('a saved line reads back to its department', () => {
 
 test('every listed item and every typed item round-trips to the same department', () => {
   for (const d of BOM_DEPARTMENTS) {
-    for (const item of [...bomItemsFor(d), 'A typed item']) {
-      if (d === 'Yoko' && item === 'A typed item') continue; // a typed Yoko line is stored as fabric
+    // "Tape", "Size", "Logo" are on other departments' lists; typed under this
+    // one they are this department's, and come back to it.
+    for (const raw of [...bomItemsFor(d), 'A typed item', 'Tape', 'Size', 'Logo', 'Collar']) {
+      const item = bomItemName(d, raw);
       assert.equal(bomDepartmentOf(item, bomCategoryFor(d, item)), d, `${d} / ${item}`);
     }
   }
+});
+
+test('a part typed under Yoko is named as one, and a named one is left alone', () => {
+  assert.equal(bomItemName('Yoko', 'Collar'), 'Yoko Collar');
+  assert.equal(bomItemName('Yoko', '  yoko  cuffs '), 'yoko cuffs');
+  assert.equal(bomItemName('Yoko', ''), '');
+  assert.equal(bomItemName('Press', 'Collar'), 'Collar');
+  assert.equal(bomItemName(null, ' Collar '), 'Collar');
+  assert.equal(bomDepartmentOf('Yoko Collar', 'FABRIC'), 'Yoko');
+  assert.equal(bomDepartmentOf('Collar', 'FABRIC'), 'Fabric');
 });

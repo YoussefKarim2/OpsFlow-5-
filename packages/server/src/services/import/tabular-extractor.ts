@@ -531,7 +531,7 @@ export function detectSizeColumns(
     // not written down, and the column is reported rather than lost.
     const values = rows.slice(0, 30).map((r) => r[index]).filter((v) => isUncachedFormula(v) || !isEmptyCell(v));
     if (values.length === 0) return;
-    const numeric = values.filter((v) => toNumber(v) != null).length;
+    const numeric = values.filter((v) => isUncachedFormula(v) || toNumber(v) != null).length;
     if (numeric / values.length >= 0.8) candidates.push({ index, name: h.trim() });
   });
 
@@ -738,7 +738,7 @@ function buildWideMatrix(ctx: BuildContext, sizeColumns: Array<{ index: number; 
     // Words under the sizes mean the grid has ended and another table begun
     // — a bill of materials below the order, its units under S and M. Its
     // rows were read as colours called "Jersey fabric" and "Thread".
-    const wordy = sizeColumns.some((s) => { const v = row[s.index]; return !isEmptyCell(v) && toNumber(v) == null; });
+    const wordy = sizeColumns.some((s) => { const v = row[s.index]; return !isEmptyCell(v) && !isUncachedFormula(v) && toNumber(v) == null; });
     if (wordy) continue;
     for (const s of sizeColumns) {
       const qty = toNumber(row[s.index]);

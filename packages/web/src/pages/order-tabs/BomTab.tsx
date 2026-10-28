@@ -30,8 +30,11 @@ interface BomRow {
   shortage: number; shortQty: number; coveragePct: number | null;
   status: 'NOT_ISSUED' | 'PARTIAL' | 'COMPLETE' | 'OVER_ISSUED';
   issuedByName: string | null; issuedToName: string | null; issuedAt: string | null;
+  sizes: Array<{ id: string; sizeLabel: string; qty: number }>;
   issues: Array<{ id: string; qty: number; unit: string; issuedAt: string; issuedByName: string | null; issuedToName: string | null }>;
 }
+
+const qtyText = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: n % 1 === 0 ? 0 : 3 });
 
 const STATUS_TONE: Record<BomRow['status'], string> = {
   NOT_ISSUED: 'bg-red-50 text-red-700 ring-red-600/20',
@@ -47,7 +50,7 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
   const [editing, setEditing] = useState(false);
 
   // Only for the type suggestions; the screen works without it.
-  const { data: lookups } = useQuery({ queryKey: ['lookups'], queryFn: api.reference.lookups });
+  const { data: lookups, isLoading: lookupsLoading } = useQuery({ queryKey: ['lookups'], queryFn: api.reference.lookups });
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['bom', order.id],
@@ -59,13 +62,19 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
   if (!data) return null;
 
   if (editing) {
+    // The editor reads the lists once, when it opens, to decide which lines
+    // are picked and which typed. Remounting it when they arrived threw away
+    // whatever had been typed meanwhile, so it waits for them instead.
+    if (lookupsLoading) return <Spinner />;
     const rows: BomRowDto[] = (data.items as Array<Record<string, unknown>>).map((r) => ({
       id: r.id as string,
       category: (r.category as string) ?? 'ACCESSORY',
       item: (r.item as string) ?? '',
+      position: (r.position as string) ?? null,
       description: (r.description as string) ?? null,
       colorText: (r.colorText as string) ?? (r.color as string) ?? null,
-      unit: (r.unit as string) ?? 'PCS',
+      consumptionPerPiece: r.consumptionPerPiece == null ? null : Number(r.consumptionPerPiece),
+      unit: (r.unit as string) ?? 'Pcs',
       requiredQty: Number(r.requiredQty ?? 0),
       // Editable on the BOM: the Materials tab's dialog only ever adds to it.
       issuedQty: r.issuedQty == null ? null : Number(r.issuedQty),
@@ -90,17 +99,16 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
             }
           />
           <div className="p-4">
-            {/* Keyed on the lists arriving: the editor reads them once, when it
-                opens, to decide which lines are picked and which typed. */}
             <BomEditor
-              key={lookups ? 'ready' : 'loading'}
               orderId={order.id}
               initial={rows}
               itemTypes={(lookups?.values?.BOM_ITEM_TYPE ?? []).map((v) => v.value)}
               fabrics={(lookups?.values?.FABRIC ?? []).map((v) => v.value)}
               colors={(lookups?.colors ?? []).map((c) => c.name)}
               units={(lookups?.values?.UNIT ?? []).map((v) => v.value)}
+              sizes={data.sizes ?? []}
               sizeLabels={(lookups?.sizes ?? []).map((s) => s.name)}
+              canIssue={can('material:issue')}
               onSaved={() => setEditing(false)}
             />
           </div>
@@ -196,7 +204,16 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
                 <tbody className="divide-y divide-ink-100">
                   {items.map((r) => (
                     <tr key={r.id} className={clsx(r.shortQty > 0 && 'bg-amber-50/30')}>
-                      <td className="td font-medium text-ink-800">{r.item}</td>
+                      <td className="td font-medium text-ink-800">
+                        {r.item}
+                        {r.sizes.length > 0 && (
+                          // The per-size breakdown, where there is one: the
+                          // required figure above is its total.
+                          <span className="mt-0.5 block text-2xs font-normal text-ink-500 tnum" title="By size">
+                            {r.sizes.map((z) => `${z.sizeLabel} ${qtyText(z.qty)}`).join(' · ')}
+                          </span>
+                        )}
+                      </td>
                       <td className="td text-xs text-ink-500">{r.position || '—'}</td>
                       <td className="td text-xs">{r.description || '—'}</td>
                       <td className="td text-xs">{r.color || '—'}</td>
@@ -232,7 +249,10 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
         );
       })}
 
+      {/* Keyed on the line, so the quantity, recipient and error typed for
+          one line and cancelled are not waiting in the dialog for the next. */}
       <IssueModal
+        key={issuing?.id ?? 'none'}
         item={issuing}
         onClose={() => setIssuing(null)}
         onDone={() => {

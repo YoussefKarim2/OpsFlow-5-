@@ -72,15 +72,48 @@ export function bomItemsFor(department: BomDepartment | null | undefined): reado
   return department ? BOM_DEPARTMENT_ITEMS[department] : [];
 }
 
-/** Which department a saved line belongs to: by its item first, then its category. */
+/**
+ * Which department a saved line belongs to.
+ *
+ * A Yoko part says so in its name (see `bomItemName`). Otherwise the stored
+ * category decides, because `bomCategoryFor` stores a department-specific
+ * one: a line read by its item name first reopened under the wrong
+ * department whenever the name happened to be on another department's list —
+ * a fabric typed as "Tape" came back under Production. The item lists are
+ * the fallback for a line whose category says nothing (OTHER).
+ */
 export function bomDepartmentOf(item: string, category: string): BomDepartment | null {
   const k = key(item);
   if (/\byoko\b/.test(k)) return 'Yoko';
-  for (const d of BOM_DEPARTMENTS) if (BOM_DEPARTMENT_ITEMS[d].some((i) => key(i) === k)) return d;
-  return CATEGORY_DEPARTMENT[category] ?? null;
+  // A listed item whose stored category is the one its list gives it — a
+  // "Hang Tag" stored as an accessory — belongs to that list; the same name
+  // stored under another department's category was typed there.
+  const listed = BOM_DEPARTMENTS.find((d) => BOM_DEPARTMENT_ITEMS[d].some((i) => key(i) === k));
+  if (listed && bomCategoryFor(listed, item) === category) return listed;
+  return CATEGORY_DEPARTMENT[category] ?? listed ?? null;
 }
 
-/** The stored category for an item chosen or typed under a department. */
+/**
+ * The stored category for an item chosen or typed under a department.
+ *
+ * A listed item has its own category; a typed one takes the department's,
+ * whatever it is called — "Size" typed under Fabric is a fabric, not a size
+ * label.
+ */
 export function bomCategoryFor(department: BomDepartment, item: string): string {
-  return ITEM_CATEGORY[key(item)] ?? DEPARTMENT_CATEGORY[department];
+  const listed = BOM_DEPARTMENT_ITEMS[department].some((i) => key(i) === key(item));
+  return (listed ? ITEM_CATEGORY[key(item)] : undefined) ?? DEPARTMENT_CATEGORY[department];
+}
+
+/**
+ * The item name as it is stored for a department.
+ *
+ * Yoko and Fabric are both stored as FABRIC, so a Yoko part is told apart by
+ * its name: "Collar" typed under Yoko is saved as "Yoko Collar", which is
+ * what the factory calls it and what brings it back under Yoko.
+ */
+export function bomItemName(department: BomDepartment | null, item: string): string {
+  const t = item.trim().replace(/\s+/g, ' ');
+  if (department === 'Yoko' && t && !/\byoko\b/i.test(t)) return `Yoko ${t}`;
+  return t;
 }

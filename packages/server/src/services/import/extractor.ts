@@ -225,8 +225,13 @@ function cellValue(cell: ExcelJS.Cell | undefined): unknown {
 function toNumber(value: unknown): number | null {
   if (value == null || value === '') return null;
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  // A broken formula (#VALUE!, #REF!) is no number. Its text is '', and
+  // Number('') is 0, so a spilled Order Qty column read as "0 required" —
+  // lines that were never short and could never be issued.
+  if (typeof value === 'object' && 'error' in (value as Record<string, unknown>)) return null;
   // "275 pcs", "1,200 units", "$4.50": the unit and the currency are not the number.
   const cleaned = String(cellText(value)).replace(/\s*(pcs|pieces|pc|units?|ea)\.?\s*$/i, '').replace(/[,\s$€£]/g, '');
+  if (cleaned === '') return null;
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
 }
@@ -493,10 +498,11 @@ function extractBom(sheet: ExcelJS.Worksheet, headerAnchor: string, columns: Rec
     const requiredQty = toNumber(get('requiredQty'));
 
     // An entirely empty row is a spare row, not the end — the sheet has many.
-    if (!item && !category && requiredQty == null) continue;
-    // The current template pre-fills the department on its spare rows (Yoko,
-    // Press, Production, Packing) with nothing else: still a spare row.
-    if (!item && requiredQty == null && category && /^(yoko|press|production|packing)$/i.test(category)) continue;
+    // The template also pre-fills the department on its spare rows (Yoko,
+    // Press, Production, Packing — and Fabric on the fabric section's) with
+    // nothing else: a department with no item and no quantity is still a
+    // spare row, not a line called "Fabric".
+    if (!item && requiredQty == null) continue;
 
     lines.push({
       category,

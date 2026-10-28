@@ -16,17 +16,20 @@
 
 import { Fragment, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Rows3 } from 'lucide-react';
+import { Plus, Trash2, Rows3, Scissors } from 'lucide-react';
 import {
-  isTypeableNumber, BOM_DEPARTMENTS, BOM_UNITS, bomItemsFor, bomDepartmentOf, bomCategoryFor,
-  type BomDepartment,
+  isTypeableNumber, BOM_DEPARTMENTS, BOM_UNITS, bomItemsFor, bomDepartmentOf, bomCategoryFor, bomItemName, sizeRowsFromCut,
+  type BomDepartment, type CutSize,
 } from '@opsflow/shared';
 import { api, ApiError, type BomRowDto } from '../lib/api';
-import { Num, ErrorNote, clsx } from './ui';
+import { Num, clsx } from './ui';
 import { ComboSelect } from './ComboSelect';
 
 /** The value of the item dropdown's "type it yourself" entry. */
 const OTHER_ITEM = '__other__';
+
+/** Columns in the table: Dep., Item, Position, Description, Colour, Cons./pc, Quantity, Issued, Unit, Unit price, Total, Supplier, actions. */
+const COLUMNS = 13;
 
 /**
  * A row while it is being edited.
@@ -35,10 +38,11 @@ const OTHER_ITEM = '__other__';
  * `Number(text)` on every keystroke turned "0." into 0 and made 0.35 or 12.5
  * impossible to type at all.
  */
-interface RowDraft extends Omit<BomRowDto, 'requiredQty' | 'issuedQty' | 'unitPriceUsd' | 'sizes'> {
+interface RowDraft extends Omit<BomRowDto, 'requiredQty' | 'issuedQty' | 'unitPriceUsd' | 'consumptionPerPiece' | 'sizes'> {
   requiredQty: string;
   issuedQty: string;
   unitPriceUsd: string;
+  consumptionPerPiece: string;
   sizes: Array<{ id?: string; sizeLabel: string; qty: string }>;
   /** The issued figure as the editor was opened with it. See `issuedChanged`. */
   issuedWas: string;
@@ -49,8 +53,15 @@ interface RowDraft extends Omit<BomRowDto, 'requiredQty' | 'issuedQty' | 'unitPr
   department: BomDepartment | null;
   /** The item is typed rather than picked from the department's list. */
   typed: boolean;
+  /**
+   * A key for the row while it is on screen. Keyed by index, removing a row
+   * in the middle handed its open breakdown and its half-typed dropdowns to
+   * the row that slid into its place.
+   */
+  uid: number;
 }
 
+let nextUid = 1;
 const text = (v: number | null | undefined): string => (v == null ? '' : String(v));
 
 /** Blank is "nobody has said"; anything else must be a real number. */
@@ -74,18 +85,20 @@ const toDraft = (r: BomRowDto, itemsFor: ItemsFor = bomItemsFor): RowDraft => {
   const department = bomDepartmentOf(r.item, r.category);
   return {
   ...r,
+  uid: nextUid++,
   department,
   typed: itemsFor(department).length === 0 || (r.item.trim() !== '' && !inList(itemsFor, department, r.item)),
   requiredQty: r.requiredQty ? String(r.requiredQty) : '',
   issuedQty: text(r.issuedQty),
   unitPriceUsd: text(r.unitPriceUsd),
+  consumptionPerPiece: text(r.consumptionPerPiece),
   sizes: r.sizes.map((z) => ({ id: z.id, sizeLabel: z.sizeLabel, qty: z.qty ? String(z.qty) : '' })),
   issuedWas: text(r.issuedQty),
   };
 };
 
 const blankRow = (): RowDraft => toDraft({
-  category: 'OTHER', item: '', description: null, colorText: null,
+  category: 'OTHER', item: '', position: null, description: null, colorText: null, consumptionPerPiece: null,
   unit: 'Pcs', requiredQty: 0, issuedQty: null, unitPriceUsd: null, supplier: null, notes: null, sizes: [],
 });
 
@@ -110,22 +123,34 @@ const issuedChanged = (r: RowDraft): boolean => parse(r.issuedQty) !== parse(r.i
 
 /** The row as the server takes it. */
 function fromDraft(d: RowDraft): BomRowDto {
-  const { issuedWas: _was, department: _dep, typed: _typed, ...r } = d;
+  const { issuedWas: _was, department, typed: _typed, uid: _uid, ...r } = d;
   return {
     ...r,
+    // "Collar" typed under Yoko is stored as "Yoko Collar", which is what
+    // brings it back under Yoko rather than Fabric.
+    item: bomItemName(department, r.item),
     requiredQty: rowQty(d),
     // Null is "unchanged" to the server, which leaves the issued figure alone.
     issuedQty: issuedChanged(d) ? parse(d.issuedQty) : null,
     unitPriceUsd: parse(d.unitPriceUsd),
-    sizes: d.sizes.map((z) => ({ id: z.id, sizeLabel: z.sizeLabel, qty: parse(z.qty) ?? 0 })),
+    consumptionPerPiece: parse(d.consumptionPerPiece),
+    position: d.position?.trim() || null,
+    description: d.description?.trim() || null,
+    sizes: d.sizes.map((z) => ({ id: z.id, sizeLabel: z.sizeLabel.trim(), qty: parse(z.qty) ?? 0 })),
   };
 }
 
 export function BomEditor({
-  orderId, initial, itemTypes, fabrics = [], colors = [], units = [], sizeLabels = [], onSaved,
+  orderId, initial, itemTypes, fabrics = [], colors = [], units = [], sizes = [], sizeLabels = [], canIssue = false, onSaved,
 }: {
   orderId: string;
   initial: BomRowDto[];
+  /**
+   * Whether this person may issue material. Typing an issued figure is an
+   * issue — stock leaves the shelf — so without it the column is shown, not
+   * edited, and the server refuses the figure anyway.
+   */
+  canIssue?: boolean;
   /** `RefValue` rows of kind BOM_ITEM_TYPE, from /lookups. */
   itemTypes: string[];
   /** The factory's fabric list (`RefValue` kind FABRIC), offered under Fabric. */
@@ -134,13 +159,16 @@ export function BomEditor({
   colors?: string[];
   /** Units of measure — Met., Pcs, Kg. — for the unit column. */
   units?: string[];
-  /** The order's own sizes, for the per-size breakdown. */
+  /** The order's sizes with the cut order's pieces in each: what the breakdown is filled from. */
+  sizes?: CutSize[];
+  /** The factory's size list, offered when the order has no sizes of its own yet. */
   sizeLabels?: string[];
   onSaved?: () => void;
 }) {
   const qc = useQueryClient();
   const itemsFor: ItemsFor = (d) => (d === 'Fabric' ? fabrics : bomItemsFor(d));
   const [rows, setRows] = useState<RowDraft[]>(() => initial.map((r) => toDraft(r, itemsFor)));
+  /** The `uid` of the row whose breakdown is open. */
   const [expanded, setExpanded] = useState<number | null>(null);
   /**
    * Saved lines removed in this editor. The server deletes exactly these and
@@ -199,6 +227,18 @@ export function BomEditor({
   const setSize = (i: number, n: number, patch: Partial<RowDraft['sizes'][number]>) =>
     setRow(i, { sizes: rows[i]!.sizes.map((s, k) => (k === n ? { ...s, ...patch } : s)) });
 
+  /**
+   * The breakdown from the cut order: one row per size, its cut pieces times
+   * the item's consumption per piece. The cut quantities are what the item
+   * has to cover, so nobody retypes them from the cutting sheet.
+   */
+  const fillFromCut = (i: number) =>
+    setRow(i, { sizes: sizeRowsFromCut(sizes, parse(rows[i]!.consumptionPerPiece)).map((z) => ({ sizeLabel: z.sizeLabel, qty: String(z.qty) })) });
+  const cutGenerated = sizes.some((s) => s.cutQty > 0);
+  const anyPieces = sizes.some((s) => s.cutQty > 0 || s.orderQty > 0);
+  /** The size names offered on a breakdown row: the order's own, else the factory's list. */
+  const sizeOptions = sizes.length > 0 ? sizes.map((s) => s.name) : sizeLabels;
+
   /** A numeric field's change: kept as typed, as long as it could become a number. */
   const numeric = (apply: (v: string) => void) =>
     (e: { target: { value: string } }) => { if (isTypeableNumber(e.target.value)) apply(e.target.value); };
@@ -208,8 +248,14 @@ export function BomEditor({
   // is half a number — "." or "-" on its own.
   const unnamed = rows.some((r) => !r.item.trim());
   const halfTyped = rows.some((r) =>
-    [r.requiredQty, r.issuedQty, r.unitPriceUsd, ...r.sizes.map((z) => z.qty)].some(unreadable));
-  const invalid = unnamed || halfTyped;
+    [r.requiredQty, r.issuedQty, r.unitPriceUsd, r.consumptionPerPiece, ...r.sizes.map((z) => z.qty)].some(unreadable));
+  // A size row with no size would be refused by the server; better said here,
+  // next to the button, than as a 422 after it was pressed.
+  const unsized = rows.some((r) => r.sizes.some((z) => !z.sizeLabel.trim()));
+  const invalid = unnamed || halfTyped || unsized;
+  const why = unnamed ? 'Every item needs a name'
+    : halfTyped ? 'Finish the number being typed'
+    : unsized ? 'Every size row needs a size' : undefined;
   const total = rows.reduce((a, r) => a + rowQty(r) * (parse(r.unitPriceUsd) ?? 0), 0);
 
   return (
@@ -224,7 +270,7 @@ export function BomEditor({
             type="button"
             className="btn-primary btn-sm"
             disabled={save.isPending || invalid}
-            title={unnamed ? 'Every item needs a name' : halfTyped ? 'Finish the number being typed' : undefined}
+            title={why}
             onClick={() => save.mutate()}
           >
             {save.isPending ? 'Saving…' : 'Save'}
@@ -240,15 +286,16 @@ export function BomEditor({
         )}
       </div>
 
-      {save.error ? <ErrorNote error={save.error} /> : null}
-
       <div className="overflow-x-auto">
         <table className="w-full border border-ink-200">
           <thead className="border-b border-ink-200 bg-ink-50">
             <tr>
               <th className="th min-w-[9rem]" title="Item Sort / Dep. — picks the item list">Dep.</th>
-              <th className="th min-w-[15rem]">Item</th>
+              <th className="th min-w-[13rem]">Item</th>
+              <th className="th min-w-[8rem]" title="Where it goes — Inside Top Back, Main fabric…">Position</th>
+              <th className="th min-w-[12rem]">Description</th>
               <th className="th min-w-[9rem]">Colour</th>
+              <th className="th w-24 text-right" title="Coms./Piece — what one garment uses">Cons./pc</th>
               <th className="th w-28 text-right">Quantity</th>
               <th className="th w-28 text-right">Issued</th>
               <th className="th min-w-[5.5rem]">Unit</th>
@@ -261,14 +308,14 @@ export function BomEditor({
           <tbody className="divide-y divide-ink-100">
             {rows.length === 0 ? (
               <tr>
-                <td colSpan={10} className="td py-6 text-center text-ink-500">
+                <td colSpan={COLUMNS} className="td py-6 text-center text-ink-500">
                   Nothing in the bill of materials yet. Import a document, or add an item.
                 </td>
               </tr>
             ) : null}
 
             {rows.map((r, i) => (
-              <Fragment key={i}>
+              <Fragment key={r.uid}>
                 <tr>
                   <td className="p-1">
                     <ComboSelect
@@ -313,6 +360,26 @@ export function BomEditor({
                   </td>
                   <td className="p-1">
                     <input
+                      aria-label="Position"
+                      className="input border-transparent bg-transparent"
+                      value={r.position ?? ''}
+                      maxLength={200}
+                      placeholder="Inside Top Back…"
+                      onChange={(e) => setRow(i, { position: e.target.value || null })}
+                    />
+                  </td>
+                  <td className="p-1">
+                    <input
+                      aria-label="Description"
+                      className="input border-transparent bg-transparent"
+                      value={r.description ?? ''}
+                      maxLength={2000}
+                      placeholder="Woven, 2 cm, heat seal…"
+                      onChange={(e) => setRow(i, { description: e.target.value || null })}
+                    />
+                  </td>
+                  <td className="p-1">
+                    <input
                       className="input border-transparent bg-transparent"
                       value={r.colorText ?? ''}
                       list="bom-colors"
@@ -321,10 +388,21 @@ export function BomEditor({
                     />
                   </td>
                   <td className="p-1">
+                    <input
+                      aria-label="Consumption per piece"
+                      className="input tnum border-transparent bg-transparent text-right"
+                      inputMode="decimal"
+                      value={r.consumptionPerPiece}
+                      placeholder="—"
+                      title="What one garment uses. The breakdown from the cut order multiplies each size's pieces by this."
+                      onChange={numeric((v) => setRow(i, { consumptionPerPiece: v }))}
+                    />
+                  </td>
+                  <td className="p-1">
                     {r.sizes.length > 0 ? (
                       // Derived from the size rows, so the two cannot disagree.
                       <div className="px-2 text-right text-sm tnum text-ink-600" title="Sum of the sizes below">
-                        <Num value={rowQty(r)} places={0} />
+                        <Num value={rowQty(r)} places={rowQty(r) % 1 === 0 ? 0 : 4} />
                       </div>
                     ) : (
                       <input
@@ -341,14 +419,21 @@ export function BomEditor({
                       it writes the difference to the issue log, so the trail
                       still reconciles. */}
                   <td className="p-1">
-                    <input
-                      className="input tnum border-transparent bg-transparent text-right"
-                      inputMode="decimal"
-                      value={r.issuedQty}
-                      placeholder="—"
-                      title="What the warehouse has issued. Correcting it is recorded in the issue log."
-                      onChange={numeric((v) => setRow(i, { issuedQty: v }))}
-                    />
+                    {canIssue ? (
+                      <input
+                        aria-label="Issued"
+                        className="input tnum border-transparent bg-transparent text-right"
+                        inputMode="decimal"
+                        value={r.issuedQty}
+                        placeholder="—"
+                        title="What the warehouse has issued. Correcting it is recorded in the issue log."
+                        onChange={numeric((v) => setRow(i, { issuedQty: v }))}
+                      />
+                    ) : (
+                      <div className="px-2 text-right text-sm tnum text-ink-600" title="Issuing material is the warehouse's step">
+                        {r.issuedQty === '' ? '—' : r.issuedQty}
+                      </div>
+                    )}
                   </td>
                   <td className="p-1">
                     <input
@@ -383,7 +468,7 @@ export function BomEditor({
                         type="button"
                         className="btn-ghost btn-sm"
                         title="Break this item down by size"
-                        onClick={() => setExpanded(expanded === i ? null : i)}
+                        onClick={() => setExpanded(expanded === r.uid ? null : r.uid)}
                       >
                         <Rows3 className="h-3.5 w-3.5" />
                         {r.sizes.length > 0 ? <span className="tnum text-xs">{r.sizes.length}</span> : null}
@@ -404,42 +489,69 @@ export function BomEditor({
                   </td>
                 </tr>
 
-                {expanded === i ? (
+                {expanded === r.uid ? (
                   <tr className="bg-ink-50/60">
-                    <td colSpan={10} className="px-4 py-3">
-                      <div className="mb-2 flex items-center justify-between">
+                    <td colSpan={COLUMNS} className="px-4 py-3">
+                      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                         <span className="text-xs font-medium text-ink-600">
                           Sizes for {r.item || 'this item'} — the quantity above becomes their total
                         </span>
-                        <button
-                          type="button"
-                          className="btn-ghost btn-sm"
-                          onClick={() => setRow(i, { sizes: [...r.sizes, { sizeLabel: '', qty: '' }] })}
-                        >
-                          <Plus className="h-3.5 w-3.5" /> Add a size
-                        </button>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            className="btn-ghost btn-sm"
+                            disabled={!anyPieces}
+                            title={!anyPieces
+                              ? 'The order has no sizes or quantities yet'
+                              : cutGenerated
+                                ? `One row per size, its cut pieces${parse(r.consumptionPerPiece) ? ` × ${r.consumptionPerPiece} per piece` : ''}`
+                                : 'The cut order is not generated yet, so the order quantities are used'}
+                            onClick={() => fillFromCut(i)}
+                          >
+                            <Scissors className="h-3.5 w-3.5" /> Fill from the cut order
+                          </button>
+                          <button
+                            type="button"
+                            className="btn-ghost btn-sm"
+                            onClick={() => setRow(i, { sizes: [...r.sizes, { sizeLabel: '', qty: '' }] })}
+                          >
+                            <Plus className="h-3.5 w-3.5" /> Add a size
+                          </button>
+                        </div>
                       </div>
                       {r.sizes.length === 0 ? (
                         <p className="text-xs text-ink-500">
                           No breakdown. The item is ordered as a single quantity.
+                          {anyPieces ? ' Fill from the cut order for one row per size, or add sizes by hand.' : ''}
                         </p>
                       ) : (
                         <div className="space-y-1">
                           {r.sizes.map((sz, n) => (
                             <div key={n} className="flex items-center gap-2">
-                              <input
-                                className="input w-40"
+                              <ComboSelect
+                                allowCustom
+                                aria-label="Size"
+                                className={clsx('input w-44', !sz.sizeLabel.trim() && 'ring-1 ring-red-400')}
                                 placeholder="Small, 40x30x20…"
-                                list="bom-size-labels"
+                                maxLength={60}
                                 value={sz.sizeLabel}
                                 onChange={(e) => setSize(i, n, { sizeLabel: e.target.value })}
-                              />
+                              >
+                                <option value="">Choose or type…</option>
+                                {sizeOptions.map((v) => <option key={v} value={v}>{v}</option>)}
+                              </ComboSelect>
                               <input
+                                aria-label="Quantity for this size"
                                 className="input tnum w-28 text-right"
                                 inputMode="decimal"
                                 value={sz.qty}
                                 onChange={numeric((v) => setSize(i, n, { qty: v }))}
                               />
+                              {sizes.find((s) => s.name === sz.sizeLabel) && (
+                                <span className="text-2xs text-ink-500 tnum" title="Pieces in this size on the cut order">
+                                  {cutGenerated ? 'cut' : 'ordered'} {(cutGenerated ? sizes.find((s) => s.name === sz.sizeLabel)!.cutQty : sizes.find((s) => s.name === sz.sizeLabel)!.orderQty).toLocaleString()}
+                                </span>
+                              )}
                               <button
                                 type="button"
                                 className="btn-ghost btn-sm text-red-600"
@@ -460,7 +572,7 @@ export function BomEditor({
           {rows.length > 0 ? (
             <tfoot className="border-t border-ink-200 bg-ink-50">
               <tr>
-                <td colSpan={7} className="td text-right font-medium">Estimated material cost</td>
+                <td colSpan={COLUMNS - 3} className="td text-right font-medium">Estimated material cost</td>
                 <td className="td tnum text-right font-semibold">
                   <Num value={total || null} kind="money" places={2} />
                 </td>
@@ -493,9 +605,6 @@ export function BomEditor({
           {itemsFor(d).map((x) => <option key={x} value={x} />)}
         </datalist>
       ))}
-      <datalist id="bom-size-labels">
-        {sizeLabels.map((v) => <option key={v} value={v} />)}
-      </datalist>
     </div>
   );
 }

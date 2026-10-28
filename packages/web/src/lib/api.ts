@@ -14,6 +14,7 @@ import type {
   NotificationPriority, ChangeCategory, ShipmentDto, ProductivityDto, ProductivityDayLogDto, ProductionOperation,
   CostingOverviewDto,
   InvoiceDto, InvoiceListRowDto, InvoiceCandidateDto, CompanyProfileDto, InvoiceKind, InvoiceStatus, InvoiceLineKind, ProformaSheetSettings,
+  CutSize,
 } from '@opsflow/shared';
 
 const BASE = import.meta.env.VITE_API_URL ?? '/api';
@@ -315,8 +316,12 @@ export interface BomRowDto {
   id?: string;
   category: string;
   item: string;
+  /** Where it goes — "Inside Top Back", "Main fabric". */
+  position: string | null;
   description: string | null;
   colorText: string | null;
+  /** The sheet's "Coms./Piece": what one garment uses. */
+  consumptionPerPiece: number | null;
   unit: string;
   requiredQty: number;
   /** What the warehouse has issued. Editable on the BOM, where a correction is
@@ -997,6 +1002,8 @@ export const api = {
   materials: {
     bom: (orderId: string) => get<{
       summary: NonNullable<OrderDetailDto['bom']>;
+      /** The order's sizes with the cut order's pieces in each, smallest first. */
+      sizes: CutSize[];
       groups: Array<{ category: string; items: unknown[]; shortCount: number }>;
       items: unknown[];
     }>(`/materials/${orderId}/bom`),

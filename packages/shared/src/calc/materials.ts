@@ -72,6 +72,46 @@ export function computeBomSummary(items: readonly BomItemInput[]): BomSummary {
   };
 }
 
+/**
+ * One size of the order, with what the cut order asks for in it.
+ *
+ * The bill of materials breaks per-size items down by these — a size label,
+ * a hang tag, a poly bag is needed once per piece of each size — so the
+ * breakdown comes from the cut order rather than being retyped.
+ */
+export interface CutSize {
+  name: string;
+  /** Pieces to cut in this size. Zero until the cut order is generated. */
+  cutQty: number;
+  /** Pieces ordered in this size. */
+  orderQty: number;
+}
+
+/**
+ * The size rows for an item needed per piece, from the cut order.
+ *
+ * Each size takes its cut quantity times the consumption per piece (one, when
+ * nobody has said). The cut order carries the cut percentage, so it is what
+ * the item has to cover; until it exists the order quantities stand in, so
+ * the breakdown can be filled the day the order arrives and refilled after
+ * the cut order is generated. Sizes with nothing in them are left out — a
+ * label for a size nobody ordered is not a requirement.
+ */
+export function sizeRowsFromCut(
+  sizes: readonly CutSize[],
+  consumptionPerPiece: number | null | undefined = null,
+): Array<{ sizeLabel: string; qty: number }> {
+  const cut = sizes.some((s) => s.cutQty > 0);
+  const per = consumptionPerPiece != null && Number.isFinite(consumptionPerPiece) && consumptionPerPiece > 0
+    ? consumptionPerPiece : 1;
+  return sizes
+    .map((s) => ({ sizeLabel: s.name, pieces: cut ? s.cutQty : s.orderQty }))
+    .filter((s) => s.pieces > 0)
+    // The requirement column holds four decimals; a consumption of 0.0375 on
+    // 1,333 pieces must not come back as 49.98750000000001.
+    .map((s) => ({ sizeLabel: s.sizeLabel, qty: Math.round(s.pieces * per * 10_000) / 10_000 }));
+}
+
 /** Group BOM lines by category for the sectioned BOM table. */
 export function groupBomByCategory(items: readonly BomItemResult[]): Array<{
   category: BomCategory;
