@@ -276,7 +276,7 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
                 <table className="mt-0.5">
                   <tbody>
                     {termLines.map((t, i) => (
-                      <tr key={`t${i}`}><td className="w-8 py-[1px] pr-2 text-right align-top">{i + 1}</td><td colSpan={3} className="py-[1px]"><T>{t.replace(/^\d+[.)]\s*/, '')}</T></td></tr>
+                      <tr key={`t${i}`}><td className="w-8 py-[1px] pr-2 text-right align-top">{i + 1}</td><td colSpan={3} className="py-[1px]"><T>{t.replace(/^\d{1,3}[.)](?=\s)\s*/, '')}</T></td></tr>
                     ))}
                     {bankLines.map((b, i) => {
                       const m = /^([^:]{1,40}):\s*(.*)$/.exec(b);
@@ -487,11 +487,11 @@ function ProformaLines({ doc, sheet, summary }: { doc: InvoiceDto; sheet: Return
     );
   }
   let n = 0;
-  const orderNames = (doc.orders?.length ? doc.orders : [doc.order]).map((o) => o.orderName);
+  const orderRefs = doc.orders?.length ? doc.orders : [doc.order];
   // Under its style's heading a line is its colour: "HUNTER/WHT", not
   // "AGE Spring buy — TRANMERE SHIRT — HUNTER/WHT" again on every row.
   const colourOf = (description: string, style: string) => {
-    const texts = orderNames.map((name) => styleText(description, name));
+    const texts = orderRefs.map((o) => styleText(description, o.orderName, o.poNumber));
     const t = texts.reduce((a, b) => (b.length < a.length ? b : a), texts[0] ?? description);
     const rest = t.toUpperCase().startsWith(style.toUpperCase()) ? t.slice(style.length).replace(/^\s*[—-]?\s*/, '') : t;
     return rest || t;

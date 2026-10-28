@@ -24,7 +24,7 @@ import { useAuth } from '../../lib/auth';
 import { Card, ConfirmDialog, ErrorNote, Field, Num, Spinner, clsx, useToast } from '../../components/ui';
 import { InvoiceDocument } from '../../components/InvoiceDocument';
 import { ComboSelect } from '../../components/ComboSelect';
-import { ExporterEditor, ShipmentEditor, StylesEditor, sheetDraftFrom, sheetProblem, sheetSettingsFrom, type SheetDraft } from './SheetEditor';
+import { ExporterEditor, ShipmentEditor, StylesEditor, hasSheetValues, sheetDraftFrom, sheetProblem, sheetSettingsFrom, type SheetDraft } from './SheetEditor';
 
 interface LineDraft { kind: LineKind; description: string; size: string; quantity: string; unitPrice: string; amount: string }
 /**
@@ -110,7 +110,9 @@ function toBody(d: Draft, inv: InvoiceDto): InvoiceEditBody {
     customerReference: nn(d.customerReference), shipmentRef: nn(d.shipmentRef), shippedOn: d.shippedOn || null,
     coverNote: nn(d.coverNote), terms: nn(d.terms), bankDetails: nn(d.bankDetails), notes: nn(d.notes),
     lineLayout: d.lineLayout,
-    sheet: sheetSettingsFrom(d.sheet),
+    // An invoice with nothing typed in its exporter block keeps no settings
+    // at all, so the customer's next proforma is seeded from a proforma.
+    sheet: inv.kind === 'PROFORMA' ? sheetSettingsFrom(d.sheet) : (hasSheetValues(d.sheet) ? sheetSettingsFrom(d.sheet) : null),
     updatedAt: inv.updatedAt,
     cartons: !cartonsTyped(inv) ? undefined : d.cartons.map((c) => ({
       cartonNumber: c.cartonNumber.trim(), cartonSize: nn(c.cartonSize), product: c.product.trim(), poNumber: c.poNumber,
@@ -222,7 +224,8 @@ export function InvoicePage() {
   });
 
   const shown = useMemo(() => (inv && draft ? preview(inv, draft) : inv), [inv, draft]);
-  const dirty = useMemo(() => !!(inv && draft) && JSON.stringify(draft) !== JSON.stringify(fromServer(inv)), [inv, draft]);
+  // Compared as what would be saved, so a field typed and cleared again is not an edit.
+  const dirty = useMemo(() => !!(inv && draft) && JSON.stringify(toBody(draft, inv)) !== JSON.stringify(toBody(fromServer(inv), inv)), [inv, draft]);
   dirtyRef.current = dirty;
 
   if (isLoading) return <Spinner label="Opening the document…" />;

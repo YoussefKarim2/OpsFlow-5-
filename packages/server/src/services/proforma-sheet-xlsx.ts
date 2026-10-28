@@ -29,7 +29,7 @@ export function styleGrids(orders: BuildOrder[], manyOrders: boolean): Map<strin
   for (const order of orders) {
     const colours = [...order.colors].sort((a, b) => a.position - b.position)
       .filter((c) => order.orderCells.some((x) => x.orderColorId === c.id && x.qty > 0));
-    const texts = colours.map((c) => styleText(productLabel(order, c.id), order.orderName));
+    const texts = colours.map((c) => styleText(productLabel(order, c.id), order.orderName, order.poNumber));
     const styles = stylesOf(texts);
     const distinct = new Set(styles.map((s, i) => (s ?? texts[i]!).toLowerCase()));
     const wholeOrder = distinct.size <= 1 || styles.every((s) => s == null);
@@ -73,8 +73,9 @@ const day = (iso: string | null | undefined): Date | null => {
   return Number.isNaN(d.getTime()) ? null : d;
 };
 /** "84873" is written as a number, as the factory's sheet has it; "IMPORT-…" stays text. */
-const numberish = (s: string): string | number => (/^\d{1,15}$/.test(s) ? Number(s) : s);
-const sheetName = (s: string) => s.replace(/[[\]:*?/\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 31);
+const numberish = (s: string): string | number => (/^[1-9]\d{0,14}$/.test(s) ? Number(s) : s);
+// Excel: 31 characters, none of []:*?/\, no apostrophe at either end.
+const sheetName = (s: string, max = 31) => s.replace(/[[\]:*?/\\]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max).replace(/^'+|'+$/g, '').trim();
 const quote = (name: string) => `'${name.replace(/'/g, "''")}'`;
 
 const ACCOUNTING_USD = '_("$"* #,##0.00_);_("$"* (#,##0.00);_("$"* "-"??_);_(@_)';
@@ -149,8 +150,9 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
   label(19, 'No. of cartons', {
     formula: `H${TOTAL}&" carton NW: "&G${TOTAL}&" KG. GW: "&F${TOTAL}&" KG. Size "&"${(s.cartonSize ?? '').replace(/"/g, '""')}"`,
   });
+  const perContainer = s.cartonsPerContainer ?? SHEET_DEFAULTS.cartonsPerContainer;
   const box = ws.getCell('L20');
-  box.value = s.cartonsPerContainer ?? SHEET_DEFAULTS.cartonsPerContainer;
+  box.value = perContainer > 0 ? perContainer : null;
   box.font = { name: 'Arial', size: 12 };
   box.note = 'Cartons one container holds: % of container = cartons ÷ this cell.';
   ws.getRow(20).height = 17;
@@ -166,11 +168,12 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
     c.border = { top: medium, left: medium, bottom: medium, right: medium };
   });
 
-  const usedNames = new Set<string>(['invoice']);
+  // "History" is reserved by Excel.
+  const usedNames = new Set<string>(['invoice', 'history']);
   const styleSheets: Array<{ row: SheetRow; name: string; grid: StyleGrid | undefined }> = rows.map((row) => {
     const base = sheetName(`PO${row.po} ${row.description}`) || 'Style';
     let name = base;
-    for (let n = 2; usedNames.has(name.toLowerCase()); n++) name = sheetName(`${base.slice(0, 27)} (${n})`);
+    for (let n = 2; usedNames.has(name.toLowerCase()); n++) { const suffix = ` (${n})`; name = sheetName(base, 31 - suffix.length) + suffix; }
     usedNames.add(name.toLowerCase());
     return { row, name, grid: grids.get(row.key) };
   });
@@ -189,7 +192,7 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
       row.unit, row.unitPrice,
       // A style of several rates has its own exact total; one rate multiplies out.
       row.mixedRates || row.unitPrice == null ? row.total : { formula: `A${r}*J${r}`, result: row.total ?? undefined },
-      { formula: `H${r}/$L$20`, result: row.containerShare ?? undefined },
+      perContainer > 0 ? { formula: `H${r}/$L$20`, result: row.containerShare ?? undefined } : null,
     ];
     values.forEach((v, j) => {
       const c = x.getCell(j + 1);
@@ -211,7 +214,7 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
   const sum = (c: string) => ({ formula: `SUM(${c}${FIRST}:${c}${LAST})` });
   const totals: Array<[number, ExcelJS.CellValue, string?]> = [
     [1, sum('A'), ACCOUNTING_INT], [4, 'Total'], [6, sum('F'), '0.##'], [7, sum('G'), '0.##'],
-    [8, sum('H'), '0'], [11, sum('K'), ACCOUNTING_USD], [12, sum('L'), '0%'],
+    [8, sum('H'), '0'], [11, sum('K'), ACCOUNTING_USD], [12, perContainer > 0 ? sum('L') : null, '0%'],
   ];
   for (let j = 1; j <= 12; j++) {
     const c = tot.getCell(j);
@@ -270,7 +273,7 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
   terms.forEach((t, i) => {
     ws.getRow(r).height = 27;
     ws.getCell(`A${r}`).value = i + 1;
-    ws.getCell(`B${r}`).value = t.replace(/^\d+[.)]\s*/, '');
+    ws.getCell(`B${r}`).value = t.replace(/^\d{1,3}[.)](?=\s)\s*/, '');
     for (const a of [`A${r}`, `B${r}`]) { ws.getCell(a).font = bold20; ws.getCell(a).alignment = { horizontal: 'left' }; }
     r++;
   });
@@ -292,6 +295,8 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
 
   // ── One sheet per style ─────────────────────────────────────────────────
   for (const { row, name, grid } of styleSheets) {
+    // No colour × size grid (a frozen document, or a style typed by hand): no sheet to show.
+    if (!grid) continue;
     const st = wb.addWorksheet(name);
     [13.33, 13.66, 13.66, 12, 12, 12, 12, 12, 12, 12, 14.5, 13.33].forEach((w, i) => { st.getColumn(i + 1).width = w; });
     const b12 = { name: 'Arial', size: 12, bold: true };
@@ -304,16 +309,15 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
       c.alignment = { horizontal: 'left' };
       if (fmt) c.numFmt = fmt;
     };
-    const sizes = grid?.sizes ?? [];
+    const sizes = grid.sizes;
     const gtCol = col(sizes.length + 2);
-    const gtRow = 6 + (grid?.rows.length ?? 0);
+    const gtRow = 6 + grid.rows.length;
     put('A1', 'Style'); st.mergeCells('B1:C1'); put('B1', row.description); st.getCell('B1').alignment = { horizontal: 'center' };
     put('E1', 'Style #'); put('F1', row.partNo);
-    put('J1', 'Total Qty'); put('K1', grid ? { formula: `${gtCol}${gtRow}`, result: grid.total } : row.qty, '#,##0');
+    put('J1', 'Total Qty'); put('K1', { formula: `${gtCol}${gtRow}`, result: grid.total }, '#,##0');
     put('A3', 'Date'); put('B3', day(inv.date), 'd-mmm-yy');
     put('E3', 'PO #'); put('F3', numberish(row.po)); st.getCell('F3').alignment = { horizontal: 'center' };
-    put('J3', 'FOB'); put('K3', grid?.shipDate ?? null, 'd-mmm-yy');
-    if (!grid) continue;
+    put('J3', 'FOB'); put('K3', grid.shipDate ?? null, 'd-mmm-yy');
     const head = st.getRow(5);
     ['Row Labels', ...sizes, 'Grand Total'].forEach((h, i) => {
       const c = head.getCell(i + 1);

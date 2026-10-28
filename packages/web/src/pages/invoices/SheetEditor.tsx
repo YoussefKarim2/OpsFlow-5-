@@ -57,6 +57,13 @@ export function sheetSettingsFrom(d: SheetDraft): ProformaSheetSettings {
   return out;
 }
 
+/** Whether anything at all is typed in the draft's settings. */
+export function hasSheetValues(d: SheetDraft): boolean {
+  const s = sheetSettingsFrom(d);
+  const { rows, ...top } = s;
+  return Object.values(top).some((v) => v != null) || Object.keys(rows ?? {}).length > 0;
+}
+
 /** What would stop a save: a number field holding something that is not a number. */
 export function sheetProblem(d: SheetDraft): string | null {
   for (const k of TOP_NUM) if (d.top[k].trim() !== '' && num(d.top[k]) == null) return `Shipment: "${d.top[k]}" is not a number.`;

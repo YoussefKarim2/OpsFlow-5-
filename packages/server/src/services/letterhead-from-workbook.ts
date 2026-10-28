@@ -24,6 +24,7 @@ export async function letterheadFromWorkbook(buffer: Buffer): Promise<Letterhead
     if (typeof v === 'object') {
       const o = v as { richText?: Array<{ text: string }>; result?: unknown; text?: string };
       if (o.richText) return o.richText.map((t) => t.text).join('').trim();
+      if ('error' in o) return '';
       if ('result' in o) return text(o.result);
       if (typeof o.text === 'string') return o.text.trim();
     }
@@ -32,7 +33,8 @@ export async function letterheadFromWorkbook(buffer: Buffer): Promise<Letterhead
   // Row r as its non-empty cells, in column order.
   const cells = (r: number): Array<{ col: number; v: string }> => {
     const out: Array<{ col: number; v: string }> = [];
-    ws.getRow(r).eachCell({ includeEmpty: false }, (c, col) => { const v = text(c.value); if (v) out.push({ col, v }); });
+    // A merged range reports its value on every cell it covers; count it once.
+    ws.getRow(r).eachCell({ includeEmpty: false }, (c, col) => { if (c.isMerged && c.master !== c) return; const v = text(c.value); if (v) out.push({ col, v }); });
     return out;
   };
   const label = (s: string) => s.replace(/\s*:\s*$/, '').trim().toLowerCase();
@@ -40,6 +42,8 @@ export async function letterheadFromWorkbook(buffer: Buffer): Promise<Letterhead
   const terms: string[] = [];
   const bank: string[] = [];
   let inTerms = false;
+  // The exporter block starts at its "Name :" row; an "Address :" above it is the customer's.
+  let inExporter = false;
   let signatureAt: number | null = null;
 
   for (let r = 1; r <= ws.rowCount; r++) {
@@ -51,9 +55,9 @@ export async function letterheadFromWorkbook(buffer: Buffer): Promise<Letterhead
     if (signatureAt != null && r > signatureAt && !out.signatory && row.length === 1) { out.signatory = first.v; continue; }
     if (/^for and in behalf of\b/i.test(first.v)) { signatureAt = r; inTerms = false; continue; }
     if (key === 'terms and conditions') { inTerms = true; continue; }
-    if (key === 'name' && rest) { out.name = rest; continue; }
-    if (key === 'exporter name' && rest && !out.name) { out.name = rest; continue; }
-    if (key === 'address' && rest && !inTerms) { out.address = rest; continue; }
+    if (key === 'name' && rest) { out.name = rest; inExporter = true; continue; }
+    if (key === 'exporter name' && rest && !out.name) { out.name = rest; inExporter = true; continue; }
+    if (key === 'address' && rest && inExporter && !inTerms) { out.address = rest; continue; }
     if (/^qiz ref/.test(key) && rest) { out.qizRef = rest; continue; }
     if (key === 'destination') continue;
     if (inTerms) {

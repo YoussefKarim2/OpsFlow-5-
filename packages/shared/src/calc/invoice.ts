@@ -308,7 +308,7 @@ export function stylesOf(texts: readonly string[]): Array<string | null> {
     return n >= 2 && restA >= 1 && restB >= 1 && restA <= 2 && restB <= 2 && !(restA === 2 && restB === 2) ? n : 0;
   };
   return texts.map((t, i) => {
-    if (t.includes(' — ')) return t.slice(0, t.lastIndexOf(' — ')).trim() || null;
+    if (t.includes(' — ')) return t.slice(0, t.lastIndexOf(' — ')).replace(/\s+/g, ' ').trim() || null;
     const w = words[i]!;
     const n = Math.max(...[words[i - 1], words[i + 1]].map((o) => (o ? shared(w, o) : 0)));
     return n > 0 ? w.slice(0, n).join(' ') : null;
@@ -319,6 +319,8 @@ export function stylesOf(texts: readonly string[]): Array<string | null> {
 export interface StyleGroup<L> {
   /** The style's name; the order's name when the order is a single style. */
   name: string;
+  /** The style read from the lines, when the order is one style: what its HTS code and cartons follow. */
+  style: string | null;
   /** True when the order is one style, so `name` is the order's own name. */
   wholeOrder: boolean;
   orderIndex: number;
@@ -346,8 +348,10 @@ export function groupGoodsByStyle<L extends InvoiceLineInput>(
     const g = groups[i]!;
     if (g.length === 0) return [];
     // The description without its "(PO x)" and the order name a build puts in front.
-    const texts = g.map((l) => styleText(l.description, o.orderName));
+    const texts = g.map((l) => styleText(l.description, o.orderName, o.poNumber));
     const styles = stylesOf(texts);
+    // A line that is only the order's name (a colourless line) carries no style.
+    texts.forEach((t, j) => { if (t.replace(/\s+/g, ' ').trim().toLowerCase() === o.orderName.replace(/\s+/g, ' ').trim().toLowerCase()) styles[j] = null; });
     const byStyle = new Map<string, { name: string; lines: L[] }>();
     g.forEach((l, j) => {
       const name = styles[j] ?? texts[j]!;
@@ -357,15 +361,23 @@ export function groupGoodsByStyle<L extends InvoiceLineInput>(
     });
     // A single style, or no style in the names at all (plain colours): the order is one group.
     if (byStyle.size <= 1 || styles.every((st) => st == null)) {
-      return [{ name: o.orderName, wholeOrder: true, orderIndex: i, lines: g }];
+      const only = [...byStyle.values()][0];
+      const style = byStyle.size === 1 && styles.some((st) => st != null) ? only!.name : null;
+      return [{ name: o.orderName, style, wholeOrder: true, orderIndex: i, lines: g }];
     }
-    return [...byStyle.values()].map((st) => ({ name: st.name, wholeOrder: false, orderIndex: i, lines: st.lines }));
+    return [...byStyle.values()].map((st) => ({ name: st.name, style: st.name, wholeOrder: false, orderIndex: i, lines: st.lines }));
   });
 }
 
-/** A goods line's description without its "(PO x)" and the order name a build puts in front. */
-export function styleText(description: string, orderName: string): string {
-  const t = description.trim().replace(/\s*\(PO [^()]*\)$/, '');
+/**
+ * A goods line's description without its "(PO x)" and the order name a build
+ * puts in front. With the PO given, exactly that suffix is removed — a PO
+ * with brackets of its own ("1234 (rev 2)") is not a pattern.
+ */
+export function styleText(description: string, orderName: string, poNumber?: string): string {
+  const suffix = poNumber != null ? `(PO ${poNumber})` : null;
+  const raw = description.trim();
+  const t = suffix && raw.endsWith(suffix) ? raw.slice(0, -suffix.length).trimEnd() : suffix ? raw : raw.replace(/\s*\(PO [^()]*\)$/, '');
   const lead = `${orderName.trim()} — `;
   return t.toLowerCase().startsWith(lead.toLowerCase()) && t.length > lead.length ? t.slice(lead.length) : t;
 }

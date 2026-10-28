@@ -1143,7 +1143,7 @@ export async function extractTabular(
       if (column.concept === ImportConcept.UNIT_PRICE) {
         const priced = matrix?.rows.filter((r) => r.unitPrice != null) ?? [];
         const pieces = priced.reduce((a, r) => a + r.total, 0);
-        if (matrix && priced.length === matrix.rows.length && pieces > 0) {
+        if (matrix && pieces > 0) {
           // Every colour keeps its own rate; the order's price is their average,
           // so the order's value matches the file.
           const value = priced.reduce((a, r) => a + r.total * r.unitPrice!, 0);
@@ -1162,6 +1162,8 @@ export async function extractTabular(
           }
           continue;
         }
+        // No colour has one rate: the column is per line and the order gets no price.
+        continue;
       } else {
         continue;
       }

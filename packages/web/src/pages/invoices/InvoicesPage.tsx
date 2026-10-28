@@ -477,13 +477,15 @@ function readStamp(file: File): Promise<string> {
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
-      const scale = Math.min(1, 600 / img.width);
+      const scale = Math.min(1, 600 / img.width, 600 / img.height);
       const canvas = document.createElement('canvas');
       canvas.width = Math.round(img.width * scale);
       canvas.height = Math.round(img.height * scale);
       canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
       URL.revokeObjectURL(url);
-      resolve(canvas.toDataURL('image/png'));
+      // A drawn stamp stays a crisp PNG; a photo of one would be far too big as PNG, so it goes as JPEG.
+      const png = canvas.toDataURL('image/png');
+      resolve(file.type === 'image/jpeg' || png.length > 250_000 ? canvas.toDataURL('image/jpeg', 0.85) : png);
     };
     img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('That file is not an image.')); };
     img.src = url;

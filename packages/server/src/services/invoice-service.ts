@@ -335,7 +335,7 @@ export function buildInvoiceDocument(input: {
     terms: profile.invoiceTerms,
     bankDetails: profile.bankDetails,
     notes,
-    seller: profile,
+    seller: withoutStamp(profile),
     orderRef: { id: order.id, poNumber: order.poNumber, orderName: order.orderName, styleNumber: order.styleNumber, clientName: order.client.name },
     lines,
     manifest,
@@ -662,6 +662,20 @@ export const INVOICE_INCLUDE = {
 
 export type LoadedInvoice = Prisma.InvoiceGetPayload<{ include: typeof INVOICE_INCLUDE }>;
 
+/**
+ * What a list row needs and nothing more: not the letterhead snapshot, the
+ * manifest or the reconciliation, which the list never shows and which make
+ * five hundred documents a very large answer.
+ */
+export const LIST_SELECT = {
+  id: true, kind: true, status: true, number: true, date: true, dueDate: true, billTo: true, orderRef: true,
+  packingListId: true, shipmentId: true, issuedAt: true, sentAt: true, createdAt: true,
+  lines: { orderBy: { position: 'asc' as const } },
+  orders: INVOICE_INCLUDE.orders,
+  order: INVOICE_INCLUDE.order,
+} satisfies Prisma.InvoiceSelect;
+export type ListedInvoice = Prisma.InvoiceGetPayload<{ select: typeof LIST_SELECT }>;
+
 export function lineToDto(l: LoadedInvoice['lines'][number]): InvoiceLineDto {
   const quantity = dec(l.quantity);
   const unitPrice = dec(l.unitPrice);
@@ -738,14 +752,17 @@ async function partIsStale(orderId: string, packingListId: string | null, built:
 export function fillFromLetterhead(inv: LoadedInvoice, live: CompanyProfileDto | undefined): Pick<LoadedInvoice, 'seller' | 'terms' | 'bankDetails' | 'sheet'> {
   if (!live || inv.status !== InvoiceStatus.DRAFT) return inv;
   const snap = (inv.seller as unknown as Partial<CompanyProfileDto>) ?? {};
-  const { updatedAt: _u, ...seller } = live;
+  const seller = withoutStamp(live);
   const sheet = (inv.sheet as ProformaSheetSettings | null) ?? null;
   // An exporter line that only repeats the old letterhead is not something anyone typed.
   const typed = (v: string | null | undefined, was: string | null | undefined) => (v && v !== was ? v : null);
+  // Each exporter field is what was typed on the document or nothing: the
+  // document and the Excel fall back to the letterhead, so a save never pins
+  // a letterhead value that is later corrected.
   const filledSheet: ProformaSheetSettings | null = sheet && {
     ...sheet,
-    qizRef: typed(sheet.qizRef, snap.qizRef) ?? live.qizRef ?? null,
-    signatory: typed(sheet.signatory, snap.signatory) ?? live.signatory ?? null,
+    qizRef: typed(sheet.qizRef, snap.qizRef) ?? null,
+    signatory: typed(sheet.signatory, snap.signatory) ?? null,
     exporterName: typed(sheet.exporterName, snap.name) ?? null,
     exporterAddress: typed(sheet.exporterAddress, snap.address) ?? null,
   };
@@ -755,6 +772,15 @@ export function fillFromLetterhead(inv: LoadedInvoice, live: CompanyProfileDto |
     bankDetails: inv.bankDetails?.trim() ? inv.bankDetails : live.bankDetails,
     sheet: filledSheet as unknown as Prisma.JsonValue | null,
   };
+}
+
+/**
+ * The letterhead without its stamp image: the stamp is kept once, on the
+ * company profile, never copied into every document's snapshot (a few
+ * hundred KB each) — it is read from the profile when a document is drawn.
+ */
+export function withoutStamp(p: CompanyProfileDto): CompanyProfileDto {
+  return { ...p, stampDataUrl: null };
 }
 
 export function invoiceToDto(raw: LoadedInvoice, stale = false, live?: CompanyProfileDto): InvoiceDto {
@@ -792,7 +818,8 @@ export function invoiceToDto(raw: LoadedInvoice, stale = false, live?: CompanyPr
     // 'SHEET' was a layout of its own for a day; it reads as one line per style.
     lineLayout: inv.lineLayout === 'SUMMARY' || inv.lineLayout === 'SHEET' ? 'SUMMARY' : 'DETAILED',
     sheet: (inv.sheet as ProformaSheetSettings | null) ?? null,
-    seller: inv.seller as unknown as CompanyProfileDto,
+    // The stamp is the company's, read live for every document, old and new.
+    seller: { ...(inv.seller as unknown as CompanyProfileDto), stampDataUrl: live?.stampDataUrl ?? null },
     lines,
     manifest: inv.manifest as unknown as InvoiceCartonDto[],
     reconciliation: inv.reconciliation as unknown as InvoiceReconciliationGroupDto[],
@@ -812,7 +839,7 @@ export function invoiceToDto(raw: LoadedInvoice, stale = false, live?: CompanyPr
 }
 
 /** Every order on a document from its snapshots, falling back to the live order where a row has none. */
-function orderRefsOf(inv: LoadedInvoice, first: OrderRef): InvoiceOrderRefDto[] {
+function orderRefsOf(inv: Pick<LoadedInvoice, 'orders' | 'order' | 'packingListId' | 'shipmentId'>, first: OrderRef): InvoiceOrderRefDto[] {
   if (inv.orders.length === 0) {
     return [{ ...first, id: inv.order.id, packingListId: inv.packingListId, shipmentId: inv.shipmentId }];
   }
@@ -830,7 +857,7 @@ function orderRefsOf(inv: LoadedInvoice, first: OrderRef): InvoiceOrderRefDto[] 
   });
 }
 
-export function invoiceToListRow(inv: LoadedInvoice): InvoiceListRowDto {
+export function invoiceToListRow(inv: ListedInvoice): InvoiceListRowDto {
   const totals = computeInvoiceTotals(inv.lines.map(lineToDto));
   const ref = (inv.orderRef as unknown as OrderRef | null);
   const firstRef: OrderRef = ref ?? {

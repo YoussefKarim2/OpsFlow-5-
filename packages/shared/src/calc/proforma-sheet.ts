@@ -92,12 +92,14 @@ export function guessPerCarton(name: string): number {
 /** "TRANMERE SHIRT" → "Tranmere Shirt"; already mixed case is left alone. */
 export function titleCase(s: string): string {
   if (s !== s.toUpperCase()) return s;
-  return s.toLowerCase().replace(/(^|[\s/(.-])([a-z])/g, (_, a: string, b: string) => a + b.toUpperCase());
+  // A token with a digit ("2XL", "V4") stays as typed.
+  return s.split(/(\s+)/).map((tok) => (/\d/.test(tok) || !/\S/.test(tok) ? tok
+    : tok.toLowerCase().replace(/(^|[/(.-])(\p{Ll})/gu, (_, a: string, b: string) => a + b.toUpperCase()))).join('');
 }
 
 /** The key a row's typed fields are stored under: the style, and the PO on a document of several. */
 export function sheetRowKey(name: string, po: string | null, manyOrders: boolean): string {
-  return `${name.trim().toUpperCase()}${manyOrders && po ? `|${po}` : ''}`;
+  return `${name.replace(/\s+/g, ' ').trim().toUpperCase()}${manyOrders && po ? `|${po}` : ''}`;
 }
 
 export interface SheetRow {
@@ -137,9 +139,19 @@ export interface SheetTotals {
 /** ETD + lead days, as an ISO day; null without an ETD. */
 export function sheetEta(etd: string | null | undefined, leadDays: number | null | undefined): string | null {
   if (!etd) return null;
-  const d = new Date(`${etd.slice(0, 10)}T00:00:00.000Z`);
-  if (Number.isNaN(d.getTime())) return null;
-  return new Date(d.getTime() + (leadDays ?? SHEET_DEFAULTS.leadDays) * 86_400_000).toISOString().slice(0, 10);
+  const day = etd.slice(0, 10);
+  const d = new Date(`${day}T00:00:00.000Z`);
+  // "2026-02-30" is not a date; JavaScript would quietly make it 2 March.
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== day) return null;
+  const lead = leadDays != null && Number.isFinite(leadDays) ? leadDays : SHEET_DEFAULTS.leadDays;
+  return new Date(d.getTime() + lead * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** True for a real calendar day written YYYY-MM-DD. */
+export function isCalendarDay(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const d = new Date(`${s}T00:00:00.000Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
 }
 
 /** The table of the factory's proforma: one row per style, worked out as its Excel sheet does. */
@@ -158,16 +170,19 @@ export function buildSheet(
     const t = typed[key] ?? {};
     const sum = sumGoods(g.lines);
     const qty = sum.quantity ?? 0;
-    const perCarton = t.perCarton && t.perCarton > 0 ? t.perCarton : guessPerCarton(g.name);
+    // The HTS code, cartons and wording follow the style the lines name, even
+    // when the order is that one style and the row is named after the order.
+    const label = g.style ?? g.name;
+    const perCarton = t.perCarton && t.perCarton > 0 ? t.perCarton : guessPerCarton(label);
     const cartonsTyped = t.cartons != null && t.cartons >= 0;
     const cartons = cartonsTyped ? t.cartons! : qty > 0 ? Math.ceil(qty / perCarton) : 0;
     return {
       key,
       style: g.name,
-      description: t.description?.trim() || titleCase(g.name),
+      description: t.description?.trim() || titleCase(label),
       po: t.po?.trim() || o.poNumber,
       partNo: t.partNo?.trim() || (g.wholeOrder && o.styleNumber ? o.styleNumber : ''),
-      hts: t.hts?.trim() || guessHts(g.name),
+      hts: t.hts?.trim() || guessHts(label),
       gw: t.gw ?? null,
       nw: t.nw ?? null,
       unit: t.unit?.trim() || SHEET_DEFAULTS.unit,
@@ -200,8 +215,10 @@ export function buildSheet(
 }
 
 /** The sheet's title when none is typed: "Xara Proforma invoice No.PI-2026-0001 on 21 Oct. 26". */
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 export function defaultSheetTitle(clientName: string, number: string, dateIso: string): string {
   const d = new Date(dateIso);
-  const on = Number.isNaN(d.getTime()) ? '' : ` on ${d.getUTCDate()} ${d.toLocaleString('en-GB', { month: 'short', timeZone: 'UTC' })}. ${String(d.getUTCFullYear()).slice(2)}`;
+  const month = Number.isNaN(d.getTime()) ? '' : MONTHS[d.getUTCMonth()]!;
+  const on = Number.isNaN(d.getTime()) ? '' : ` on ${d.getUTCDate()} ${month}${month === 'May' ? '' : '.'} ${String(d.getUTCFullYear()).slice(2)}`;
   return `${clientName ? `${clientName} ` : ''}Proforma invoice No.${number}${on}`;
 }

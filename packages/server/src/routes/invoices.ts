@@ -21,7 +21,7 @@
 
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { INVOICE_LINE_LAYOUTS, InvoiceKind, InvoiceLineKind, InvoiceStatus, SHEET_DEFAULTS, computeInvoiceTotals, resolveShippedQty, type InvoiceCandidateDto, type ProformaSheetSettings } from '@opsflow/shared';
+import { INVOICE_LINE_LAYOUTS, InvoiceKind, InvoiceLineKind, InvoiceStatus, SHEET_DEFAULTS, computeInvoiceTotals, isCalendarDay, resolveShippedQty, type InvoiceCandidateDto, type ProformaSheetSettings } from '@opsflow/shared';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
 import { authenticate, currentUser, requirePermission } from '../middleware/auth.js';
@@ -34,7 +34,7 @@ import { proformaSheetWorkbook } from '../services/proforma-sheet-xlsx.js';
 import { letterheadFromWorkbook } from '../services/letterhead-from-workbook.js';
 import { contentDisposition } from '../util/upload-name.js';
 import {
-  INVOICE_INCLUDE, PROFILE_ID, assertDraft, assertIssuable, assertStillDraft, buildCombinedDocument, defaultCoverNote,
+  INVOICE_INCLUDE, LIST_SELECT, PROFILE_ID, assertDraft, assertIssuable, assertStillDraft, buildCombinedDocument, defaultCoverNote,
   carriedRates, fillFromLetterhead, getCompanyProfile, invoiceToDto, invoiceToListRow, isStale, lineToDto, loadInvoice, loadOrderForBuild, partsOf, pickDefaults, qtyPerOrder,
   profileToDto, sourcesOf, toBuildOrder, toBuildPackingList, toBuildShipment, withAllocatedNumber,
 } from '../services/invoice-service.js';
@@ -219,7 +219,7 @@ invoicesRouter.get('/', requirePermission('invoice:read'), asyncHandler(async (r
         ],
       } : {}),
     },
-    include: INVOICE_INCLUDE,
+    select: LIST_SELECT,
     orderBy: [{ createdAt: 'desc' }],
     take: 500,
   });
@@ -297,9 +297,11 @@ async function buildFor(kind: InvoiceKind, choices: SourceChoice[]) {
  * its dates and title, or the factory's defaults with the letterhead as exporter.
  */
 async function seedSheet(clientId: string, seller: { name?: string; address?: string | null; qizRef?: string | null; signatory?: string | null }): Promise<ProformaSheetSettings> {
+  // The customer's most recently worked-on document, not a draft raised a
+  // minute ago by mistake; a voided one is not a model.
   const last = await prisma.invoice.findFirst({
-    where: { sheet: { not: Prisma.DbNull }, order: { clientId } },
-    orderBy: { createdAt: 'desc' }, select: { sheet: true },
+    where: { kind: InvoiceKind.PROFORMA, sheet: { not: Prisma.DbNull }, status: { not: InvoiceStatus.VOID }, order: { clientId } },
+    orderBy: { updatedAt: 'desc' }, select: { sheet: true },
   });
   if (last?.sheet) {
     // The exporter block follows the letterhead unless typed on a document; it is not carried.
@@ -309,7 +311,8 @@ async function seedSheet(clientId: string, seller: { name?: string; address?: st
     const carried: NonNullable<ProformaSheetSettings['rows']> = {};
     for (const [key, r] of Object.entries(rows ?? {})) {
       const row = { partNo: r.partNo ?? null, hts: r.hts ?? null, perCarton: r.perCarton ?? null, unit: r.unit ?? null };
-      if (Object.values(row).some((v) => v != null)) carried[key] = row;
+      // A key from a document of several orders is "STYLE|PO"; the style alone is what carries.
+      if (Object.values(row).some((v) => v != null)) carried[key.split('|')[0]!] = row;
     }
     return { ...kept, rows: carried };
   }
@@ -407,7 +410,11 @@ invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async 
 invoicesRouter.get('/:id/export.xlsx', requirePermission('invoice:read'), asyncHandler(async (req, res) => {
   const loaded = await loadInvoice(req.params.id);
   const inv = invoiceToDto(loaded, false, await getCompanyProfile());
-  const orders = await Promise.all(inv.orders.map(async (o) => toBuildOrder(await loadOrderForBuild(o.id))));
+  // A draft's style sheets show the live order's colours and sizes; an issued
+  // or voided document is a record and its quantities are written as values.
+  const orders = loaded.status === InvoiceStatus.DRAFT
+    ? (await Promise.all(inv.orders.map((o) => loadOrderForBuild(o.id).then(toBuildOrder).catch(() => null)))).filter((o): o is NonNullable<typeof o> => o != null)
+    : [];
   const buffer = await proformaSheetWorkbook(inv, orders);
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   res.setHeader('Content-Disposition', contentDisposition('attachment', `${inv.number} ${inv.kind === InvoiceKind.PROFORMA ? 'Proforma' : 'Invoice'}.xlsx`));
@@ -450,7 +457,8 @@ const cartonSchema = z.object({
 });
 
 const sheetNum = (max: number) => z.number().min(0).max(max).nullable().optional();
-const sheetDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'A date is written YYYY-MM-DD.').nullable().optional();
+const sheetInt = (min: number, max: number) => z.number().int('Whole numbers only.').min(min).max(max).nullable().optional();
+const sheetDay = z.string().refine(isCalendarDay, 'A date is written YYYY-MM-DD and must exist.').nullable().optional();
 /** The factory proforma sheet's typed fields. */
 const sheetSchema = z.object({
   title: text(300), statement: text(300), shipmentFrom: text(120), container: text(40),
@@ -459,7 +467,7 @@ const sheetSchema = z.object({
   exporterName: text(200), exporterAddress: text(400), qizRef: text(60), destination: text(120), signatory: text(120),
   rows: z.record(z.string().max(300), z.object({
     description: text(200), po: text(60), partNo: text(60), hts: text(30),
-    gw: sheetNum(1e7), nw: sheetNum(1e7), perCarton: sheetNum(100_000), cartons: sheetNum(1e6), unit: text(20),
+    gw: sheetNum(1e7), nw: sheetNum(1e7), perCarton: sheetInt(1, 100_000), cartons: sheetInt(0, 1e6), unit: text(20),
   })).refine((r) => Object.keys(r).length <= 600, 'Too many rows on one sheet.').optional(),
 });
 
