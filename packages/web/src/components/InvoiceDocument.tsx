@@ -48,7 +48,7 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
   // Every order the document covers; a JSON saved before documents could
   // cover several orders has only the one.
   const orders = doc.orders?.length ? doc.orders : [doc.order];
-  // "Total only": one line per order, its pieces, rate and amount. The lines
+  // "Total only": one line per style (or order), its pieces, rate and amount. The lines
   // themselves and every total below are the same as the detailed listing.
   const summary = doc.lineLayout === 'SUMMARY' ? summariseGoods(doc.lines, orders) : null;
   const title = isInvoice ? 'INVOICE' : 'PROFORMA INVOICE';
@@ -153,7 +153,7 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
                   <td className="px-3 py-2 text-ink-500">{i + 1}</td>
                   <td className="px-2 py-2 font-semibold"><T>{l.description}</T></td>
                   <td className="tnum px-2 py-2 text-right">{qty(l.quantity)}</td>
-                  <td className="tnum px-2 py-2 text-right" title={l.mixedRates ? 'Average rate: the lines of this order carry different rates' : undefined}>
+                  <td className="tnum px-2 py-2 text-right" title={l.mixedRates ? 'Average rate: the lines of this row carry different rates' : undefined}>
                     {rate(l.unitPrice)}{l.mixedRates && <span className="text-ink-400"> avg</span>}
                   </td>
                   <td className="tnum px-3 py-2 text-right font-medium">{money(l.lineTotal)}</td>

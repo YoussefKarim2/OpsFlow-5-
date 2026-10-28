@@ -748,7 +748,7 @@ export interface InvoiceDto {
   terms: string | null;
   bankDetails: string | null;
   notes: string | null;
-  /** DETAILED: every colour and size. SUMMARY: one line per order — total pieces, rate, amount. */
+  /** DETAILED: every colour and size. SUMMARY: one line per style (or per order) — total pieces, rate, amount. */
   lineLayout: 'DETAILED' | 'SUMMARY';
 
   seller: CompanyProfileDto;

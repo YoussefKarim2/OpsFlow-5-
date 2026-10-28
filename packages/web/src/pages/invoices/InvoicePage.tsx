@@ -344,7 +344,7 @@ export function InvoicePage() {
                 </div>
                 <p className="text-2xs text-ink-500">
                   {draft.lineLayout === 'SUMMARY'
-                    ? 'One line per order: total pieces, rate and amount, without colours or sizes. The lines below and the totals are unchanged.'
+                    ? 'One line per style (per order when it is a single style): total pieces, rate and amount, without colours or sizes. The lines below and the totals are unchanged.'
                     : 'Every colour with its sizes, pieces, rate and amount.'}
                 </p>
               </div>

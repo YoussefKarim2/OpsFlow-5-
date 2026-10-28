@@ -148,6 +148,34 @@ describe('summary layout', () => {
     assert.deepEqual(out.map((l) => [l.description, l.quantity, l.lineTotal]), [['Shirt · PO 1001', 100, 500], ['Shirt · PO 1002', 100, 500]]);
   });
 
+  test('a buy sheet of many styles: one line per style, its colours added up', () => {
+    const o = 'AGE.Spring buy 2027';
+    const lines = [
+      item(`${o} — TRANMERE SHIRT — HUNTER/WHT`, 264, 4), item(`${o} — TRANMERE SHIRT — LIME/BLACK`, 288, 4),
+      item(`${o} — BRITANNIA SHIRT MALE — RED/WH`, 48, 5),
+      item(`${o} — LEEDS JERSEY UNISEX BLACK`, 240, 3), item(`${o} — LEEDS JERSEY UNISEX VEGAS GOLD`, 348, 3),
+      item(`${o} — ST. JAMES TRACK JKT BLACK`, 60, 6), item(`${o} — ST. JAMES TRACK JKT NAVY`, 15, 6),
+      item(`${o} — ST. JAMES TRACK PANT BLACK`, 258, 6), item(`${o} — ELLAND PERFORMANCE HOODY BLACK`, 132, 7),
+    ];
+    const out = summariseGoods(lines, [{ poNumber: 'AGE-1', orderName: o }]);
+    assert.deepEqual(out.map((l) => [l.description, l.quantity, l.lineTotal]), [
+      ['TRANMERE SHIRT', 552, 2208], ['BRITANNIA SHIRT MALE', 48, 240], ['LEEDS JERSEY UNISEX', 588, 1764],
+      ['ST. JAMES TRACK JKT', 75, 450], ['ST. JAMES TRACK PANT BLACK', 258, 1548], ['ELLAND PERFORMANCE HOODY BLACK', 132, 924],
+    ]);
+    assert.equal(out.reduce((a, l) => a + l.lineTotal!, 0), computeInvoiceTotals(lines).subtotal);
+  });
+
+  test('plain colours are one line for the order, not one per colour', () => {
+    const out = summariseGoods([item('Polo — Navy', 10, 2), item('Polo — Dark Green', 5, 2), item('Polo — Dark Grey', 5, 2)], [{ poNumber: '1', orderName: 'Polo' }]);
+    assert.deepEqual(out.map((l) => [l.description, l.quantity]), [['Polo', 20]]);
+  });
+
+  test('styles on a multi-order document keep their PO', () => {
+    const lines = [item('Kit — HARROGATE SHIRT — NAVY/RED (PO 1)', 10, 2), item('Kit — NATION SHORT — ROY/WHT (PO 1)', 5, 2), item('Kit — Navy (PO 2)', 7, 2)];
+    const out = summariseGoods(lines, [{ poNumber: '1', orderName: 'Kit' }, { poNumber: '2', orderName: 'Kit' }]);
+    assert.deepEqual(out.map((l) => [l.description, l.quantity]), [['HARROGATE SHIRT · PO 1', 10], ['NATION SHORT · PO 1', 5], ['Kit · PO 2', 7]]);
+  });
+
   test('different rates are averaged and flagged; unpriced lines leave the amount blank', () => {
     const mixed = summariseGoods([item('A', 10, 2), item('B', 10, 4)], [{ poNumber: '1', orderName: 'O' }])[0]!;
     assert.equal(mixed.unitPrice, 3); assert.equal(mixed.mixedRates, true); assert.equal(mixed.lineTotal, 60);
