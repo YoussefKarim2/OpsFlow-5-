@@ -13,7 +13,7 @@ import type {
   OrderStepsResult, Blocker, StageKey, StageStatus,
   NotificationPriority, ChangeCategory, ShipmentDto, ProductivityDto, ProductivityDayLogDto, ProductionOperation,
   CostingOverviewDto,
-  InvoiceDto, InvoiceListRowDto, InvoiceCandidateDto, CompanyProfileDto, InvoiceKind, InvoiceStatus, InvoiceLineKind,
+  InvoiceDto, InvoiceListRowDto, InvoiceCandidateDto, CompanyProfileDto, InvoiceKind, InvoiceStatus, InvoiceLineKind, ProformaSheetSettings,
 } from '@opsflow/shared';
 
 const BASE = import.meta.env.VITE_API_URL ?? '/api';
@@ -166,7 +166,9 @@ export interface InvoiceEditBody {
   terms?: string | null;
   bankDetails?: string | null;
   notes?: string | null;
-  lineLayout?: 'DETAILED' | 'SUMMARY';
+  lineLayout?: 'DETAILED' | 'SUMMARY' | 'SHEET';
+  /** The factory proforma sheet's typed fields. */
+  sheet?: ProformaSheetSettings | null;
   /** The version the editor opened; a save on a newer one is refused. */
   updatedAt?: string;
   /** A proforma's cartons, typed or copied from the packing list. Replaces the set. */
@@ -1051,6 +1053,9 @@ export const api = {
       post<{ data: InvoiceDto }>('/invoices', body),
     update: (id: string, body: InvoiceEditBody) => put<{ data: InvoiceDto }>(`/invoices/${id}`, body),
     rebuild: (id: string) => post<{ data: InvoiceDto }>(`/invoices/${id}/rebuild`),
+    /** The document as the factory's Excel proforma: the invoice sheet and a sheet per style, with formulas. */
+    downloadXlsx: (id: string, number: string) =>
+      downloadFile(`/invoices/${id}/export.xlsx`, `${number} Proforma.xlsx`, 'Could not create the Excel file.'),
     cartonsFromPacking: (id: string) => post<{ data: InvoiceDto['manifest'] }>(`/invoices/${id}/cartons-from-packing`),
     issue: (id: string) => post<{ data: InvoiceDto }>(`/invoices/${id}/issue`),
     markSent: (id: string) => post<{ data: InvoiceDto }>(`/invoices/${id}/sent`),

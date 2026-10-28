@@ -13,10 +13,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Ban, FileCheck, Lock, Plus, Printer, RefreshCw, Send, Trash2, AlertTriangle } from 'lucide-react';
+import { ArrowLeft, Ban, FileCheck, FileSpreadsheet, Lock, Plus, Printer, RefreshCw, Send, Trash2, AlertTriangle } from 'lucide-react';
 import {
-  computeInvoiceTotals, fmtDate, INVOICE_KIND_LABEL, InvoiceStatus, issueBlockers, lineTotal,
-  type InvoiceDto, type InvoiceLineKind as LineKind,
+  buildSheet, computeInvoiceTotals, defaultSheetTitle, fmtDate, INVOICE_KIND_LABEL, InvoiceStatus, issueBlockers, lineTotal,
+  type InvoiceDto, type InvoiceLineKind as LineKind, type SheetRow,
 } from '@opsflow/shared';
 import { InvoiceStatusChip } from '../../components/InvoiceStatusChip';
 import { api, type InvoiceEditBody } from '../../lib/api';
@@ -24,6 +24,7 @@ import { useAuth } from '../../lib/auth';
 import { Card, ConfirmDialog, ErrorNote, Field, Num, Spinner, clsx, useToast } from '../../components/ui';
 import { InvoiceDocument } from '../../components/InvoiceDocument';
 import { ComboSelect } from '../../components/ComboSelect';
+import { SheetEditor, sheetDraftFrom, sheetProblem, sheetSettingsFrom, type SheetDraft } from './SheetEditor';
 
 interface LineDraft { kind: LineKind; description: string; size: string; quantity: string; unitPrice: string; amount: string }
 /**
@@ -42,7 +43,8 @@ interface Draft {
   billTo: string; billToAddress: string; billToEmail: string;
   customerReference: string; shipmentRef: string; shippedOn: string;
   coverNote: string; terms: string; bankDetails: string; notes: string;
-  lineLayout: 'DETAILED' | 'SUMMARY';
+  lineLayout: 'DETAILED' | 'SUMMARY' | 'SHEET';
+  sheet: SheetDraft;
   cartons: CartonDraft[];
   lines: LineDraft[];
 }
@@ -62,6 +64,7 @@ function fromServer(inv: InvoiceDto): Draft {
     customerReference: inv.customerReference ?? '', shipmentRef: inv.shipmentRef ?? '', shippedOn: day(inv.shippedOn),
     coverNote: inv.coverNote ?? '', terms: inv.terms ?? '', bankDetails: inv.bankDetails ?? '', notes: inv.notes ?? '',
     lineLayout: inv.lineLayout,
+    sheet: sheetDraftFrom(inv.sheet),
     cartons: inv.manifest.map((c) => ({
       cartonNumber: c.cartonNumber, cartonSize: c.cartonSize ?? '', product: c.product, poNumber: c.poNumber,
       contents: c.contents, contentsText: c.contentsText ?? '',
@@ -106,6 +109,8 @@ function toBody(d: Draft, inv: InvoiceDto): InvoiceEditBody {
     customerReference: nn(d.customerReference), shipmentRef: nn(d.shipmentRef), shippedOn: d.shippedOn || null,
     coverNote: nn(d.coverNote), terms: nn(d.terms), bankDetails: nn(d.bankDetails), notes: nn(d.notes),
     lineLayout: d.lineLayout,
+    // The sheet's fields are kept once it has been used, whichever layout prints.
+    sheet: d.lineLayout === 'SHEET' || inv.sheet ? sheetSettingsFrom(d.sheet) : undefined,
     updatedAt: inv.updatedAt,
     cartons: !cartonsTyped(inv) ? undefined : d.cartons.map((c) => ({
       cartonNumber: c.cartonNumber.trim(), cartonSize: nn(c.cartonSize), product: c.product.trim(), poNumber: c.poNumber,
@@ -144,6 +149,7 @@ function preview(inv: InvoiceDto, d: Draft): InvoiceDto {
     customerReference: nn(d.customerReference), shipmentRef: nn(d.shipmentRef),
     coverNote: nn(d.coverNote), terms: nn(d.terms), bankDetails: nn(d.bankDetails), notes: nn(d.notes),
     lineLayout: d.lineLayout,
+    sheet: sheetSettingsFrom(d.sheet),
     manifest: d.cartons.map((c, i) => ({
       n: i + 1, cartonNumber: c.cartonNumber, cartonSize: nn(c.cartonSize), product: c.product, poNumber: c.poNumber,
       contents: c.contents, contentsText: nn(c.contentsText), pieces: cartonPieces(c), netKg: numOrNull(c.netKg), grossKg: numOrNull(c.grossKg),
@@ -184,7 +190,7 @@ export function InvoicePage() {
 
   const save = useMutation({
     mutationFn: (d: Draft) => {
-      const problem = cartonProblem(d);
+      const problem = cartonProblem(d) ?? (d.lineLayout === 'SHEET' ? sheetProblem(d.sheet) : null);
       if (problem) throw new Error(problem);
       return api.invoices.update(id, toBody(d, inv!));
     },
@@ -205,6 +211,7 @@ export function InvoicePage() {
     onError: (e) => toast.error(e),
   });
   const rebuild = useMutation({ mutationFn: () => api.invoices.rebuild(id), onSuccess: after('Rebuilt from the order'), onError: (e) => toast.error(e) });
+  const downloadXlsx = useMutation({ mutationFn: () => api.invoices.downloadXlsx(id, inv?.number ?? 'proforma'), onError: (e) => toast.error(e) });
   const issue = useMutation({ mutationFn: () => api.invoices.issue(id), onSuccess: after('Issued. The document is now the record.'), onError: (e) => toast.error(e) });
   const markSent = useMutation({ mutationFn: () => api.invoices.markSent(id), onSuccess: after('Marked as sent'), onError: (e) => toast.error(e) });
   const voidIt = useMutation({ mutationFn: () => api.invoices.void(id, voidReason), onSuccess: after('Voided. The number is kept for the record.'), onError: (e) => toast.error(e) });
@@ -235,6 +242,15 @@ export function InvoicePage() {
     contents: [], contentsText: '', pieces: '', netKg: '', grossKg: '',
   }] });
   const addLine = (kind: LineKind) => setDraft({ ...draft, lines: [...draft.lines, { kind, description: '', size: '', quantity: '', unitPrice: '', amount: '' }] });
+
+  const sheetRows: SheetRow[] = draft.lineLayout === 'SHEET' ? buildSheet(shown.lines, shown.orders, shown.sheet).rows : [];
+  // A row's rate as its goods lines have it, when they agree; blank when they differ.
+  const sheetRates = Object.fromEntries(sheetRows.map((r) => {
+    const typed = [...new Set(r.lineIndexes.map((i) => draft.lines[i]?.unitPrice ?? ''))];
+    return [r.key, typed.length === 1 ? typed[0]! : ''];
+  }));
+  const setSheetRate = (r: SheetRow, value: string) =>
+    setDraft({ ...draft, lines: draft.lines.map((l, i) => (r.lineIndexes.includes(i) ? { ...l, unitPrice: value } : l)) });
 
   const print = () => {
     document.title = `${inv.number} — ${INVOICE_KIND_LABEL[inv.kind]}`;
@@ -268,6 +284,12 @@ export function InvoicePage() {
                 {save.isPending ? 'Saving…' : dirty ? 'Save draft' : 'Saved'}
               </button>
             </>
+          )}
+          {inv.lineLayout === 'SHEET' && (
+            <button className="btn-secondary btn-sm" disabled={dirty || downloadXlsx.isPending} onClick={() => downloadXlsx.mutate()}
+              title={dirty ? 'Save the draft first: the Excel file is made from the saved document' : 'The proforma sheet as Excel: the invoice sheet and one sheet per style, with formulas'}>
+              <FileSpreadsheet className="h-3.5 w-3.5" /> {downloadXlsx.isPending ? 'Preparing…' : 'Excel'}
+            </button>
           )}
           <button className="btn-secondary btn-sm" onClick={print} title="Opens the browser's print dialog — choose “Save as PDF” there">
             <Printer className="h-3.5 w-3.5" /> Print / PDF
@@ -334,7 +356,9 @@ export function InvoicePage() {
               <div className="card-header"><h3 className="card-title">On the document</h3></div>
               <div className="space-y-2 p-4">
                 <div className="flex rounded-md border border-ink-300 p-0.5" role="radiogroup" aria-label="How the goods are listed">
-                  {([['DETAILED', 'By colour & size'], ['SUMMARY', 'Total only']] as const).map(([v, label]) => (
+                  {((inv.kind === 'PROFORMA' || inv.lineLayout === 'SHEET'
+                    ? [['SHEET', 'Proforma sheet'], ['DETAILED', 'By colour & size'], ['SUMMARY', 'Total only']]
+                    : [['DETAILED', 'By colour & size'], ['SUMMARY', 'Total only']]) as ReadonlyArray<readonly [Draft['lineLayout'], string]>).map(([v, label]) => (
                     <button
                       key={v} type="button" role="radio" aria-checked={draft.lineLayout === v}
                       onClick={() => set('lineLayout', v)}
@@ -343,12 +367,22 @@ export function InvoicePage() {
                   ))}
                 </div>
                 <p className="text-2xs text-ink-500">
-                  {draft.lineLayout === 'SUMMARY'
+                  {draft.lineLayout === 'SHEET'
+                    ? 'The factory\'s proforma layout: one row per style with PO, part no., HTS code, cartons and % of container. Download it as Excel with its formulas.'
+                    : draft.lineLayout === 'SUMMARY'
                     ? 'One line per style (per order when it is a single style): total pieces, rate and amount, without colours or sizes. The lines below and the totals are unchanged.'
                     : 'Every colour with its sizes, pieces, rate and amount.'}
                 </p>
               </div>
             </Card>
+
+            {draft.lineLayout === 'SHEET' && (
+              <SheetEditor
+                draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} rows={sheetRows}
+                defaultTitle={defaultSheetTitle(inv.order.clientName, inv.number, shown.date)}
+                rates={sheetRates} onRate={setSheetRate}
+              />
+            )}
 
             <Card>
               <div className="card-header"><h3 className="card-title">Lines</h3>

@@ -1353,6 +1353,10 @@ model Invoice {
   /// DETAILED lists every colour and size; SUMMARY one line per order with its
   /// total pieces, rate and amount. The stored lines are the same either way.
   lineLayout        String        @default("DETAILED")
+  /// The factory proforma sheet's typed fields (ProformaSheetSettings): QIZ
+  /// line, container, dates, exporter block and each style's PO, part no.,
+  /// HTS code, weights and cartons. Kept across rebuilds.
+  sheet             Json?
   /// The order's PO, name, style and client as they were when the document
   /// was last built — the header of an issued invoice does not follow a rename.
   orderRef          Json?

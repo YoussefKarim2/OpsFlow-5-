@@ -270,11 +270,13 @@ export function issueBlockers(doc: {
 
 /**
  * How a document lists its goods: every colour and size as built
- * (`DETAILED`), or one line per style (per order when it is a single style)
- * with only its total pieces, rate and amount (`SUMMARY`). Only the listing changes — the stored lines, the totals
+ * (`DETAILED`); one line per style (per order when it is a single style)
+ * with only its total pieces, rate and amount (`SUMMARY`); or the factory's
+ * proforma sheet — one row per style with PO, part number, HTS code, cartons
+ * and share of the container (`SHEET`). Only the listing changes — the stored lines, the totals
  * and the amount in words are the same either way.
  */
-export const INVOICE_LINE_LAYOUTS = ['DETAILED', 'SUMMARY'] as const;
+export const INVOICE_LINE_LAYOUTS = ['DETAILED', 'SUMMARY', 'SHEET'] as const;
 export type InvoiceLineLayout = (typeof INVOICE_LINE_LAYOUTS)[number];
 
 export interface SummaryLine {
@@ -295,7 +297,7 @@ export interface SummaryLine {
  * two words). Lines arrive in the order's colour order, so a style's colours
  * sit together.
  */
-function stylesOf(texts: readonly string[]): Array<string | null> {
+export function stylesOf(texts: readonly string[]): Array<string | null> {
   const words = texts.map((t) => (t.includes(' — ') ? null : t.split(/\s+/).filter(Boolean)));
   const shared = (a: string[], b: string[]): number => {
     let n = 0;
@@ -313,11 +315,83 @@ function stylesOf(texts: readonly string[]): Array<string | null> {
   });
 }
 
+/** One style's goods lines on a document, from one order. */
+export interface StyleGroup<L> {
+  /** The style's name; the order's name when the order is a single style. */
+  name: string;
+  /** True when the order is one style, so `name` is the order's own name. */
+  wholeOrder: boolean;
+  orderIndex: number;
+  lines: L[];
+}
+
+/**
+ * The goods lines in style groups: one per style, or one per order when the
+ * order is a single style. A line belongs to the order whose "(PO x)" it ends
+ * with; on a one-order document, or for a line typed without a PO, it belongs
+ * to the first order.
+ */
+export function groupGoodsByStyle<L extends InvoiceLineInput>(
+  lines: ReadonlyArray<L>,
+  orders: ReadonlyArray<{ poNumber: string; orderName: string }>,
+): Array<StyleGroup<L>> {
+  const goods = lines.filter((l) => l.kind === InvoiceLineKind.ITEM);
+  if (orders.length === 0) return [];
+  const groups = orders.map(() => [] as L[]);
+  for (const l of goods) {
+    const i = orders.length === 1 ? 0 : orders.findIndex((o) => l.description.trim().endsWith(`(PO ${o.poNumber})`));
+    groups[i < 0 ? 0 : i]!.push(l);
+  }
+  return orders.flatMap((o, i): Array<StyleGroup<L>> => {
+    const g = groups[i]!;
+    if (g.length === 0) return [];
+    // The description without its "(PO x)" and the order name a build puts in front.
+    const texts = g.map((l) => styleText(l.description, o.orderName));
+    const styles = stylesOf(texts);
+    const byStyle = new Map<string, { name: string; lines: L[] }>();
+    g.forEach((l, j) => {
+      const name = styles[j] ?? texts[j]!;
+      const entry = byStyle.get(name.toLowerCase()) ?? { name, lines: [] };
+      entry.lines.push(l);
+      byStyle.set(name.toLowerCase(), entry);
+    });
+    // A single style, or no style in the names at all (plain colours): the order is one group.
+    if (byStyle.size <= 1 || styles.every((st) => st == null)) {
+      return [{ name: o.orderName, wholeOrder: true, orderIndex: i, lines: g }];
+    }
+    return [...byStyle.values()].map((st) => ({ name: st.name, wholeOrder: false, orderIndex: i, lines: st.lines }));
+  });
+}
+
+/** A goods line's description without its "(PO x)" and the order name a build puts in front. */
+export function styleText(description: string, orderName: string): string {
+  const t = description.trim().replace(/\s*\(PO [^()]*\)$/, '');
+  const lead = `${orderName.trim()} — `;
+  return t.toLowerCase().startsWith(lead.toLowerCase()) && t.length > lead.length ? t.slice(lead.length) : t;
+}
+
+/** Pieces, rate and amount of a set of goods lines, in the exact cents the subtotal adds up. */
+export function sumGoods(g: ReadonlyArray<InvoiceLineInput>): Omit<SummaryLine, 'description'> {
+  const qty = g.reduce((a, l) => a + (l.quantity ?? 0), 0);
+  // Each line's own total, the same exact cents the subtotal adds up, so a
+  // summary row can never be a cent off the total printed under it.
+  const totals = g.map((l) => lineTotal(l));
+  const allPriced = totals.every((t) => t != null);
+  const cents = allPriced ? totals.reduce((a, t) => a + toCents(t!), 0) : 0;
+  const rates = new Set(g.map((l) => l.unitPrice));
+  return {
+    quantity: qty,
+    // Until every line has a rate, rate and amount stay blank: a partial
+    // figure next to the full quantity would not multiply out.
+    unitPrice: !allPriced ? null : rates.size === 1 ? [...rates][0]! : qty > 0 ? fromCents(cents) / qty : null,
+    mixedRates: allPriced && rates.size > 1,
+    lineTotal: allPriced ? fromCents(cents) : null,
+  };
+}
+
 /**
  * The goods lines reduced for a summary document: one line per style, or one
- * per order when the order is a single style. A line belongs to the order
- * whose "(PO x)" it ends with; on a one-order document, or for a line typed
- * without a PO, it belongs to the first order. A row with any line not yet
+ * per order when the order is a single style. A row with any line not yet
  * priced keeps its quantity and leaves rate and amount blank, as a detailed
  * line would.
  */
@@ -325,53 +399,12 @@ export function summariseGoods(
   lines: ReadonlyArray<InvoiceLineInput & { lineTotal?: number | null }>,
   orders: ReadonlyArray<{ poNumber: string; orderName: string; styleNumber?: string | null }>,
 ): SummaryLine[] {
-  const goods = lines.filter((l) => l.kind === InvoiceLineKind.ITEM);
-  if (orders.length === 0) return [];
-  const groups = orders.map(() => [] as typeof goods);
-  for (const l of goods) {
-    const i = orders.length === 1 ? 0 : orders.findIndex((o) => l.description.trim().endsWith(`(PO ${o.poNumber})`));
-    groups[i < 0 ? 0 : i]!.push(l);
-  }
-  const row = (description: string, g: typeof goods): SummaryLine => {
-    const qty = g.reduce((a, l) => a + (l.quantity ?? 0), 0);
-    // Each line's own total, the same exact cents the subtotal adds up, so the
-    // summary row can never be a cent off the total printed under it.
-    const totals = g.map((l) => lineTotal(l));
-    const allPriced = totals.every((t) => t != null);
-    const cents = allPriced ? totals.reduce((a, t) => a + toCents(t!), 0) : 0;
-    const rates = new Set(g.map((l) => l.unitPrice));
-    return {
-      description,
-      quantity: qty,
-      // Until every line has a rate, rate and amount stay blank: a partial
-      // figure next to the full quantity would not multiply out.
-      unitPrice: !allPriced ? null : rates.size === 1 ? [...rates][0]! : qty > 0 ? fromCents(cents) / qty : null,
-      mixedRates: allPriced && rates.size > 1,
-      lineTotal: allPriced ? fromCents(cents) : null,
-    };
-  };
-  return orders.flatMap((o, i) => {
-    const g = groups[i]!;
-    if (g.length === 0) return [];
+  return groupGoodsByStyle(lines, orders).map((g) => {
+    const o = orders[g.orderIndex]!;
     const po = orders.length > 1 ? `PO ${o.poNumber}` : null;
-    // The description without its "(PO x)" and the order name a build puts in front.
-    const texts = g.map((l) => {
-      const t = l.description.trim().replace(/\s*\(PO [^()]*\)$/, '');
-      const lead = `${o.orderName.trim()} — `;
-      return t.toLowerCase().startsWith(lead.toLowerCase()) && t.length > lead.length ? t.slice(lead.length) : t;
-    });
-    const styles = stylesOf(texts);
-    const byStyle = new Map<string, { name: string; lines: typeof goods }>();
-    g.forEach((l, j) => {
-      const name = styles[j] ?? texts[j]!;
-      const entry = byStyle.get(name.toLowerCase()) ?? { name, lines: [] };
-      entry.lines.push(l);
-      byStyle.set(name.toLowerCase(), entry);
-    });
-    // A single style, or no style in the names at all (plain colours): the order is one line.
-    if (byStyle.size <= 1 || styles.every((s) => s == null)) {
-      return [row([o.orderName, o.styleNumber ? `Style ${o.styleNumber}` : null, po].filter(Boolean).join(' · '), g)];
-    }
-    return [...byStyle.values()].map((s) => row([s.name, po].filter(Boolean).join(' · '), s.lines));
+    const description = g.wholeOrder
+      ? [o.orderName, o.styleNumber ? `Style ${o.styleNumber}` : null, po].filter(Boolean).join(' · ')
+      : [g.name, po].filter(Boolean).join(' · ');
+    return { description, ...sumGoods(g.lines) };
   });
 }

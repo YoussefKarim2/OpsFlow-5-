@@ -21,13 +21,16 @@
 
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { INVOICE_LINE_LAYOUTS, InvoiceKind, InvoiceLineKind, InvoiceStatus, computeInvoiceTotals, resolveShippedQty, type InvoiceCandidateDto } from '@opsflow/shared';
+import { INVOICE_LINE_LAYOUTS, InvoiceKind, InvoiceLineKind, InvoiceStatus, SHEET_DEFAULTS, computeInvoiceTotals, resolveShippedQty, type InvoiceCandidateDto, type ProformaSheetSettings } from '@opsflow/shared';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
 import { authenticate, currentUser, requirePermission } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
 import { dateInput } from '../util/date-input.js';
 import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from '../errors.js';
 import { logActivity } from '../services/activity-service.js';
+import { proformaSheetWorkbook } from '../services/proforma-sheet-xlsx.js';
+import { contentDisposition } from '../util/upload-name.js';
 import {
   INVOICE_INCLUDE, PROFILE_ID, assertDraft, assertIssuable, assertStillDraft, buildCombinedDocument, defaultCoverNote,
   carriedRates, getCompanyProfile, invoiceToDto, invoiceToListRow, isStale, lineToDto, loadInvoice, loadOrderForBuild, partsOf, pickDefaults, qtyPerOrder,
@@ -256,6 +259,34 @@ async function buildFor(kind: InvoiceKind, choices: SourceChoice[]) {
   return { parts, doc };
 }
 
+/**
+ * A new proforma's sheet fields: the customer's last proforma sheet without
+ * its dates and title, or the factory's defaults with the letterhead as exporter.
+ */
+async function seedSheet(clientId: string, seller: { name?: string; address?: string | null }): Promise<ProformaSheetSettings> {
+  const last = await prisma.invoice.findFirst({
+    where: { kind: InvoiceKind.PROFORMA, sheet: { not: Prisma.DbNull }, order: { clientId } },
+    orderBy: { createdAt: 'desc' }, select: { sheet: true },
+  });
+  if (last?.sheet) {
+    const { title: _t, onBoardDate: _o, etd: _e, rows, ...kept } = last.sheet as ProformaSheetSettings;
+    // A style's part number, HTS code, pieces per carton and unit are the
+    // style's; its PO, cartons, weights and wording belong to that one order.
+    const carried: NonNullable<ProformaSheetSettings['rows']> = {};
+    for (const [key, r] of Object.entries(rows ?? {})) {
+      const row = { partNo: r.partNo ?? null, hts: r.hts ?? null, perCarton: r.perCarton ?? null, unit: r.unit ?? null };
+      if (Object.values(row).some((v) => v != null)) carried[key] = row;
+    }
+    return { ...kept, rows: carried };
+  }
+  return {
+    statement: SHEET_DEFAULTS.statement, shipmentFrom: SHEET_DEFAULTS.shipmentFrom,
+    container: SHEET_DEFAULTS.container, cartonsPerContainer: SHEET_DEFAULTS.cartonsPerContainer, leadDays: SHEET_DEFAULTS.leadDays,
+    consolidatingVendor: seller.name ?? null, exporterName: seller.name ?? null, exporterAddress: seller.address ?? null,
+    rows: {},
+  };
+}
+
 /** The join rows for a built document, the first order first. */
 const orderRows = (
   parts: Awaited<ReturnType<typeof buildFor>>['parts'],
@@ -285,6 +316,9 @@ invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async 
   // numbers belongs to the year the office is working in.
   const year = new Date().getUTCFullYear();
   const qty = computeInvoiceTotals(doc.lines).totalQty;
+  // A proforma is laid out as the factory's own sheet, its typed fields
+  // carried from the customer's last one.
+  const sheet = body.kind === InvoiceKind.PROFORMA ? await seedSheet(first.loaded.clientId, doc.seller as { name?: string; address?: string | null }) : null;
 
   const created = await withAllocatedNumber(body.kind, year, async (tx, number, sequence) =>
     tx.invoice.create({
@@ -300,6 +334,7 @@ invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async 
           orders: parts.map((p, i) => ({ poNumber: p.loaded.poNumber, orderName: p.loaded.orderName, qty: doc.qtyByOrder[i] ?? 0 })),
         }),
         terms: doc.terms, bankDetails: doc.bankDetails, notes: doc.notes,
+        ...(sheet ? { lineLayout: 'SHEET', sheet: sheet as object } : {}),
         seller: doc.seller as object, orderRef: doc.orderRef as object,
         manifest: doc.manifest as object[], reconciliation: doc.reconciliation as object[],
         warnings: doc.warnings,
@@ -323,6 +358,23 @@ invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async 
   });
 
   res.status(201).json({ data: invoiceToDto(created) });
+}));
+
+// ── The proforma sheet as Excel ──────────────────────────────────────────────
+
+/**
+ * The document as the factory's Excel proforma: the `invoice` sheet and one
+ * sheet per style, with the same formulas. Built from the stored document,
+ * so it says what the screen says.
+ */
+invoicesRouter.get('/:id/export.xlsx', requirePermission('invoice:read'), asyncHandler(async (req, res) => {
+  const loaded = await loadInvoice(req.params.id);
+  const inv = invoiceToDto(loaded);
+  const orders = await Promise.all(inv.orders.map(async (o) => toBuildOrder(await loadOrderForBuild(o.id))));
+  const buffer = await proformaSheetWorkbook(inv, orders);
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', contentDisposition('attachment', `${inv.number} ${inv.kind === InvoiceKind.PROFORMA ? 'Proforma' : 'Invoice'}.xlsx`));
+  res.send(buffer);
 }));
 
 // ── Read one ─────────────────────────────────────────────────────────────────
@@ -360,6 +412,20 @@ const cartonSchema = z.object({
   grossKg: z.number().min(0).max(1e6).nullable().optional(),
 });
 
+const sheetNum = (max: number) => z.number().min(0).max(max).nullable().optional();
+const sheetDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'A date is written YYYY-MM-DD.').nullable().optional();
+/** The factory proforma sheet's typed fields. */
+const sheetSchema = z.object({
+  title: text(300), statement: text(300), shipmentFrom: text(120), container: text(40),
+  cartonsPerContainer: sheetNum(100_000), onBoardDate: sheetDay, etd: sheetDay, leadDays: sheetNum(365),
+  portFrom: text(120), portTo: text(120), consolidatingVendor: text(200), cartonSize: text(60),
+  exporterName: text(200), exporterAddress: text(400), qizRef: text(60), destination: text(120), signatory: text(120),
+  rows: z.record(z.string().max(300), z.object({
+    description: text(200), po: text(60), partNo: text(60), hts: text(30),
+    gw: sheetNum(1e7), nw: sheetNum(1e7), perCarton: sheetNum(100_000), cartons: sheetNum(1e6), unit: text(20),
+  })).refine((r) => Object.keys(r).length <= 600, 'Too many rows on one sheet.').optional(),
+});
+
 const editSchema = z.object({
   date: dateInput.optional(),
   dueDate: dateInput.nullable().optional(),
@@ -377,6 +443,7 @@ const editSchema = z.object({
   bankDetails: text(2000),
   notes: text(12000),
   lineLayout: z.enum(INVOICE_LINE_LAYOUTS).optional(),
+  sheet: sheetSchema.nullable().optional(),
   cartons: z.array(cartonSchema).max(500).optional(),
   /** The version the editor opened, so a save never lands on a newer one. */
   updatedAt: z.string().optional(),
@@ -432,6 +499,7 @@ invoicesRouter.put('/:id', requirePermission('invoice:write'), asyncHandler(asyn
         bankDetails: scalar(body.bankDetails, existing.bankDetails),
         notes: scalar(body.notes, existing.notes),
         lineLayout: scalar(body.lineLayout, existing.lineLayout),
+        ...(body.sheet !== undefined ? { sheet: body.sheet === null ? Prisma.DbNull : (body.sheet as object) } : {}),
         ...(cartons ? { manifest: cartons as object[] } : {}),
       },
     });

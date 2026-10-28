@@ -26,7 +26,7 @@ import {
   amountInWords, computeInvoiceTotals, formatInvoiceNumber, issueBlockers, lineTotal,
   reconcileShippedAgainstOrdered, summariseSizes,
   type CompanyProfileDto, type InvoiceCartonDto, type InvoiceDto, type InvoiceLineDto,
-  type InvoiceListRowDto, type InvoiceOrderRefDto, type InvoiceReconciliationGroupDto,
+  type InvoiceListRowDto, type InvoiceOrderRefDto, type InvoiceReconciliationGroupDto, type ProformaSheetSettings,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { inWearingOrder } from './import/po-lines.js';
@@ -148,7 +148,7 @@ export interface BuiltDocument {
 }
 
 /** "Order name — Colour", or the colour's own product name when the order gives it one. */
-function productLabel(order: BuildOrder, colorId: string | null): string {
+export function productLabel(order: BuildOrder, colorId: string | null): string {
   const colour = colorId ? order.colors.find((c) => c.id === colorId) : undefined;
   if (!colour) return order.orderName;
   const base = colour.productName?.trim() || order.orderName;
@@ -758,7 +758,8 @@ export function invoiceToDto(inv: LoadedInvoice, stale = false): InvoiceDto {
     terms: inv.terms,
     bankDetails: inv.bankDetails,
     notes: inv.notes,
-    lineLayout: inv.lineLayout === 'SUMMARY' ? 'SUMMARY' : 'DETAILED',
+    lineLayout: inv.lineLayout === 'SUMMARY' || inv.lineLayout === 'SHEET' ? inv.lineLayout : 'DETAILED',
+    sheet: (inv.sheet as ProformaSheetSettings | null) ?? null,
     seller: inv.seller as unknown as CompanyProfileDto,
     lines,
     manifest: inv.manifest as unknown as InvoiceCartonDto[],

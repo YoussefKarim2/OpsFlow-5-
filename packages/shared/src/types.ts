@@ -23,6 +23,7 @@ import type { CostingOverviewRow, CostingOverviewSummary } from './calc/costing-
 import type { MaterialPosition, ConsumptionVariance } from './calc/inventory.js';
 import type { Blocker } from './calc/workflow-gates.js';
 import type { QuantityMatrix, FunnelStep, ColorProgress, CutVariance, StockDeduction } from './calc/quantities.js';
+import type { ProformaSheetSettings } from './calc/proforma-sheet.js';
 
 export interface UserDto {
   id: string;
@@ -748,8 +749,14 @@ export interface InvoiceDto {
   terms: string | null;
   bankDetails: string | null;
   notes: string | null;
-  /** DETAILED: every colour and size. SUMMARY: one line per style (or per order) — total pieces, rate, amount. */
-  lineLayout: 'DETAILED' | 'SUMMARY';
+  /**
+   * DETAILED: every colour and size. SUMMARY: one line per style (or per
+   * order) — total pieces, rate, amount. SHEET: the factory's proforma sheet,
+   * one row per style with PO, part number, HTS code, cartons and container share.
+   */
+  lineLayout: 'DETAILED' | 'SUMMARY' | 'SHEET';
+  /** The proforma sheet's typed fields; null until the sheet is first saved. */
+  sheet: ProformaSheetSettings | null;
 
   seller: CompanyProfileDto;
   lines: InvoiceLineDto[];

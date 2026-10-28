@@ -16,6 +16,7 @@
  * that is the document the office already knows how to read.
  */
 
+import { ProformaSheetDocument } from './ProformaSheetDocument';
 import { amountInWords, computeInvoiceTotals, fmtDate, fmtMoney, InvoiceKind, InvoiceLineKind, InvoiceStatus, summariseGoods, type InvoiceDto } from '@opsflow/shared';
 import { clsx } from './ui';
 
@@ -41,6 +42,12 @@ const joined = (values: Array<string | null>): string =>
   [...new Set(values.map((v) => v?.trim()).filter((v): v is string => !!v))].join(', ');
 
 export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
+  // The factory's own proforma layout is a document of its own.
+  if (doc.lineLayout === 'SHEET') return <ProformaSheetDocument doc={doc} />;
+  return <StandardDocument doc={doc} />;
+}
+
+function StandardDocument({ doc }: { doc: InvoiceDto }) {
   const totals = computeInvoiceTotals(doc.lines);
   const goods = doc.lines.filter((l) => l.kind === InvoiceLineKind.ITEM);
   const extras = doc.lines.filter((l) => l.kind === InvoiceLineKind.EXTRA);

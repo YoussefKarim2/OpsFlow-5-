@@ -943,6 +943,7 @@ declare module '@prisma/client' {
     bankDetails: string | null;
     notes: string | null;
     lineLayout: string;
+    sheet: Prisma.JsonValue | null;
     orderRef: Prisma.JsonValue | null;
     seller: Prisma.JsonValue;
     manifest: Prisma.JsonValue;
