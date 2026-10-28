@@ -271,13 +271,93 @@ function MapStep({
               ['Total length (sheet)', x.totals?.totalLengthM == null ? null : `${x.totals.totalLengthM.toLocaleString()} m`],
               ['Cut by', x.signatures.cutBy], ['Numbering by', x.signatures.numberingBy], ['Inspected by', x.signatures.inspectedBy],
               ['Bundled by', x.signatures.bundledBy], ['Approved', x.signatures.approvedBy],
+              ['Fabric date to external', x.header.fabricDateToExternal],
             ] as Array<[string, string | null]>).map(([k, v]) => (
               <div key={k} className="flex gap-2"><dt className="w-36 shrink-0 text-ink-500">{k}</dt><dd className="font-medium text-ink-800">{v || '—'}</dd></div>
             ))}
             {x.header.spreadNotes && (
               <div className="flex gap-2 sm:col-span-2 lg:col-span-3"><dt className="w-36 shrink-0 text-ink-500">Spread notes</dt><dd className="whitespace-pre-line text-ink-800" dir="auto">{x.header.spreadNotes}</dd></div>
             )}
+            {x.header.cutNotes && (
+              <div className="flex gap-2 sm:col-span-2 lg:col-span-3"><dt className="w-36 shrink-0 text-ink-500">Cut notes</dt><dd className="whitespace-pre-line text-ink-800" dir="auto">{x.header.cutNotes}</dd></div>
+            )}
           </dl>
+        </Card>
+      )}
+      {x && (x.colourTables ?? []).some((t) => t.kind === 'PIECES') && (
+        <Card>
+          <CardHeader
+            title="Cut by colour"
+            subtitle="From the sheet's colour tables: pieces per size, the layers that cut them and the meters they take. Each colour and size becomes one lay."
+          />
+          <div className="overflow-x-auto">
+            {(x.colourTables ?? []).filter((t) => t.kind === 'PIECES' && t.block === 1).map((t) => {
+              const layers = (x.colourTables ?? []).find((o) => o.block === t.block && o.kind === 'LAYERS');
+              const meters = (x.colourTables ?? []).find((o) => o.block === t.block && o.kind === 'METERS');
+              const sizes = t.sizes.filter((s) => t.rows.some((r) => (r.bySize[s] ?? 0) > 0));
+              const sum = (by: Record<string, number> | undefined) => Object.values(by ?? {}).reduce((a, b) => a + Math.max(0, b), 0);
+              return (
+                <table key={t.block} className="w-full">
+                  <thead className="border-b border-ink-200 bg-ink-50">
+                    <tr>
+                      <th className="th">Colour</th>
+                      {sizes.map((s) => <th key={s} className="th text-center">{s}</th>)}
+                      <th className="th text-right">Pieces</th>
+                      <th className="th text-right">Layers</th>
+                      <th className="th text-right">Meters</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-ink-100">
+                    {t.params && (
+                      <tr className="text-2xs text-ink-500">
+                        <td className="td">Pieces per layer · marker length</td>
+                        {sizes.map((s) => (
+                          <td key={s} className="td text-center tnum">{t.params!.rate[s] ?? '·'} · {t.params!.markerLengthM[s] != null ? `${t.params!.markerLengthM[s]} m` : '·'}</td>
+                        ))}
+                        <td colSpan={3} />
+                      </tr>
+                    )}
+                    {t.rows.map((r) => {
+                      const l = layers?.rows.find((o) => o.colour === r.colour);
+                      const m = meters?.rows.find((o) => o.colour === r.colour);
+                      return (
+                        <tr key={r.colour}>
+                          <td className="td text-xs font-medium">{r.colour}</td>
+                          {sizes.map((s) => (
+                            <td key={s} className="td text-center"><span className={clsx('tnum text-sm', !r.bySize[s] && 'text-ink-300')}>{r.bySize[s] || '·'}</span></td>
+                          ))}
+                          <td className="td text-right tnum font-semibold">{(r.total ?? sum(r.bySize)).toLocaleString()}</td>
+                          <td className="td text-right tnum">{l ? (l.total ?? sum(l.bySize)).toLocaleString() : '—'}</td>
+                          <td className="td text-right tnum">{m ? `${(m.total ?? sum(m.bySize)).toLocaleString()} m` : '—'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              );
+            })}
+          </div>
+        </Card>
+      )}
+      {x && x.fabricSummary.length > 0 && (
+        <Card>
+          <CardHeader title="Fabric by colour" subtitle="From the sheet's fabric tables. Written to the order's fabric position." />
+          <table className="w-full">
+            <thead className="border-b border-ink-200 bg-ink-50">
+              <tr><th className="th">Fabric</th><th className="th">Colour</th><th className="th text-right">Required</th><th className="th text-right">Issued</th><th className="th">Issued to</th></tr>
+            </thead>
+            <tbody className="divide-y divide-ink-100">
+              {x.fabricSummary.map((f, i) => (
+                <tr key={i}>
+                  <td className="td text-xs font-medium">{f.fabric}</td>
+                  <td className="td text-xs">{f.color ?? '—'}</td>
+                  <td className="td text-right tnum">{f.meters == null ? '—' : `${f.meters.toLocaleString()} m`}</td>
+                  <td className="td text-right tnum">{f.issuedM == null ? '—' : `${f.issuedM.toLocaleString()} m`}</td>
+                  <td className="td text-xs">{f.issuedTo ?? '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </Card>
       )}
       <Card>

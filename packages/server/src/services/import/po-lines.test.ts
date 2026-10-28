@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import {
   detectDayFirst, splitColourSize, findPricedNumbers, findBoilerplate, boilerplateKey,
   splitAtLabels, readPoHeader, readPoLines, poLinesToOrder, orderSizes,
-  inWearingOrder, sizeRank,
+  inWearingOrder, sizeRank, sizeAliasFor,
 } from './po-lines.js';
 import { extractFromPdf } from './pdf-extractor.js';
 
@@ -184,6 +184,24 @@ describe('a two-page ERP purchase order, end to end', () => {
   test('a read total that differs from the printed one is reported', async () => {
     const r = await read('426.04');
     assert.ok(r.issues.some((i) => /document's total is \$426\.04/.test(i.message)));
+  });
+});
+
+describe('a document\'s size labels against the order\'s', () => {
+  const order = ['Youth XS', 'Youth Small', 'Youth Medium', 'Youth Large', 'Adult', 'Adult Small', 'Adult Medium', 'Adult Large', 'Adult XL', 'One Size'];
+  test('the laying sheet\'s youth codes and bare adult letters find the order\'s names', () => {
+    assert.deepEqual(sizeAliasFor(['YXS', 'YS', 'YM', 'YL', 'M', 'L'], order), {
+      YXS: 'Youth XS', YS: 'Youth Small', YM: 'Youth Medium', YL: 'Youth Large', M: 'Adult Medium', L: 'Adult Large',
+    });
+  });
+  test('a name the order already uses, or one nothing matches, is left alone', () => {
+    assert.deepEqual(sizeAliasFor(['Youth XS', 'XXL', '2X-SMALL'], order), {});
+    // Two candidates for a bare word: no guess — unless the document writes
+    // youth sizes as YM, in which case a bare M is the grown one.
+    assert.deepEqual(sizeAliasFor(['M'], ['Youth Medium', 'Adult Medium']), {});
+    assert.deepEqual(sizeAliasFor(['YM', 'M'], ['Youth Medium', 'Adult Medium']), { YM: 'Youth Medium', M: 'Adult Medium' });
+    assert.deepEqual(sizeAliasFor(['YM', 'M'], ['Youth Medium', 'Adult Medium', 'Men Medium']), { YM: 'Youth Medium' });
+    assert.deepEqual(sizeAliasFor(['youth xs'], order), { 'youth xs': 'Youth XS' });
   });
 });
 

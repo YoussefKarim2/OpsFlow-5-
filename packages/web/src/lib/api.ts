@@ -558,6 +558,7 @@ export interface LayingExtrasDto {
     poNumber: string | null; orderName: string | null; itemType: string | null; gender: string | null;
     client: string | null; season: string | null; fabrics: string[]; fabricDescription: string | null;
     cutPercentage: number | null; spreadNotes: string | null;
+    cutNotes: string | null; fabricDateToExternal: string | null;
   };
   requirement: { bySize: Record<string, number>; total: number | null } | null;
   totals: {
@@ -566,8 +567,19 @@ export interface LayingExtrasDto {
   } | null;
   variance: { bySize: Record<string, number>; total: number | null } | null;
   signatures: { cutBy: string | null; numberingBy: string | null; inspectedBy: string | null; bundledBy: string | null; approvedBy: string | null };
-  fabricSummary: Array<{ fabric: string; color: string | null; meters: number | null }>;
+  fabricSummary: Array<{ fabric: string; color: string | null; meters: number | null; issuedM?: number | null; issuedTo?: string | null }>;
   panelTables: Array<{ title: string | null; sizes: string[]; colours: Array<{ colour: string; parts: Array<{ part: string; bySize: Record<string, number>; total: number }> }> }>;
+  /** The body fabric's per-colour tables: pieces, layers and meters by size. */
+  colourTables: Array<{
+    block: number; kind: 'PIECES' | 'LAYERS' | 'METERS' | 'OTHER'; title: string | null; sizes: string[];
+    rows: Array<{ fabric: string | null; colour: string; panel: string | null; bySize: Record<string, number>; total: number | null }>;
+    totals: { bySize: Record<string, number>; total: number | null } | null;
+    params: { eff: Record<string, number>; markerLengthM: Record<string, number>; rate: Record<string, number> } | null;
+  }>;
+  fabricLines: Array<{
+    department: string | null; item: string; description: string | null; colour: string | null; qty: number | null;
+    unit: string | null; issued: number | null; shortage: number | null; issuedTo: string | null;
+  }>;
 }
 
 /** What the Laying & Marking importer worked out about a file, scoped to one order. */

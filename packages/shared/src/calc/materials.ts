@@ -357,9 +357,23 @@ function garmentOutput(
 export function computeMarkerPlan(
   lays: readonly LayInput[],
   requiredBySize: Record<string, number>,
-  options: { mainFabric?: string | null } = {},
+  options: {
+    mainFabric?: string | null;
+    /**
+     * The lay sheet's size names as the order spells them — "YXS" → "Youth
+     * XS". A lay keeps its ratio as written; its pieces are counted under
+     * the order's name, so the plan and the cut order can be compared.
+     */
+    sizeAlias?: Record<string, string>;
+  } = {},
 ): MarkerPlanSummary {
-  const results = lays.map(computeLay);
+  const alias = options.sizeAlias ?? {};
+  const renamed = (by: Record<string, number>): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const [size, n] of Object.entries(by)) { const k = alias[size] ?? size; out[k] = (out[k] ?? 0) + n; }
+    return out;
+  };
+  const results = lays.map(computeLay).map((l) => ({ ...l, perLayer: renamed(l.perLayer), output: renamed(l.output) }));
 
   const { mainFabric, garmentLayIds, plannedBySize } = garmentOutput(results, options.mainFabric);
 

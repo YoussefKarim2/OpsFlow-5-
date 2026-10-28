@@ -18,7 +18,7 @@ import {
   resolveShippedQty, furthestShipmentStatus, recordedCutQty,
   computeProductionAnalytics, computeBomSummary, computeCosting, computeQualityPassPct,
   computeMaterialPosition, computeStockPosition, computeConsumptionVariance,
-  computeMarkerPlan, evaluateAllGates, sanitiseOverrides, deriveCostLines, visibleDerivedLines,
+  computeMarkerPlan, parseSizeRatio, evaluateAllGates, sanitiseOverrides, deriveCostLines, visibleDerivedLines,
   ledgerTotals, buildMatrix, daysBetween, sum, qtyAdd, qtySub,
   type QtyCell, type AxisRef, type TaskLike, type OrderDetailDto, type OrderSummaryDto,
   type TaskDto, type BomItemInput, type CostLineInput, type ProductionEntry, type Alert,
@@ -26,7 +26,7 @@ import {
   type Blocker, type GateContext,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
-import { inWearingOrder } from './import/po-lines.js';
+import { inWearingOrder, sizeAliasFor } from './import/po-lines.js';
 import { NotFoundError } from '../errors.js';
 
 /** Everything needed to compute an order's derived state, in one query. */
@@ -450,7 +450,14 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
             cells.filter((c) => c.sizeId === s.id && c.ledger === QtyLedger.CUT).reduce((a, c) => a + c.qty, 0),
           ]),
         ),
-        { mainFabric: order.fabric },
+        {
+          mainFabric: order.fabric,
+          // The laying sheet's "YXS" is the order's "Youth XS".
+          sizeAlias: sizeAliasFor(
+            order.markers.flatMap((m) => Object.keys(parseSizeRatio(m.sizeRatio))),
+            order.sizes.map((s) => s.size.name),
+          ),
+        },
       )
     : null;
 

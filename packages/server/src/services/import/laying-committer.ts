@@ -276,10 +276,24 @@ export async function commitLayingImport(
     if (input.extras) {
       const x = input.extras;
       const s = x.signatures;
-      if (Object.values(s).some(Boolean) || x.header.spreadNotes) {
+      // The sheet's notes and its fabric date, kept on the cutting record;
+      // the date also fills the order's "fabric to external" date when
+      // nobody has entered one.
+      const notes = [
+        x.header.spreadNotes,
+        x.header.cutNotes ? `Cut notes: ${x.header.cutNotes}` : null,
+        x.header.fabricDateToExternal ? `Fabric date to external: ${x.header.fabricDateToExternal}` : null,
+      ].filter((n): n is string => !!n).join('\n') || null;
+      if (x.header.fabricDateToExternal) {
+        await tx.order.updateMany({
+          where: { id: order.id, fabricDeliveryToSupplier: null },
+          data: { fabricDeliveryToSupplier: new Date(`${x.header.fabricDateToExternal}T00:00:00.000Z`) },
+        });
+      }
+      if (Object.values(s).some(Boolean) || notes) {
         const data = {
           cutByName: s.cutBy, numberingByName: s.numberingBy, inspectedByName: s.inspectedBy,
-          bundledByName: s.bundledBy, approvedByName: s.approvedBy, notes: x.header.spreadNotes, importJobId: input.jobId,
+          bundledByName: s.bundledBy, approvedByName: s.approvedBy, notes, importJobId: input.jobId,
         };
         const prior = await tx.cuttingRecord.findFirst({
           where: { orderId: order.id, importJobId: { not: null }, actualCutQty: null }, orderBy: { createdAt: 'desc' },
@@ -296,7 +310,13 @@ export async function commitLayingImport(
             ...(f.color ? { colorName: { equals: f.color, mode: 'insensitive' } } : {}),
           },
         });
-        const data = { fabricName: f.fabric, colorName: f.color, requiredM: f.meters, importJobId: input.jobId };
+        // What the sheet's fabric table says was issued, when it says so;
+        // a blank leaves whatever the warehouse recorded.
+        const data = {
+          fabricName: f.fabric, colorName: f.color, requiredM: f.meters, importJobId: input.jobId,
+          ...(f.issuedM != null ? { issuedM: f.issuedM } : {}),
+          ...(f.issuedTo ? { responsibleName: f.issuedTo } : {}),
+        };
         if (prior) await tx.fabricRecord.update({ where: { id: prior.id }, data });
         else { await tx.fabricRecord.create({ data: { ...data, orderId: order.id } }); fabricRecordsCreated++; }
       }

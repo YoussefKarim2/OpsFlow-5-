@@ -48,6 +48,48 @@ export interface AgePanelTable {
   colours: Array<{ colour: string; parts: Array<{ part: string; bySize: Record<string, number>; total: number }> }>;
 }
 
+/**
+ * One of the body fabric's per-colour tables, to the right of the lay table.
+ *
+ * The sheet plans the body fabric colour by colour and size by size rather
+ * than as ratio lays: a PIECES table (how many of each size per colour, with
+ * EFF / LENGHT / RATE per size above it — marker efficiency, marker length
+ * and pieces per layer), a LAYER table (layers per colour and size, pieces ÷
+ * rate rounded up) and a METER table (layers × marker length). Each colour
+ * and size is therefore one lay. A second copy of the three sits further
+ * right, used as a working copy; its rows are read too and told apart by
+ * `block`.
+ */
+export interface AgeColourTable {
+  /** Which copy: 1 for the leftmost set, 2 for the next. */
+  block: number;
+  kind: 'PIECES' | 'LAYERS' | 'METERS' | 'OTHER';
+  title: string | null;
+  sizes: string[];
+  rows: Array<{ fabric: string | null; colour: string; panel: string | null; bySize: Record<string, number>; total: number | null }>;
+  totals: { bySize: Record<string, number>; total: number | null } | null;
+  /** The per-size parameters above a PIECES table. */
+  params: { eff: Record<string, number>; markerLengthM: Record<string, number>; rate: Record<string, number> } | null;
+}
+
+/**
+ * A row of a fabric table in the bill-of-materials layout — "Item Sort /
+ * Dep. | Item | Description | Color | Qty | Unit | Material issued |
+ * Shortage | Issued to" — which this sheet uses for the fabric each colour
+ * needs, instead of the FABRIC / COLOR / METER summary.
+ */
+export interface AgeFabricLine {
+  department: string | null;
+  item: string;
+  description: string | null;
+  colour: string | null;
+  qty: number | null;
+  unit: string | null;
+  issued: number | null;
+  shortage: number | null;
+  issuedTo: string | null;
+}
+
 export interface AgeLayingSheet {
   sheetName: string;
   headerRow: number;
@@ -55,6 +97,10 @@ export interface AgeLayingSheet {
     poNumber: string | null; orderName: string | null; itemType: string | null; gender: string | null;
     client: string | null; season: string | null; fabrics: string[]; fabricDescription: string | null;
     cutPercentage: number | null; spreadNotes: string | null;
+    /** "Cut Notes :" — the cutting room's own note. */
+    cutNotes: string | null;
+    /** "Fabric Date to External :" — ISO date, when the sheet has one. */
+    fabricDateToExternal: string | null;
   };
   sizes: string[];
   requirement: { bySize: Record<string, number>; total: number | null } | null;
@@ -65,8 +111,15 @@ export interface AgeLayingSheet {
   } | null;
   variance: { bySize: Record<string, number>; total: number | null } | null;
   signatures: { cutBy: string | null; numberingBy: string | null; inspectedBy: string | null; bundledBy: string | null; approvedBy: string | null };
-  fabricSummary: Array<{ fabric: string; color: string | null; meters: number | null }>;
+  /**
+   * Fabric needed per fabric and colour: the FABRIC / COLOR / METER summary,
+   * or, when the sheet has none, its fabric tables in the BOM layout — which
+   * also say what was issued and to whom.
+   */
+  fabricSummary: Array<{ fabric: string; color: string | null; meters: number | null; issuedM?: number | null; issuedTo?: string | null }>;
   panelTables: AgePanelTable[];
+  colourTables: AgeColourTable[];
+  fabricLines: AgeFabricLine[];
 }
 
 // ── Cells ───────────────────────────────────────────────────────────────────
@@ -184,6 +237,8 @@ const TITLE_LABELS: Array<[string, RegExp]> = [
   ['fabricDescription', /^fabric description$/],
   ['cutPercentage', /^cut percentage$|^cut %$/],
   ['spreadNotes', /^spread notes?$/],
+  ['cutNotes', /^cut notes?$/],
+  ['fabricDateToExternal', /^fabric date to external$/],
 ];
 
 /** The value beside a label: the first cell to the right that says something other than the label. */
@@ -201,7 +256,9 @@ function readTitleBlock(ws: ExcelJS.Worksheet, headerRow: number): AgeLayingShee
   const maxCol = Math.min(ws.columnCount || 80, 80);
   const found: Record<string, string> = {};
   let season: string | null = null;
-  const isLabel = (t: string) => TITLE_LABELS.some(([, re]) => re.test(key(t)));
+  // "Fabric 4", "Fabric 5" are labels of further slots, not the fabric in
+  // the blank slot before them.
+  const isLabel = (t: string) => TITLE_LABELS.some(([, re]) => re.test(key(t))) || /^fabric ?\d+$/.test(key(t));
   for (let r = 1; r < headerRow; r++) {
     const row = ws.getRow(r);
     const texts = new Set<string>();
@@ -224,12 +281,16 @@ function readTitleBlock(ws: ExcelJS.Worksheet, headerRow: number): AgeLayingShee
   }
   const fabrics = [found.fabric1, found.fabric2, found.fabric3].filter((f): f is string => !!f && f !== '0');
   const pct = found.cutPercentage ? Number(found.cutPercentage.replace('%', '')) : null;
+  const dateText = found.fabricDateToExternal ?? null;
+  const date = dateText && /^\d{4}-\d{2}-\d{2}$/.test(dateText) ? dateText : null;
   return {
     poNumber: found.poNumber ?? null, orderName: found.orderName ?? null, itemType: found.itemType ?? null,
     gender: found.gender ?? null, client: found.client ?? null, season, fabrics,
     fabricDescription: found.fabricDescription && found.fabricDescription !== '0' ? found.fabricDescription : null,
     cutPercentage: pct != null && Number.isFinite(pct) ? (pct > 1 ? pct / 100 : pct) : null,
     spreadNotes: found.spreadNotes && found.spreadNotes !== '0' ? found.spreadNotes : null,
+    cutNotes: found.cutNotes && found.cutNotes !== '0' ? found.cutNotes : null,
+    fabricDateToExternal: date,
   };
 }
 
@@ -354,6 +415,141 @@ function readPanelTables(ws: ExcelJS.Worksheet, headerRow: number, mainSizes: re
   return tables;
 }
 
+// ── The body fabric's colour tables ─────────────────────────────────────────
+
+const PARAM_LABELS: Array<[keyof NonNullable<AgeColourTable['params']>, RegExp]> = [
+  ['eff', /^eff ?%?$|^efficiency$/],
+  ['markerLengthM', /^leng?h?th$|^lenght$|^marker length$/],
+  ['rate', /^rate$|^pcs ?\/ ?layer$/],
+];
+
+/**
+ * The per-colour tables: a header "fabric | Color | PANAL | sizes… | Total"
+ * other than the lay table's own, the rows beneath it down to "Totals", and
+ * for the first table of a set the EFF / LENGHT / RATE rows above it.
+ */
+function readColourTables(ws: ExcelJS.Worksheet, layHeader: { row: number; cols: Cols }, mainSizes: readonly string[]): AgeColourTable[] {
+  const tables: AgeColourTable[] = [];
+  const maxCol = Math.min(ws.columnCount || 80, 120);
+  const maxRow = Math.min(ws.rowCount || 200, 200);
+  const sizeSet = new Set(mainSizes.map((s) => s.toUpperCase()));
+  const blockCols: number[] = [];
+  for (let r = 1; r <= maxRow; r++) {
+    const row = ws.getRow(r);
+    for (let c = 1; c <= maxCol; c++) {
+      if (key(cellStr(row.getCell(c))) !== 'fabric') continue;
+      if (r === layHeader.row && c === layHeader.cols.fabric) continue;
+      // The colour heading may be a formula without a result; the panel one is fixed.
+      if (!/^pana?l$|^panel$/.test(key(cellStr(row.getCell(c + 2))))) continue;
+      const sizes: Array<{ col: number; name: string }> = [];
+      let totalCol: number | null = null;
+      for (let k = c + 3; k <= Math.min(maxCol, c + 24); k++) {
+        const t = cellStr(row.getCell(k));
+        if (!t) continue;
+        if (/^total$/i.test(t)) { totalCol = k; break; }
+        if (sizeSet.size === 0 || sizeSet.has(t.toUpperCase())) sizes.push({ col: k, name: t });
+        else break;
+      }
+      if (sizes.length < 2) continue;
+
+      let title: string | null = null;
+      for (let k = r - 1; k >= Math.max(1, r - 3); k--) {
+        const t = cellStr(ws.getRow(k).getCell(c));
+        if (t) { title = t; break; }
+      }
+      let block = blockCols.indexOf(c) + 1;
+      if (block === 0) { blockCols.push(c); block = blockCols.length; }
+      const first = !tables.some((t) => t.block === block);
+      const kind: AgeColourTable['kind'] = /layer/i.test(title ?? '') ? 'LAYERS'
+        : /met(er|re)/i.test(title ?? '') ? 'METERS'
+        : first ? 'PIECES' : 'OTHER';
+
+      // EFF / LENGHT / RATE sit in the colour column a few rows up, their
+      // values under the size columns.
+      let params: AgeColourTable['params'] = null;
+      if (kind === 'PIECES') {
+        const p: NonNullable<AgeColourTable['params']> = { eff: {}, markerLengthM: {}, rate: {} };
+        for (let k = Math.max(1, r - 6); k < r; k++) {
+          const line = ws.getRow(k);
+          const label = key(cellStr(line.getCell(c + 1)));
+          const hit = PARAM_LABELS.find(([, re]) => re.test(label));
+          if (!hit) continue;
+          for (const s of sizes) { const n = cellNum(line.getCell(s.col)); if (n != null) p[hit[0]][s.name] = n; }
+        }
+        if (Object.keys(p.rate).length > 0 || Object.keys(p.markerLengthM).length > 0 || Object.keys(p.eff).length > 0) params = p;
+      }
+
+      const rows: AgeColourTable['rows'] = [];
+      let totals: AgeColourTable['totals'] = null;
+      for (let k = r + 1; k <= Math.min(maxRow, r + 60); k++) {
+        const line = ws.getRow(k);
+        const fabric = cellStr(line.getCell(c)) || null;
+        const colour = cellStr(line.getCell(c + 1));
+        const bySize = readBySize(line, sizes);
+        if (/^totals?$/i.test(colour) || (!fabric && /^totals?$/i.test(cellStr(line.getCell(c))))) {
+          totals = { bySize, total: totalCol != null ? cellNum(line.getCell(totalCol)) : null };
+          break;
+        }
+        if (!fabric && !colour) { if (Object.keys(bySize).length === 0) break; continue; }
+        if (!colour) continue;
+        rows.push({ fabric, colour, panel: cellStr(line.getCell(c + 2)) || null, bySize, total: totalCol != null ? cellNum(line.getCell(totalCol)) : null });
+      }
+      tables.push({ block, kind, title, sizes: sizes.map((s) => s.name), rows, totals, params });
+      c += 3;
+    }
+  }
+  return tables;
+}
+
+// ── Fabric tables in the bill-of-materials layout ───────────────────────────
+
+const FABRIC_LINE_HEAD: Array<[keyof AgeFabricLine, RegExp]> = [
+  ['department', /^item sort/],
+  ['item', /^item$/],
+  ['description', /^description$/],
+  ['colour', /^colou?r$/],
+  ['qty', /^qty$|^quantity$|^order qty$/],
+  ['unit', /^unit$/],
+  ['issued', /^material issued$|^issued$/],
+  ['shortage', /^shortage$/],
+  ['issuedTo', /^issued to$/],
+];
+
+function readFabricLines(ws: ExcelJS.Worksheet): AgeFabricLine[] {
+  const out: AgeFabricLine[] = [];
+  const maxCol = Math.min(ws.columnCount || 80, 120);
+  const maxRow = Math.min(ws.rowCount || 200, 200);
+  for (let r = 1; r <= maxRow; r++) {
+    const row = ws.getRow(r);
+    for (let c = 1; c <= maxCol; c++) {
+      if (!/^item sort/.test(key(cellStr(row.getCell(c))))) continue;
+      const cols: Partial<Record<keyof AgeFabricLine, number>> = {};
+      for (let k = c; k <= Math.min(maxCol, c + 12); k++) {
+        const t = key(cellStr(row.getCell(k)));
+        if (!t) continue;
+        const hit = FABRIC_LINE_HEAD.find(([name, re]) => cols[name] == null && re.test(t));
+        if (hit) cols[hit[0]] = k;
+      }
+      if (cols.item == null || cols.qty == null) continue;
+      const str = (line: ExcelJS.Row, name: keyof AgeFabricLine) => (cols[name] == null ? null : cellStr(line.getCell(cols[name]!)) || null);
+      const num = (line: ExcelJS.Row, name: keyof AgeFabricLine) => (cols[name] == null ? null : cellNum(line.getCell(cols[name]!)));
+      for (let k = r + 1; k <= Math.min(maxRow, r + 40); k++) {
+        const line = ws.getRow(k);
+        const item = str(line, 'item');
+        if (!item) break;
+        out.push({
+          department: str(line, 'department'), item, description: str(line, 'description'), colour: str(line, 'colour'),
+          qty: num(line, 'qty'), unit: str(line, 'unit'), issued: num(line, 'issued'), shortage: num(line, 'shortage'), issuedTo: str(line, 'issuedTo'),
+        });
+      }
+      c += 8;
+    }
+  }
+  return out;
+}
+
+const fabricKey = (fabric: string, colour: string | null) => `${fabric.trim().toLowerCase()}|${(colour ?? '').trim().toLowerCase()}`;
+
 // ── The whole sheet ─────────────────────────────────────────────────────────
 
 export function readAgeLayingSheet(ws: ExcelJS.Worksheet): AgeLayingSheet | null {
@@ -416,12 +612,30 @@ export function readAgeLayingSheet(ws: ExcelJS.Worksheet): AgeLayingSheet | null
   }
 
   const fabricSummary = readFabricSummary(ws, totalsRow + 1);
+  const fabricLines = readFabricLines(ws);
+  // No FABRIC / COLOR / METER summary: the fabric tables say it instead, one
+  // row per fabric and colour. The working copy repeats a colour; the first
+  // row wins.
+  let summary = fabricSummary.rows;
+  if (summary.length === 0 && fabricLines.length > 0) {
+    const seen = new Set<string>();
+    summary = [];
+    for (const l of fabricLines) {
+      if (l.department && !/fabric/i.test(l.department)) continue;
+      const k = fabricKey(l.item, l.colour);
+      if (seen.has(k)) continue;
+      seen.add(k);
+      summary.push({ fabric: l.item, color: l.colour, meters: l.qty, issuedM: l.issued, issuedTo: l.issuedTo });
+    }
+  }
   return {
     sheetName: ws.name, headerRow,
     header: readTitleBlock(ws, headerRow),
     sizes: sizeNames, requirement, lays, totals, variance,
     signatures: readSignatures(ws, totalsRow + 1, fabricSummary.cols),
-    fabricSummary: fabricSummary.rows,
+    fabricSummary: summary,
     panelTables: readPanelTables(ws, headerRow, sizeNames),
+    colourTables: readColourTables(ws, header, sizeNames),
+    fabricLines,
   };
 }

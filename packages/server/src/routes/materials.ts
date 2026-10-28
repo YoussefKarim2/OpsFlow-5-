@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
-import { computeBomSummary, groupBomByCategory, computeMarkerPlan, computeFabricPosition, unitsCompatible, type BomItemInput, type CutSize, type LayInput } from '@opsflow/shared';
+import { computeBomSummary, groupBomByCategory, computeMarkerPlan, computeFabricPosition, parseSizeRatio, unitsCompatible, type BomItemInput, type CutSize, type LayInput } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
@@ -10,7 +10,7 @@ import { refreshOrderCache, ORDER_INCLUDE, deriveOrder } from '../services/order
 import { logActivity, logAndNotify } from '../services/activity-service.js';
 import { issueToProduction, returnFromProduction, assertIssueCorrectionsPossible } from '../services/inventory-service.js';
 import { clearLayPlan } from '../services/import/laying-committer.js';
-import { inWearingOrder } from '../services/import/po-lines.js';
+import { inWearingOrder, sizeAliasFor } from '../services/import/po-lines.js';
 import type { AuthUser } from '../middleware/auth.js';
 
 export const materialsRouter = Router();
@@ -705,7 +705,11 @@ materialsRouter.get('/:orderId/markers', requirePermission('cutting:read'), asyn
   }
 
   res.json({
-    plan: computeMarkerPlan(lays, requiredBySize, { mainFabric: order.fabric }),
+    // The sheet's "YXS" is the order's "Youth XS": counted under the order's name.
+    plan: computeMarkerPlan(lays, requiredBySize, {
+      mainFabric: order.fabric,
+      sizeAlias: sizeAliasFor(lays.flatMap((l) => Object.keys(parseSizeRatio(l.ratio))), d.sizes.map((s) => s.name)),
+    }),
     fabrics: order.fabricRecords.map((f) =>
       computeFabricPosition({
         fabric: f.fabricName, color: f.colorName ?? '',

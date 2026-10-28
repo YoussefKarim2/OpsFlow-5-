@@ -179,6 +179,39 @@ export function sizeRank(label: string): number | null {
 }
 
 /**
+ * Which of the order's sizes each of a document's size labels means.
+ *
+ * A laying sheet writes "YXS" where the order says "Youth XS": the same
+ * size by rank, so it is matched by rank first. A bare "M" ranks as an
+ * ungrouped medium and the order may only have "Adult Medium"; when exactly
+ * one order size shares the size word, that is the one. A label nothing on
+ * the order matches is left out, and the caller shows it as written.
+ */
+export function sizeAliasFor(labels: readonly string[], orderSizes: readonly string[]): Record<string, string> {
+  const ranked = orderSizes.map((name) => ({ name, rank: sizeRank(name) }));
+  // A document that writes youth sizes as YS / YM / YL means the grown
+  // sizes by a bare letter, so "M" there is not "Youth Medium".
+  const youthCoded = labels.some((l) => /^\d?Y(X*[SML]|X+L)$/i.test(l.trim()));
+  const out: Record<string, string> = {};
+  for (const label of labels) {
+    const t = label.trim();
+    if (orderSizes.includes(t)) continue;
+    const exact = orderSizes.find((s) => s.trim().toLowerCase() === t.toLowerCase());
+    if (exact) { out[label] = exact; continue; }
+    const r = sizeRank(t);
+    if (r == null) continue;
+    const byRank = ranked.filter((s) => s.rank === r);
+    if (byRank.length === 1) { out[label] = byRank[0]!.name; continue; }
+    const bare = !/\s/.test(t) && !/^\d?Y/i.test(t);
+    const byWord = bare
+      ? ranked.filter((s) => s.rank != null && s.rank !== 999 && s.rank % 100 === r % 100 && (!youthCoded || s.rank >= 400))
+      : [];
+    if (byWord.length === 1) out[label] = byWord[0]!.name;
+  }
+  return out;
+}
+
+/**
  * An order's size columns as they are shown: smallest on the left. Sizes that
  * can be ranked are put in wearing order among the places they occupy; a
  * label nobody can rank keeps its own place. Positions are renumbered to

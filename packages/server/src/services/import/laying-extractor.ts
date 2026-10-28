@@ -87,6 +87,10 @@ export interface LayingExtras {
   signatures: AgeLayingSheet['signatures'];
   fabricSummary: AgeLayingSheet['fabricSummary'];
   panelTables: AgeLayingSheet['panelTables'];
+  /** The body fabric's per-colour tables (pieces, layers, meters by size). */
+  colourTables: AgeLayingSheet['colourTables'];
+  /** The sheet's fabric tables in the bill-of-materials layout. */
+  fabricLines: AgeLayingSheet['fabricLines'];
 }
 
 export interface LayingAnalysis {
@@ -137,6 +141,54 @@ function fromAgeSheet(age: AgeLayingSheet, candidateSheets: Array<{ name: string
     }
   }
   const mainFabric = age.header.fabrics[0] ?? age.lays[0]?.fabric ?? null;
+
+  // The body fabric's colour tables: the sheet plans it colour by colour and
+  // size by size — pieces, then layers (pieces ÷ the size's rate), then
+  // meters (layers × the size's marker length) — so each colour and size is
+  // one lay, with the ratio "(YXS3)" the RATE row gives it. A working copy of
+  // the tables further right repeats colours; a row equal to one already
+  // read is the same plan twice, and a negative figure is an adjustment, not
+  // a lay.
+  let colourLays = 0;
+  let repeated = 0;
+  const seenColour = new Map<string, Record<string, number>>();
+  const colourKey = (fabric: string | null, colour: string) => `${(fabric ?? '').trim().toLowerCase()}|${colour.trim().toLowerCase()}`;
+  const sameBySize = (a: Record<string, number>, b: Record<string, number>) =>
+    Object.keys({ ...a, ...b }).every((s) => (a[s] ?? 0) === (b[s] ?? 0));
+  const blocks = [...new Set(age.colourTables.map((t) => t.block))].sort((a, b) => a - b);
+  for (const block of blocks) {
+    const pieces = age.colourTables.find((t) => t.block === block && t.kind === 'PIECES');
+    if (!pieces) continue;
+    const layersT = age.colourTables.find((t) => t.block === block && t.kind === 'LAYERS');
+    const metersT = age.colourTables.find((t) => t.block === block && t.kind === 'METERS');
+    const rowOf = (t: typeof pieces | undefined, fabric: string | null, colour: string) =>
+      t?.rows.find((x) => colourKey(x.fabric, x.colour) === colourKey(fabric, colour));
+    for (const row of pieces.rows) {
+      const k = colourKey(row.fabric, row.colour);
+      const earlier = seenColour.get(k);
+      if (earlier && sameBySize(earlier, row.bySize)) { repeated++; continue; }
+      if (!earlier) seenColour.set(k, row.bySize);
+      const layersRow = rowOf(layersT, row.fabric, row.colour);
+      const metersRow = rowOf(metersT, row.fabric, row.colour);
+      for (const size of pieces.sizes) {
+        const n = row.bySize[size];
+        if (!n || n <= 0) continue;
+        const rateRaw = pieces.params?.rate[size];
+        const rate = rateRaw != null && rateRaw > 0 ? Math.max(1, Math.round(rateRaw)) : 1;
+        const layers = Math.round(layersRow?.bySize[size] ?? Math.ceil(n / rate));
+        const markerLengthM = pieces.params?.markerLengthM[size] ?? null;
+        const totalLengthM = metersRow?.bySize[size] ?? (markerLengthM != null ? Math.ceil(layers * markerLengthM) : null);
+        rows.push({
+          ...blank, poNumber, rowNumber: rows.length + 1, kind: 'LAY',
+          fabricName: row.fabric ?? mainFabric, fabricColor: row.colour, panel: row.panel ?? 'ALL',
+          sizeRatio: `(${size}${rate})`, layers, markerLengthM, totalLengthM, nestPcs: null,
+          efficiencyPct: pieces.params?.eff[size] ?? null, maxLayer: null,
+        });
+        colourLays++;
+      }
+    }
+  }
+
   let panelRows = 0;
   for (const t of age.panelTables) {
     for (const c of t.colours) {
@@ -174,9 +226,17 @@ function fromAgeSheet(age: AgeLayingSheet, candidateSheets: Array<{ name: string
   issues.unshift({
     level: 'INFO', field: null, sheet: age.sheetName, cell: null,
     message: `Recognised the factory laying sheet: ${lays.length} lay${lays.length === 1 ? '' : 's'}`
+      + (colourLays > 0 ? `, ${colourLays} lay${colourLays === 1 ? '' : 's'} by colour and size from the cut tables` : '')
       + (panelRows > 0 ? `, ${panelRows} panel row${panelRows === 1 ? '' : 's'} by colour` : '')
+      + (age.fabricSummary.length > 0 ? `, fabric for ${age.fabricSummary.length} fabric/colour${age.fabricSummary.length === 1 ? '' : 's'}` : '')
       + (age.header.poNumber ? `, PO ${age.header.poNumber}` : '') + '.',
   });
+  if (repeated > 0) {
+    issues.push({
+      level: 'INFO', field: null, sheet: age.sheetName, cell: null,
+      message: `The sheet's second set of cut tables repeats ${repeated} colour row${repeated === 1 ? '' : 's'} of the first; ${repeated === 1 ? 'it is' : 'they are'} read once.`,
+    });
+  }
   const laySum = lays.reduce((a, l) => a + (l.total ?? 0), 0);
   if (age.totals?.total != null && laySum !== age.totals.total) {
     issues.push({
@@ -198,6 +258,7 @@ function fromAgeSheet(age: AgeLayingSheet, candidateSheets: Array<{ name: string
     extras: {
       layout: 'AGE', sizes: age.sizes, header: age.header, requirement: age.requirement, totals: age.totals,
       variance: age.variance, signatures: age.signatures, fabricSummary: age.fabricSummary, panelTables: age.panelTables,
+      colourTables: age.colourTables, fabricLines: age.fabricLines,
     },
   };
 }
