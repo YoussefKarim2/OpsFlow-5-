@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import { OutageBanner } from './OutageBanner';
+import { LayoutProbe } from './LayoutProbe';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -183,7 +184,8 @@ export function AppShell({ children }: { children: ReactNode }) {
           </div>
         </header>
 
-        <main className="min-w-0 flex-1 overflow-y-auto"><OutageBanner />{children}</main>
+        <main className="min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain"><OutageBanner />{children}</main>
+        <LayoutProbe />
       </div>
     </div>
   );

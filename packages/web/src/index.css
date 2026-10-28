@@ -6,7 +6,9 @@
   :root {
     color-scheme: light;
   }
-  html, body, #root { height: 100%; }
+  /* The window itself never scrolls: the content area (main) does. Print
+     turns this off again below so the whole document reaches the paper. */
+  html, body, #root { height: 100%; overflow: hidden; }
   body {
     @apply bg-ink-50 text-ink-900 antialiased;
     font-feature-settings: 'cv02', 'cv03', 'cv04', 'tnum';
