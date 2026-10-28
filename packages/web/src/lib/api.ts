@@ -1063,6 +1063,12 @@ export const api = {
     remove: (id: string) => del(`/invoices/${id}`),
     company: () => get<{ data: CompanyProfileDto }>('/invoices/company'),
     saveCompany: (body: Omit<CompanyProfileDto, 'updatedAt'>) => put<{ data: CompanyProfileDto }>('/invoices/company', body),
+    /** The letterhead read off the factory's own proforma workbook and saved: exporter block, terms, bank rows, signatory, stamp. */
+    companyFromWorkbook: (file: File) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      return request<{ data: CompanyProfileDto; notes: string[]; filled: string[] }>('/invoices/company/from-workbook', { method: 'POST', body: fd });
+    },
   },
 
   packing: {

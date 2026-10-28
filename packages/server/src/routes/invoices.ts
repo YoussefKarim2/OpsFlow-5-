@@ -29,11 +29,13 @@ import { asyncHandler } from '../util/async-handler.js';
 import { dateInput } from '../util/date-input.js';
 import { ConflictError, ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from '../errors.js';
 import { logActivity } from '../services/activity-service.js';
+import multer from 'multer';
 import { proformaSheetWorkbook } from '../services/proforma-sheet-xlsx.js';
+import { letterheadFromWorkbook } from '../services/letterhead-from-workbook.js';
 import { contentDisposition } from '../util/upload-name.js';
 import {
   INVOICE_INCLUDE, PROFILE_ID, assertDraft, assertIssuable, assertStillDraft, buildCombinedDocument, defaultCoverNote,
-  carriedRates, getCompanyProfile, invoiceToDto, invoiceToListRow, isStale, lineToDto, loadInvoice, loadOrderForBuild, partsOf, pickDefaults, qtyPerOrder,
+  carriedRates, fillFromLetterhead, getCompanyProfile, invoiceToDto, invoiceToListRow, isStale, lineToDto, loadInvoice, loadOrderForBuild, partsOf, pickDefaults, qtyPerOrder,
   profileToDto, sourcesOf, toBuildOrder, toBuildPackingList, toBuildShipment, withAllocatedNumber,
 } from '../services/invoice-service.js';
 
@@ -97,6 +99,32 @@ invoicesRouter.put('/company', requirePermission('settings:manage'), requireLett
     entityType: 'CompanyProfile', entityId: PROFILE_ID,
   });
   res.json({ data: profileToDto(row) });
+}));
+
+/**
+ * The letterhead filled from the factory's own proforma workbook: exporter
+ * name and address, QIZ reference, terms, bank rows, signatory and stamp,
+ * read off its `invoice` sheet. What the file holds replaces the field; a
+ * field the file does not have keeps its value.
+ */
+const workbookUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 20 * 1024 * 1024, files: 1 } });
+invoicesRouter.post('/company/from-workbook', requirePermission('settings:manage'), requireLetterheadEditor, workbookUpload.single('file'), asyncHandler(async (req, res) => {
+  if (!req.file) throw new ValidationError('Choose the proforma workbook (.xlsx) to read the letterhead from.');
+  const user = currentUser(req);
+  const { notes, ...read } = await letterheadFromWorkbook(req.file.buffer);
+  const filled = Object.fromEntries(Object.entries(read).filter(([, v]) => v != null && v !== ''));
+  if (Object.keys(filled).length === 0) throw new ValidationError(`Nothing of a letterhead was found in that file. ${notes.join(' ')}`);
+  const row = await prisma.companyProfile.upsert({
+    where: { id: PROFILE_ID },
+    create: { id: PROFILE_ID, name: 'Soccertex', ...filled, updatedById: user.id },
+    update: { ...filled, updatedById: user.id },
+  });
+  await logActivity({
+    actorId: user.id, actorName: user.name,
+    action: 'invoice.company.update', summary: `Filled the company letterhead from ${req.file.originalname}: ${Object.keys(filled).join(', ')}`,
+    entityType: 'CompanyProfile', entityId: PROFILE_ID,
+  });
+  res.json({ data: profileToDto(row), notes, filled: Object.keys(filled) });
 }));
 
 // ── Candidates: orders that could be invoiced now ────────────────────────────
@@ -274,7 +302,8 @@ async function seedSheet(clientId: string, seller: { name?: string; address?: st
     orderBy: { createdAt: 'desc' }, select: { sheet: true },
   });
   if (last?.sheet) {
-    const { title: _t, onBoardDate: _o, etd: _e, rows, ...kept } = last.sheet as ProformaSheetSettings;
+    // The exporter block follows the letterhead unless typed on a document; it is not carried.
+    const { title: _t, onBoardDate: _o, etd: _e, exporterName: _n, exporterAddress: _a, qizRef: _q, signatory: _s, rows, ...kept } = last.sheet as ProformaSheetSettings;
     // A style's part number, HTS code, pieces per carton and unit are the
     // style's; its PO, cartons, weights and wording belong to that one order.
     const carried: NonNullable<ProformaSheetSettings['rows']> = {};
@@ -287,8 +316,7 @@ async function seedSheet(clientId: string, seller: { name?: string; address?: st
   return {
     statement: SHEET_DEFAULTS.statement, shipmentFrom: SHEET_DEFAULTS.shipmentFrom,
     container: SHEET_DEFAULTS.container, cartonsPerContainer: SHEET_DEFAULTS.cartonsPerContainer, leadDays: SHEET_DEFAULTS.leadDays,
-    consolidatingVendor: seller.name ?? null, exporterName: seller.name ?? null, exporterAddress: seller.address ?? null,
-    qizRef: seller.qizRef ?? null, signatory: seller.signatory ?? null,
+    consolidatingVendor: seller.name ?? null,
     rows: {},
   };
 }
@@ -366,7 +394,7 @@ invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async 
     entityType: 'Invoice', entityId: created.id,
   });
 
-  res.status(201).json({ data: invoiceToDto(created) });
+  res.status(201).json({ data: invoiceToDto(created, false, await getCompanyProfile()) });
 }));
 
 // ── The proforma sheet as Excel ──────────────────────────────────────────────
@@ -378,7 +406,7 @@ invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async 
  */
 invoicesRouter.get('/:id/export.xlsx', requirePermission('invoice:read'), asyncHandler(async (req, res) => {
   const loaded = await loadInvoice(req.params.id);
-  const inv = invoiceToDto(loaded);
+  const inv = invoiceToDto(loaded, false, await getCompanyProfile());
   const orders = await Promise.all(inv.orders.map(async (o) => toBuildOrder(await loadOrderForBuild(o.id))));
   const buffer = await proformaSheetWorkbook(inv, orders);
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
@@ -390,7 +418,7 @@ invoicesRouter.get('/:id/export.xlsx', requirePermission('invoice:read'), asyncH
 
 invoicesRouter.get('/:id', requirePermission('invoice:read'), asyncHandler(async (req, res) => {
   const inv = await loadInvoice(req.params.id);
-  res.json({ data: invoiceToDto(inv, await isStale(inv)) });
+  res.json({ data: invoiceToDto(inv, await isStale(inv), await getCompanyProfile()) });
 }));
 
 // ── Edit a draft ─────────────────────────────────────────────────────────────
@@ -546,7 +574,7 @@ invoicesRouter.put('/:id', requirePermission('invoice:write'), asyncHandler(asyn
     entityType: 'Invoice', entityId: existing.id,
   });
 
-  res.json({ data: invoiceToDto(updated, await isStale(updated)) });
+  res.json({ data: invoiceToDto(updated, await isStale(updated), await getCompanyProfile()) });
 }));
 
 /** Whether any order on the document was built from a packing list. */
@@ -637,7 +665,7 @@ invoicesRouter.post('/:id/rebuild', requirePermission('invoice:write'), asyncHan
     entityType: 'Invoice', entityId: existing.id,
   });
 
-  res.json({ data: invoiceToDto(updated, false) });
+  res.json({ data: invoiceToDto(updated, false, await getCompanyProfile()) });
 }));
 
 // ── Issue, send, void, delete ────────────────────────────────────────────────
@@ -646,7 +674,10 @@ invoicesRouter.post('/:id/issue', requirePermission('invoice:issue'), asyncHandl
   const user = currentUser(req);
   const existing = await loadInvoice(req.params.id);
   assertDraft(existing);
-  assertIssuable(invoiceToDto(existing, await isStale(existing)));
+  const live = await getCompanyProfile();
+  assertIssuable(invoiceToDto(existing, await isStale(existing), live));
+  // The letterhead the draft was showing is what the record keeps.
+  const frozen = fillFromLetterhead(existing, live);
 
   const count = await prisma.$transaction(async (tx) => {
     // One issue at a time, so two people issuing invoices for the same goods
@@ -673,7 +704,11 @@ invoicesRouter.post('/:id/issue', requirePermission('invoice:issue'), asyncHandl
     }
     const { count: n } = await tx.invoice.updateMany({
       where: { id: existing.id, status: InvoiceStatus.DRAFT, updatedAt: existing.updatedAt },
-      data: { status: InvoiceStatus.ISSUED, issuedAt: new Date(), issuedById: user.id },
+      data: {
+        status: InvoiceStatus.ISSUED, issuedAt: new Date(), issuedById: user.id,
+        seller: frozen.seller as object, terms: frozen.terms, bankDetails: frozen.bankDetails,
+        sheet: frozen.sheet == null ? Prisma.DbNull : (frozen.sheet as object),
+      },
     });
     return n;
   });
@@ -689,7 +724,7 @@ invoicesRouter.post('/:id/issue', requirePermission('invoice:issue'), asyncHandl
     entityType: 'Invoice', entityId: existing.id,
     meta: { total: totals.total, qty: totals.totalQty },
   });
-  res.json({ data: invoiceToDto(updated) });
+  res.json({ data: invoiceToDto(updated, false, await getCompanyProfile()) });
 }));
 
 invoicesRouter.post('/:id/sent', requirePermission('invoice:write'), asyncHandler(async (req, res) => {

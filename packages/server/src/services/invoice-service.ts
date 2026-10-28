@@ -728,7 +728,37 @@ async function partIsStale(orderId: string, packingListId: string | null, built:
   return manifestFingerprint(now) !== manifestFingerprint(built);
 }
 
-export function invoiceToDto(inv: LoadedInvoice, stale = false): InvoiceDto {
+/**
+ * A draft prints the live letterhead: the stamp, QIZ reference, signatory,
+ * address, terms and bank details filled in after the draft was raised reach
+ * it without a rebuild, and `snapshotLetterhead` stores the same at issue.
+ * An issued document keeps exactly what it was issued with. Fields typed on
+ * the document itself (its terms, its exporter line) stay as typed.
+ */
+export function fillFromLetterhead(inv: LoadedInvoice, live: CompanyProfileDto | undefined): Pick<LoadedInvoice, 'seller' | 'terms' | 'bankDetails' | 'sheet'> {
+  if (!live || inv.status !== InvoiceStatus.DRAFT) return inv;
+  const snap = (inv.seller as unknown as Partial<CompanyProfileDto>) ?? {};
+  const { updatedAt: _u, ...seller } = live;
+  const sheet = (inv.sheet as ProformaSheetSettings | null) ?? null;
+  // An exporter line that only repeats the old letterhead is not something anyone typed.
+  const typed = (v: string | null | undefined, was: string | null | undefined) => (v && v !== was ? v : null);
+  const filledSheet: ProformaSheetSettings | null = sheet && {
+    ...sheet,
+    qizRef: typed(sheet.qizRef, snap.qizRef) ?? live.qizRef ?? null,
+    signatory: typed(sheet.signatory, snap.signatory) ?? live.signatory ?? null,
+    exporterName: typed(sheet.exporterName, snap.name) ?? null,
+    exporterAddress: typed(sheet.exporterAddress, snap.address) ?? null,
+  };
+  return {
+    seller: seller as unknown as Prisma.JsonValue,
+    terms: inv.terms?.trim() ? inv.terms : live.invoiceTerms,
+    bankDetails: inv.bankDetails?.trim() ? inv.bankDetails : live.bankDetails,
+    sheet: filledSheet as unknown as Prisma.JsonValue | null,
+  };
+}
+
+export function invoiceToDto(raw: LoadedInvoice, stale = false, live?: CompanyProfileDto): InvoiceDto {
+  const inv: LoadedInvoice = { ...raw, ...fillFromLetterhead(raw, live) };
   const lines = inv.lines.map(lineToDto);
   const totals = computeInvoiceTotals(lines);
   const iso = (d: Date | null | undefined) => (d ? d.toISOString() : null);

@@ -507,6 +507,15 @@ function CompanyPanel() {
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['company-profile'] }); toast.success('Letterhead saved. New and rebuilt drafts will carry it.'); },
     onError: (e) => toast.error(e),
   });
+  const fromWorkbook = useMutation({
+    mutationFn: (file: File) => api.invoices.companyFromWorkbook(file),
+    onSuccess: (res) => {
+      void qc.invalidateQueries({ queryKey: ['company-profile'] });
+      void qc.invalidateQueries({ queryKey: ['invoice'] });
+      toast.success(`Letterhead filled from the workbook: ${res.filled.join(', ')}.${res.notes.length ? ` ${res.notes.join(' ')}` : ''}`);
+    },
+    onError: (e) => toast.error(e),
+  });
 
   if (profile.isLoading || !draft) return null;
   const p = profile.data?.data ?? { ...EMPTY_PROFILE, updatedAt: null };
@@ -520,9 +529,16 @@ function CompanyPanel() {
         title={<span className="inline-flex items-center gap-2"><Building2 className="h-4 w-4 text-ink-500" /> Company letterhead</span>}
         subtitle="Printed at the top of every document and in its payment block. Each document keeps the letterhead it was built with."
         action={editable ? (
-          <button className="btn-primary btn-sm" disabled={save.isPending || !draft.name.trim()} onClick={() => save.mutate(draft)}>
-            {save.isPending ? 'Saving…' : 'Save letterhead'}
-          </button>
+          <div className="flex items-center gap-2">
+            <label className="btn-secondary btn-sm cursor-pointer" title="Reads the exporter block, terms, bank account, signatory and stamp off the factory's own proforma workbook (.xlsx) and saves them here">
+              {fromWorkbook.isPending ? 'Reading…' : 'Fill from proforma workbook'}
+              <input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="sr-only" disabled={fromWorkbook.isPending}
+                onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) fromWorkbook.mutate(f); }} />
+            </label>
+            <button className="btn-primary btn-sm" disabled={save.isPending || !draft.name.trim()} onClick={() => save.mutate(draft)}>
+              {save.isPending ? 'Saving…' : 'Save letterhead'}
+            </button>
+          </div>
         ) : <span className="text-2xs text-ink-500">A super administrator edits this.</span>}
       />
       {missing.length > 0 && (
