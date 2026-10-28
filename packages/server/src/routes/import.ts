@@ -12,7 +12,7 @@ import { asyncHandler } from '../util/async-handler.js';
 import { NotFoundError, BadRequestError } from '../errors.js';
 import { extractWorkbook, applyFieldOverrides, type ExtractionResult } from '../services/import/extractor.js';
 import { extractTabular, type TabularAnalysis } from '../services/import/tabular-extractor.js';
-import { commitImport, mergeMatrixAxes } from '../services/import/committer.js';
+import { axisKey, commitImport, mergeMatrixAxes } from '../services/import/committer.js';
 import { normalisePoNumber } from '../services/rules.js';
 import { announceChange } from '../services/change-service.js';
 import { PROFILES } from '../services/import/profiles.js';
@@ -593,9 +593,13 @@ export function applyReviewedMatrix(
 ): void {
   if (!matrix) return;
   const sizes = matrix.sizes;
+  // The review grid carries no prices; a colour keeps the rate the file gave it.
+  const read = extraction.matrices.find((m) => m.ledger === 'ORDER');
+  const priceOf = new Map((read?.rows ?? []).filter((r) => r.unitPrice != null).map((r) => [axisKey(r.color), r.unitPrice!] as const));
   const rows = matrix.rows.map((r) => {
     const cells = Object.fromEntries(Object.entries(r.cells).filter(([s, q]) => sizes.includes(s) && q > 0));
-    return { color: r.color, cells, total: Object.values(cells).reduce((a, b) => a + b, 0) };
+    const unitPrice = priceOf.get(axisKey(r.color));
+    return { color: r.color, cells, total: Object.values(cells).reduce((a, b) => a + b, 0), ...(unitPrice != null ? { unitPrice } : {}) };
   });
   const others = extraction.matrices.filter((m) => m.ledger !== 'ORDER');
   extraction.matrices = [

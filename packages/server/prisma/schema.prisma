@@ -302,6 +302,9 @@ model OrderColor {
   /// Per-colour product name — the Customer Order Ref sheet gives each colour a
   /// team name ("CREW NECK SOCCER JERSEY - STRIKERS" for Sky Blue).
   productName String?
+  /// The colour's own rate when the customer's PO prices each line (a buy
+  /// sheet of many styles); null means the order's price per piece applies.
+  unitPriceUsd Decimal?       @db.Decimal(10, 4)
   position    Int             @default(0)
   cartons     Carton[]
   color       RefColor        @relation(fields: [colorId], references: [id])

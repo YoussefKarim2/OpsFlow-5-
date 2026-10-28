@@ -1041,8 +1041,26 @@ describe('CSV values are read as written', () => {
     const r = await extractTabular(Buffer.from('PO Number,000123\n\nColour,Size,Quantity\nNavy,S,10\n'), { fileName: 'po.csv' });
     assert.equal(r.fields.poNumber, '000123');
     const r2 = await extractTabular(Buffer.from('Style,Colour,Size,Quantity\n0012345,Navy,S,10\n2E5,Red,M,4\n'), { fileName: 'po.csv' });
-    assert.equal(r2.fields.styleNumber, '0012345');
+    // Two styles: each row keeps its own, and neither is the order's.
+    assert.equal(r2.fields.styleNumber, undefined);
     assert.deepEqual(r2.matrices[0]!.rows.map((x) => x.color), ['0012345 — Navy', '2E5 — Red']);
+    const r3 = await extractTabular(Buffer.from('Style,Colour,Size,Quantity\n0012345,Navy,S,10\n0012345,Red,M,4\n'), { fileName: 'po.csv' });
+    assert.equal(r3.fields.styleNumber, '0012345');
+  });
+
+  test('a buy sheet that prices each style keeps every rate, and the order price is the average', async () => {
+    const csv = 'Style,Colour,Size,Quantity,Unit Cost\nTRANMERE SHIRT,Hunter,S,100,3\nTRANMERE SHIRT,Hunter,M,50,3\nHILO BACKPACK,Black,OS,10,15\nDINOMITE KIT,Orange,M,5,0\n';
+    const r = await extractTabular(Buffer.from(csv), { fileName: 'buy.csv' });
+    assert.deepEqual(r.matrices[0]!.rows.map((x) => [x.color, x.total, x.unitPrice]), [
+      ['TRANMERE SHIRT — Hunter', 150, 3], ['HILO BACKPACK — Black', 10, 15], ['DINOMITE KIT — Orange', 5, 0],
+    ]);
+    assert.equal(r.fields.pricePerPieceUsd, Math.round((600 / 165) * 10_000) / 10_000);
+    assert.equal(r.fields.styleNumber, undefined, 'the first style is not the order\'s');
+    assert.ok(r.issues.some((i) => /priced at \$0/.test(i.message)));
+    // One rate throughout: the order's price, as before.
+    const one = await extractTabular(Buffer.from('Colour,Size,Quantity,Unit Price\nNavy,S,10,4.9\nRed,M,5,4.9\n'));
+    assert.equal(one.fields.pricePerPieceUsd, 4.9);
+    assert.deepEqual(one.matrices[0]!.rows.map((x) => x.unitPrice), [4.9, 4.9]);
   });
 
   test('a semicolon CSV reads "1.200" as twelve hundred', async () => {

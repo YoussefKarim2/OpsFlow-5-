@@ -252,6 +252,7 @@ declare module '@prisma/client' {
     orderId: string;
     colorId: string;
     productName: string | null;
+    unitPriceUsd: Prisma.Decimal | null;
     position: number;
     cartons: Carton[];
     color: RefColor;

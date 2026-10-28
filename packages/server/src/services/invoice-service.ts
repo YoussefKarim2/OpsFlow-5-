@@ -71,7 +71,8 @@ export interface BuildOrder {
   promisedShippingDate: Date | null;
   billingAddress: string | null;
   client: { name: string; billingAddress: string | null; email: string | null };
-  colors: Array<{ id: string; name: string; productName: string | null; position: number }>;
+  /** `unitPriceUsd`: the colour's own rate from a PO that prices each style; null uses the order's price. */
+  colors: Array<{ id: string; name: string; productName: string | null; position: number; unitPriceUsd?: number | null }>;
   sizes: Array<{ id: string; name: string; position: number }>;
   /** The ORDER ledger only. */
   orderCells: Array<{ orderColorId: string; orderSizeId: string; qty: number }>;
@@ -184,11 +185,14 @@ export function buildInvoiceDocument(input: {
   const others = (input.otherPackingLists ?? []).filter((l) => l.cartons.length > 0);
   const warnings: string[] = [];
   const price = order.pricePerPieceUsd;
+  // A colour priced on its own (a PO that prices each style) keeps that rate.
+  const priceOf = (colorId: string | null) =>
+    (colorId ? order.colors.find((c) => c.id === colorId)?.unitPriceUsd : null) ?? price;
   const sizeOrder = [...order.sizes].sort((a, b) => a.position - b.position).map((s) => s.name);
   const colourRank = (id: string | null) => (id ? order.colors.find((c) => c.id === id)?.position ?? 9999 : 9999);
   const soleColour = order.colors.length === 1 ? order.colors[0]!.id : null;
 
-  if (price == null) {
+  if (price == null && (order.colors.length === 0 || order.colors.some((c) => c.unitPriceUsd == null))) {
     warnings.push('The order has no unit price, so the goods lines have no amount. Set the price on Order Details, or type a rate on each line.');
   }
 
@@ -225,7 +229,7 @@ export function buildInvoiceDocument(input: {
         description: productLabel(order, colorId),
         size: summariseSizes(g.labels, sizeOrder),
         quantity: g.qty,
-        unitPrice: price,
+        unitPrice: priceOf(colorId),
         amount: null,
       }));
   };
@@ -534,7 +538,7 @@ export function toBuildOrder(o: LoadedOrder): BuildOrder {
     externalReference: o.externalReference, pricePerPieceUsd: dec(o.pricePerPieceUsd),
     promisedShippingDate: o.promisedShippingDate, billingAddress: o.billingAddress,
     client: o.client,
-    colors: o.colors.map((c) => ({ id: c.id, name: c.color.name, productName: c.productName, position: c.position })),
+    colors: o.colors.map((c) => ({ id: c.id, name: c.color.name, productName: c.productName, position: c.position, unitPriceUsd: dec(c.unitPriceUsd) })),
     sizes: inWearingOrder(o.sizes.map((s) => ({ id: s.id, name: s.size.name, position: s.position }))),
     orderCells: o.quantities,
   };

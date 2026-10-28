@@ -98,7 +98,10 @@ export function mergeMatrixAxes(matrix: Pick<ExtractedMatrix, 'sizes' | 'rows'>)
   const rows = new Map<string, ExtractedMatrix['rows'][number]>();
   for (const row of matrix.rows) {
     const key = axisKey(row.color);
-    const merged = rows.get(key) ?? { color: row.color.trim(), cells: {}, total: 0 };
+    const seen = rows.get(key);
+    const merged = seen ?? { color: row.color.trim(), cells: {}, total: 0, ...(row.unitPrice !== undefined ? { unitPrice: row.unitPrice } : {}) };
+    // Two rows of one colour at different rates leave the colour without one.
+    if (seen && seen.unitPrice !== row.unitPrice) merged.unitPrice = null;
     for (const [size, qty] of Object.entries(row.cells)) {
       const name = sizeName.get(axisKey(size)) ?? size.trim();
       if (!sizeName.has(axisKey(size))) sizeName.set(axisKey(size), name);
@@ -134,7 +137,7 @@ export async function writeOrderMatrix(
     if (row.total <= 0 || colorIds.has(axisKey(row.color))) continue;
     const refId = await upsertRefColor(tx, row.color, colorPos);
     const taken = existingColors.find((c) => c.colorId === refId);
-    const oc = taken ?? await tx.orderColor.create({ data: { orderId, colorId: refId, position: colorPos++ } });
+    const oc = taken ?? await tx.orderColor.create({ data: { orderId, colorId: refId, position: colorPos++, unitPriceUsd: row.unitPrice ?? null } });
     colorIds.set(axisKey(row.color), oc.id);
   }
   const used = new Set(m.rows.flatMap((r) => Object.entries(r.cells).filter(([, q]) => q > 0).map(([s]) => axisKey(s))));
@@ -364,7 +367,7 @@ export async function commitImport(
     for (const [i, row] of orderMatrix.rows.entries()) {
       const refId = await upsertRefColor(tx, row.color, i);
       const oc = await tx.orderColor.create({
-        data: { orderId: order.id, colorId: refId, position: i },
+        data: { orderId: order.id, colorId: refId, position: i, unitPriceUsd: row.unitPrice ?? null },
       });
       colorIds.set(axisKey(row.color), { id: oc.id, name: row.color });
     }

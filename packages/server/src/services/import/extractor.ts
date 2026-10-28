@@ -21,7 +21,11 @@ import { assertValidPercentage } from '../rules.js';
 export interface ExtractedMatrix {
   ledger: string;
   sizes: string[];
-  rows: Array<{ color: string; cells: Record<string, number>; total: number }>;
+  /**
+   * `unitPrice`: the row's own rate, when the file prices each line and the
+   * colour's lines agree — a buy sheet of many styles prices each style.
+   */
+  rows: Array<{ color: string; cells: Record<string, number>; total: number; unitPrice?: number | null }>;
   /** The sheet's own SUM row, used to cross-check our arithmetic. */
   sheetTotal: number | null;
   computedTotal: number;

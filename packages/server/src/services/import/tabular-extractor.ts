@@ -564,6 +564,9 @@ interface BuildContext {
   issues: ImportIssue[];
 }
 
+/** Columns whose value belongs to each line; when they differ, none of them is the order's. */
+const PER_LINE_CONCEPTS = new Set<ImportConcept>([ImportConcept.STYLE, ImportConcept.ARTICLE, ImportConcept.PANEL, ImportConcept.UNIT_PRICE]);
+
 const columnFor = (analyses: readonly ColumnAnalysis[], concept: ImportConcept): number | null =>
   analyses.find((a) => a.concept === concept)?.index ?? null;
 
@@ -587,6 +590,7 @@ function buildLongMatrix(ctx: BuildContext, opts: { sizeFromColour?: boolean } =
   const sizeCol = opts.sizeFromColour ? null : columnFor(ctx.analyses, ImportConcept.SIZE);
   const qtyCol = columnFor(ctx.analyses, ImportConcept.QUANTITY);
   const styleCol = columnFor(ctx.analyses, ImportConcept.STYLE);
+  const priceCol = columnFor(ctx.analyses, ImportConcept.UNIT_PRICE);
   if (colorCol == null || qtyCol == null) return null;
   if (sizeCol == null && !opts.sizeFromColour) return null;
 
@@ -596,6 +600,8 @@ function buildLongMatrix(ctx: BuildContext, opts: { sizeFromColour?: boolean } =
   const qualify = styles.size > 1;
 
   const byColor = new Map<string, Record<string, number>>();
+  // Each colour's rates, so a colour whose lines all carry one rate keeps it.
+  const pricesOf = new Map<string, Set<number>>();
   const sizeOrder: string[] = [];
   let skipped = 0;
   let unsized = 0;
@@ -637,6 +643,10 @@ function buildLongMatrix(ctx: BuildContext, opts: { sizeFromColour?: boolean } =
     // adding them is what the customer meant.
     cells[size] = (cells[size] ?? 0) + qty;
     byColor.set(color, cells);
+    const price = priceCol == null ? null : toNumber(row[priceCol]);
+    const prices = pricesOf.get(color) ?? new Set<number>();
+    prices.add(price != null && price >= 0 ? price : NaN);
+    pricesOf.set(color, prices);
   }
 
   if (byColor.size === 0) return null;
@@ -662,12 +672,25 @@ function buildLongMatrix(ctx: BuildContext, opts: { sizeFromColour?: boolean } =
     });
   }
 
-  const rows = [...byColor.entries()].map(([color, cells]) => ({
-    color,
-    cells,
-    total: Object.values(cells).reduce((a, b) => a + b, 0),
-  }));
+  const mixedPrice: string[] = [];
+  const rows = [...byColor.entries()].map(([color, cells]) => {
+    const prices = [...(pricesOf.get(color) ?? [])];
+    const one = prices.length === 1 && !Number.isNaN(prices[0]!) ? prices[0]! : null;
+    if (priceCol != null && prices.length > 1) mixedPrice.push(color);
+    return {
+      color,
+      cells,
+      total: Object.values(cells).reduce((a, b) => a + b, 0),
+      ...(priceCol != null ? { unitPrice: one } : {}),
+    };
+  });
   const computedTotal = rows.reduce((a, r) => a + r.total, 0);
+  if (mixedPrice.length > 0) {
+    ctx.issues.push({
+      level: 'WARNING', field: 'pricePerPieceUsd', sheet: ctx.table.sheetName, cell: null,
+      message: `${mixedPrice.length} colour${mixedPrice.length === 1 ? ' has' : 's have'} lines at different unit prices (${mixedPrice.slice(0, 3).join(', ')}${mixedPrice.length > 3 ? ', …' : ''}), so no one price could be kept for ${mixedPrice.length === 1 ? 'it' : 'them'}. Type the rate on the proforma lines.`,
+    });
+  }
 
   // The Total row's quantity, when the table ends in one.
   const totals = ctx.table.totalsRow;
@@ -1110,8 +1133,39 @@ export async function extractTabular(
   for (const column of columns) {
     const meta = CONCEPT_META[column.concept];
     if (!meta.field || fields[meta.field] != null) continue;
-    const firstValue = chosen.rows.map((r) => r[column.index]).find((v) => v != null && String(v).trim() !== '');
+    const values = chosen.rows.map((r) => r[column.index]).filter((v) => v != null && String(v).trim() !== '');
+    const firstValue = values[0];
     if (firstValue == null) continue;
+    const distinct = new Set(values.map((v) => String(cellText(v)).trim().toLowerCase()));
+    if (distinct.size > 1 && PER_LINE_CONCEPTS.has(column.concept)) {
+      // A column that changes from line to line describes the lines, not the
+      // order: the first line's style or part number is not the order's.
+      if (column.concept === ImportConcept.UNIT_PRICE) {
+        const priced = matrix?.rows.filter((r) => r.unitPrice != null) ?? [];
+        const pieces = priced.reduce((a, r) => a + r.total, 0);
+        if (matrix && priced.length === matrix.rows.length && pieces > 0) {
+          // Every colour keeps its own rate; the order's price is their average,
+          // so the order's value matches the file.
+          const value = priced.reduce((a, r) => a + r.total * r.unitPrice!, 0);
+          fields[meta.field] = Math.round((value / pieces) * 10_000) / 10_000;
+          const rates = priced.map((r) => r.unitPrice!);
+          issues.push({
+            level: 'INFO', field: meta.field, sheet: chosen.sheetName, cell: null,
+            message: `The file prices each line: rates run from $${Math.min(...rates).toFixed(2)} to $${Math.max(...rates).toFixed(2)}, $${value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} in all. Each colour keeps its own rate on the proforma; the order's price per piece is the average.`,
+          });
+          if (rates.some((r) => r === 0)) {
+            const free = priced.filter((r) => r.unitPrice === 0).map((r) => r.color);
+            issues.push({
+              level: 'WARNING', field: meta.field, sheet: chosen.sheetName, cell: null,
+              message: `${free.length} colour${free.length === 1 ? ' is' : 's are'} priced at $0 in the file (${free.slice(0, 3).join(', ')}${free.length > 3 ? ', …' : ''}). Check the price with the customer.`,
+            });
+          }
+          continue;
+        }
+      } else {
+        continue;
+      }
+    }
 
     fields[meta.field] =
       meta.type === 'number' ? toNumber(firstValue)
