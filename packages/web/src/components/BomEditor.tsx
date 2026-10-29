@@ -75,6 +75,14 @@ const parse = (t: string): number | null => {
 /** Typed, but not something a number can be read from — "." or "-" alone. */
 const unreadable = (t: string): boolean => t.trim() !== '' && parse(t) == null;
 
+/** The server's message with the fields it named, so a refused line can be found. */
+function withDetails(e: ApiError): string {
+  const details = Array.isArray(e.details) ? e.details as Array<{ field?: string; message?: string }> : [];
+  const place = (field: string) => field.replace(/^items\.(\d+)\.?/, (_m, n) => `line ${Number(n) + 1} `).replace(/\.sizes\.(\d+)\.?/, (_m, n) => ` size ${Number(n) + 1} `).trim();
+  const named = details.filter((d) => d.message).map((d) => (d.field ? `${place(d.field)}: ${d.message}` : d.message)).slice(0, 5);
+  return named.length > 0 ? `${e.message} ${named.join('; ')}` : e.message;
+}
+
 /** The items a department offers: the template's list, or for Fabric the factory's fabric list. */
 type ItemsFor = (department: BomDepartment | null) => readonly string[];
 
@@ -198,7 +206,7 @@ export function BomEditor({
     // the screen stayed where it was, and the bill of materials was not saved.
     // A save that fails silently is worse than one that refuses loudly.
     onError: (e) => setSaveError(
-      e instanceof ApiError ? e.message : 'Could not save the bill of materials.',
+      e instanceof ApiError ? withDetails(e) : 'Could not save the bill of materials.',
     ),
   });
 
@@ -211,7 +219,9 @@ export function BomEditor({
     // An item not on the new department's list is kept as typed text rather
     // than cleared: "Collar" moved to Yoko is still a collar.
     const listed = department == null || itemsFor(department).length === 0 || inList(itemsFor, department, r.item);
-    const item = r.item;
+    // Leaving Yoko drops the "Yoko " that saving under it added, so a collar
+    // moved to Press is a collar there, and not read back as Yoko's.
+    const item = r.department === 'Yoko' && department !== 'Yoko' ? r.item.replace(/^yoko\s+/i, '') : r.item;
     setRow(i, {
       department,
       item,
@@ -232,8 +242,13 @@ export function BomEditor({
    * the item's consumption per piece. The cut quantities are what the item
    * has to cover, so nobody retypes them from the cutting sheet.
    */
-  const fillFromCut = (i: number) =>
-    setRow(i, { sizes: sizeRowsFromCut(sizes, parse(rows[i]!.consumptionPerPiece)).map((z) => ({ sizeLabel: z.sizeLabel, qty: String(z.qty) })) });
+  const fillFromCut = (i: number) => {
+    const r = rows[i]!;
+    if (r.sizes.some((z) => parse(z.qty)) && !window.confirm('Replace the size rows already typed on this line with the cut order?')) return;
+    setRow(i, { sizes: sizeRowsFromCut(sizes, parse(r.consumptionPerPiece)).map((z) => ({ sizeLabel: z.sizeLabel, qty: String(z.qty) })) });
+  };
+  /** A line counted in pieces takes one per garment; any other unit needs its consumption per piece typed first. */
+  const needsConsumption = (r: RowDraft) => !/^(pcs?|pieces?|pc\.?)$/i.test(r.unit.trim()) && !(parse(r.consumptionPerPiece)! > 0);
   const cutGenerated = sizes.some((s) => s.cutQty > 0);
   const anyPieces = sizes.some((s) => s.cutQty > 0 || s.orderQty > 0);
   /** The size names offered on a breakdown row: the order's own, else the factory's list. */
@@ -252,10 +267,19 @@ export function BomEditor({
   // A size row with no size would be refused by the server; better said here,
   // next to the button, than as a 422 after it was pressed.
   const unsized = rows.some((r) => r.sizes.some((z) => !z.sizeLabel.trim()));
-  const invalid = unnamed || halfTyped || unsized;
+  const unitless = rows.some((r) => !r.unit.trim());
+  // A line with no quantity is not short of anything, so the shortage view
+  // would show it as covered; the requirement has to be typed.
+  const unquantified = rows.some((r) => rowQty(r) <= 0);
+  // A cleared Issued box would be sent as "unchanged" and silently kept.
+  const issuedBlanked = rows.some((r) => issuedChanged(r) && parse(r.issuedQty) == null);
+  const invalid = unnamed || halfTyped || unsized || unitless || unquantified || issuedBlanked;
   const why = unnamed ? 'Every item needs a name'
     : halfTyped ? 'Finish the number being typed'
-    : unsized ? 'Every size row needs a size' : undefined;
+    : unsized ? 'Every size row needs a size'
+    : unitless ? 'Every item needs a unit'
+    : unquantified ? 'Every item needs a quantity'
+    : issuedBlanked ? 'Type 0 to clear an issued figure' : undefined;
   const total = rows.reduce((a, r) => a + rowQty(r) * (parse(r.unitPriceUsd) ?? 0), 0);
 
   return (
@@ -500,10 +524,12 @@ export function BomEditor({
                           <button
                             type="button"
                             className="btn-ghost btn-sm"
-                            disabled={!anyPieces}
+                            disabled={!anyPieces || needsConsumption(r)}
                             title={!anyPieces
                               ? 'The order has no sizes or quantities yet'
-                              : cutGenerated
+                              : needsConsumption(r)
+                                ? `Type the consumption per piece in ${r.unit.trim() || 'the unit'} first`
+                                : cutGenerated
                                 ? `One row per size, its cut pieces${parse(r.consumptionPerPiece) ? ` × ${r.consumptionPerPiece} per piece` : ''}`
                                 : 'The cut order is not generated yet, so the order quantities are used'}
                             onClick={() => fillFromCut(i)}

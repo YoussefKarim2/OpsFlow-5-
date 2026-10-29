@@ -19,9 +19,10 @@
 
 import ExcelJS from 'exceljs';
 import {
-  analyseColumns, assessMapping, ImportConcept, CONCEPT_META, safeDate,
+  analyseColumns, assessMapping, ImportConcept, CONCEPT_META, safeDate, formatRatioPart,
   type ColumnAnalysis, type ImportIssue,
 } from '@opsflow/shared';
+import { uncachedFormulaIssue } from './extractor.js';
 import { findHeaderCandidates, readTableAt, type SheetTable } from './tabular-extractor.js';
 import { openWorkbook, readCsvWorkbook } from './open-workbook.js';
 import { detectFileKind } from './file-kind.js';
@@ -151,14 +152,22 @@ function fromAgeSheet(age: AgeLayingSheet, candidateSheets: Array<{ name: string
   // a lay.
   let colourLays = 0;
   let repeated = 0;
+  let uncachedColours = 0;
+  const differs: string[] = [];
+  const unplanned: string[] = [];
+  const doubled: string[] = [];
+  const fractionalRates = new Set<string>();
   const seenColour = new Map<string, Record<string, number>>();
   const colourKey = (fabric: string | null, colour: string) => `${(fabric ?? '').trim().toLowerCase()}|${colour.trim().toLowerCase()}`;
   const sameBySize = (a: Record<string, number>, b: Record<string, number>) =>
     Object.keys({ ...a, ...b }).every((s) => (a[s] ?? 0) === (b[s] ?? 0));
+  const anyPositive = (by: Record<string, number>) => Object.values(by).some((n) => n > 0);
+  const wholeGarment = (panel: string | null | undefined) => !panel || /^(all|full|whole|body|garment)$/i.test(panel.trim());
   const blocks = [...new Set(age.colourTables.map((t) => t.block))].sort((a, b) => a - b);
   for (const block of blocks) {
     const pieces = age.colourTables.find((t) => t.block === block && t.kind === 'PIECES');
     if (!pieces) continue;
+    uncachedColours += pieces.uncachedColours;
     const layersT = age.colourTables.find((t) => t.block === block && t.kind === 'LAYERS');
     const metersT = age.colourTables.find((t) => t.block === block && t.kind === 'METERS');
     const rowOf = (t: typeof pieces | undefined, fabric: string | null, colour: string) =>
@@ -166,34 +175,85 @@ function fromAgeSheet(age: AgeLayingSheet, candidateSheets: Array<{ name: string
     for (const row of pieces.rows) {
       const k = colourKey(row.fabric, row.colour);
       const earlier = seenColour.get(k);
-      if (earlier && sameBySize(earlier, row.bySize)) { repeated++; continue; }
-      if (!earlier) seenColour.set(k, row.bySize);
+      // A colour already planned by an earlier table is read once, whatever
+      // the copy says: the same figures are the same plan, blanks and
+      // negative adjustments are not a plan, and different positive figures
+      // are an edited copy the planner has to reconcile, not a second cut.
+      if (earlier) {
+        if (sameBySize(earlier, row.bySize)) repeated++;
+        else if (anyPositive(row.bySize)) differs.push(row.colour);
+        continue;
+      }
+      seenColour.set(k, row.bySize);
+      if (age.lays.some((l) => wholeGarment(l.panel) && colourKey(l.fabric ?? mainFabric, l.color ?? '') === k)) doubled.push(row.colour);
       const layersRow = rowOf(layersT, row.fabric, row.colour);
       const metersRow = rowOf(metersT, row.fabric, row.colour);
       for (const size of pieces.sizes) {
         const n = row.bySize[size];
         if (!n || n <= 0) continue;
         const rateRaw = pieces.params?.rate[size];
-        const rate = rateRaw != null && rateRaw > 0 ? Math.max(1, Math.round(rateRaw)) : 1;
-        const layers = Math.round(layersRow?.bySize[size] ?? Math.ceil(n / rate));
+        const tableLayers = layersRow?.bySize[size];
+        let rate: number;
+        let layers: number;
+        if (rateRaw != null && rateRaw > 0) {
+          rate = Math.max(1, Math.round(rateRaw));
+          if (Math.abs(rateRaw - rate) > 1e-9) fractionalRates.add(`${size} ${rateRaw}`);
+          layers = Math.round(tableLayers ?? Math.ceil(n / rate));
+        } else if (tableLayers != null && tableLayers > 0) {
+          // No rate for this size, but the sheet's LAYER table says how many
+          // layers cut it: the rate is what those layers give.
+          layers = Math.round(tableLayers);
+          rate = Math.max(1, Math.ceil(n / layers));
+        } else {
+          // Pieces with neither a rate nor a layer count: the sheet has not
+          // planned this size. Inventing one piece per layer would import a
+          // lay of as many layers as pieces, with no fabric.
+          unplanned.push(`${row.colour} ${size} (${n} pcs)`);
+          continue;
+        }
         const markerLengthM = pieces.params?.markerLengthM[size] ?? null;
         const totalLengthM = metersRow?.bySize[size] ?? (markerLengthM != null ? Math.ceil(layers * markerLengthM) : null);
         rows.push({
           ...blank, poNumber, rowNumber: rows.length + 1, kind: 'LAY',
           fabricName: row.fabric ?? mainFabric, fabricColor: row.colour, panel: row.panel ?? 'ALL',
-          sizeRatio: `(${size}${rate})`, layers, markerLengthM, totalLengthM, nestPcs: null,
+          sizeRatio: formatRatioPart(size, rate), layers, markerLengthM, totalLengthM, nestPcs: null,
           efficiencyPct: pieces.params?.eff[size] ?? null, maxLayer: null,
         });
         colourLays++;
       }
     }
   }
+  if (unplanned.length > 0) {
+    issues.push({
+      level: 'WARNING', field: 'layers', sheet: age.sheetName, cell: null,
+      message: `No pieces-per-layer rate and no layer count for ${unplanned.join(', ')}: not imported as lays. Fill the RATE row or the LAYER table for those sizes and import again.`,
+    });
+  }
+  if (differs.length > 0) {
+    issues.push({
+      level: 'WARNING', field: null, sheet: age.sheetName, cell: null,
+      message: `The sheet's second set of cut tables gives different figures for ${[...new Set(differs)].join(', ')}; the first set is imported. Check which copy the cutting room follows.`,
+    });
+  }
+  if (doubled.length > 0) {
+    issues.push({
+      level: 'WARNING', field: null, sheet: age.sheetName, cell: null,
+      message: `${[...new Set(doubled)].join(', ')} appears both as a whole-garment lay in the lay table and in the cut tables by colour, so its pieces are planned twice. Remove one before importing.`,
+    });
+  }
+  if (fractionalRates.size > 0) {
+    issues.push({
+      level: 'WARNING', field: null, sheet: age.sheetName, cell: null,
+      message: `The RATE row is not whole pieces per layer (${[...fractionalRates].join(', ')}); the ratio is rounded to the nearest whole number.`,
+    });
+  }
+  if (uncachedColours > 0) issues.push({ ...uncachedFormulaIssue(uncachedColours, age.sheetName), field: 'color' });
 
   let panelRows = 0;
   for (const t of age.panelTables) {
     for (const c of t.colours) {
       for (const p of c.parts) {
-        const ratio = Object.entries(p.bySize).map(([size, n]) => `(${size}${n})`).join(', ');
+        const ratio = Object.entries(p.bySize).map(([size, n]) => formatRatioPart(size, n)).join(', ');
         if (!ratio) continue;
         rows.push({
           ...blank, poNumber, rowNumber: rows.length + 1, kind: 'PANEL',
@@ -263,6 +323,12 @@ function fromAgeSheet(age: AgeLayingSheet, candidateSheets: Array<{ name: string
   };
 }
 
+/** How much of a plan a factory sheet holds: lays, panel tables, and the cut tables by colour. */
+function ageSheetSize(age: AgeLayingSheet): number {
+  return age.lays.length + age.panelTables.length
+    + age.colourTables.filter((t) => t.kind === 'PIECES').reduce((a, t) => a + t.rows.length, 0);
+}
+
 function toNumber(value: unknown): number | null {
   if (value == null || value === '') return null;
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
@@ -314,10 +380,10 @@ export async function extractLayingMarking(
   // column is known, and the review screen shows them as recognised.
   const ageSheets = wb.worksheets
     .map((ws) => ({ ws, age: readAgeLayingSheet(ws) }))
-    .filter((x): x is { ws: ExcelJS.Worksheet; age: AgeLayingSheet } => x.age != null && (x.age.lays.length > 0 || x.age.panelTables.length > 0));
+    .filter((x): x is { ws: ExcelJS.Worksheet; age: AgeLayingSheet } => x.age != null && ageSheetSize(x.age) > 0);
   const agePick = options.sheetName
     ? ageSheets.find((x) => x.ws.name === options.sheetName)
-    : [...ageSheets].sort((a, b) => b.age.lays.length - a.age.lays.length)[0];
+    : [...ageSheets].sort((a, b) => ageSheetSize(b.age) - ageSheetSize(a.age))[0];
   if (agePick) {
     return fromAgeSheet(agePick.age, ageSheets.map((x) => ({ name: x.ws.name, rows: x.age.lays.length })));
   }

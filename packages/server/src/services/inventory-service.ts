@@ -818,6 +818,14 @@ export async function issueToProduction(
     materialId: string; orderId: string; qty: number; unit?: string;
     bomItemId?: string | null; locationId?: string | null;
     stage?: string | null; reason?: string | null; batchLot?: string | null; issuedToName?: string | null;
+    /**
+     * Whether the issue is also written to the BOM line's own issue log
+     * (`material_issues`). On by default: the Materials tab issues through
+     * here with the line's id, and without a log row the BOM screen's
+     * "Previous issues" and its issue count never showed the handover. The
+     * BOM routes that write their own log row pass false.
+     */
+    recordBomIssue?: boolean;
   },
 ): Promise<{ material: MaterialRow; drawnFromReservation: number; drawnFromFree: number }> {
   const result = await withSerializableRetry(() => prisma.$transaction(
@@ -893,15 +901,25 @@ export async function issueToProduction(
       if (input.bomItemId) {
         const bom = await tx.bomItem.findUnique({ where: { id: input.bomItemId } });
         if (bom) {
+          const lineQty = convertQty(qty, material.unit, bom.unit) ?? qty;
           await tx.bomItem.update({
             where: { id: input.bomItemId },
             data: {
-              issuedQty: qtyAdd(decOr0(bom.issuedQty), convertQty(qty, material.unit, bom.unit) ?? qty),
+              issuedQty: qtyAdd(decOr0(bom.issuedQty), lineQty),
               issuedAt: new Date(),
               issuedByName: actor.name,
               issuedToName: input.issuedToName ?? bom.issuedToName,
             },
           });
+          if (input.recordBomIssue !== false) {
+            await tx.materialIssue.create({
+              data: {
+                orderId: input.orderId, bomItemId: bom.id, qty: lineQty, unit: bom.unit,
+                issuedById: actor.id, issuedToName: input.issuedToName ?? null,
+                notes: input.reason ?? `Issued from stock${input.stage ? ` to ${humanStage(input.stage)}` : ''}`,
+              },
+            });
+          }
         }
       }
 
@@ -975,6 +993,8 @@ export async function returnFromProduction(
   input: {
     materialId: string; orderId: string; qty: number; unit?: string;
     bomItemId?: string | null; locationId?: string | null; reason?: string | null;
+    /** As on `issueToProduction`: the return is logged on the BOM line as a negative issue unless false. */
+    recordBomIssue?: boolean;
   },
 ): Promise<MaterialRow> {
   await withSerializableRetry(() => prisma.$transaction(async (tx) => {
@@ -1055,11 +1075,20 @@ export async function returnFromProduction(
     if (input.bomItemId) {
       const bom = await tx.bomItem.findUnique({ where: { id: input.bomItemId } });
       if (bom) {
+        // Back into the line's unit, as on the way out.
+        const lineQty = convertQty(qty, material.unit, bom.unit) ?? qty;
         await tx.bomItem.update({
           where: { id: input.bomItemId },
-          // Back into the line's unit, as on the way out.
-          data: { issuedQty: Math.max(0, qtySub(decOr0(bom.issuedQty), convertQty(qty, material.unit, bom.unit) ?? qty)) },
+          data: { issuedQty: Math.max(0, qtySub(decOr0(bom.issuedQty), lineQty)) },
         });
+        if (input.recordBomIssue !== false) {
+          await tx.materialIssue.create({
+            data: {
+              orderId: input.orderId, bomItemId: bom.id, qty: -lineQty, unit: bom.unit,
+              issuedById: actor.id, notes: input.reason ?? 'Returned unused to stock',
+            },
+          });
+        }
       }
     }
   }, { isolationLevel: 'Serializable' }));

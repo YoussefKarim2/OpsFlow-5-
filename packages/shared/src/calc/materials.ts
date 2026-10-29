@@ -66,7 +66,10 @@ export function computeBomSummary(items: readonly BomItemInput[]): BomSummary {
     shortItems: shortItems.length,
     completeItems: results.filter((r) => r.status === 'COMPLETE' || r.status === 'OVER_ISSUED').length,
     notIssuedItems: results.filter((r) => r.status === 'NOT_ISSUED').length,
-    fullyIssued: results.length > 0 && shortItems.length === 0,
+    // A line with no requirement is not covered, it is unfinished: nothing
+    // is "short" against zero, so without this a bill of nameless-quantity
+    // lines read as fully issued and opened the production gate.
+    fullyIssued: results.length > 0 && shortItems.length === 0 && results.every((r) => r.requiredQty > 0),
     overallCoveragePct: safePct(totalIssued, totalRequired),
     topShortages: [...shortItems].sort((a, b) => b.shortQty - a.shortQty).slice(0, 5),
   };
@@ -194,17 +197,36 @@ export interface LayResult extends Omit<LayInput, 'totalLengthM'> {
  */
 export function parseSizeRatio(ratio: string): Record<string, number> {
   const out: Record<string, number> = {};
-  const groups = ratio.match(/\(([^)]+)\)/g) ?? [];
+  // "(YXS1)" — count inside — or "(YXS)4" — count outside, the factory's
+  // collar form, and the only one that works for a size ending in a digit.
+  const groups = ratio.matchAll(/\(([^)]+)\)\s*(\d+)?/g);
   for (const g of groups) {
-    const inner = g.slice(1, -1).trim();
-    const m = inner.match(/^(.*?)(\d+)$/);
-    if (!m) continue;
-    const size = (m[1] ?? '').trim();
-    const count = Number(m[2]);
+    const inner = g[1]!.trim();
+    let size: string;
+    let count: number;
+    if (g[2] != null) {
+      size = inner;
+      count = Number(g[2]);
+    } else {
+      const m = inner.match(/^(.*?)(\d+)$/);
+      if (!m) continue;
+      size = (m[1] ?? '').trim();
+      count = Number(m[2]);
+    }
     if (!size || !Number.isFinite(count)) continue;
     out[size] = (out[size] ?? 0) + count;
   }
   return out;
+}
+
+/**
+ * One part of a size ratio, in the form `parseSizeRatio` reads back: "(YXS3)"
+ * for a size that ends in a letter, "(28)3" for one that ends in a digit —
+ * "(283)" would read as size 28, count 3 one day and size 2, count 83 the next.
+ */
+export function formatRatioPart(size: string, count: number): string {
+  const s = size.trim();
+  return /\d$/.test(s) ? `(${s})${count}` : `(${s}${count})`;
 }
 
 export function computeLay(lay: LayInput): LayResult {

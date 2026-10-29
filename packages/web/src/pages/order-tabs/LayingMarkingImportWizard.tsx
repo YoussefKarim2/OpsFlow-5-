@@ -291,9 +291,15 @@ function MapStep({
             subtitle="From the sheet's colour tables: pieces per size, the layers that cut them and the meters they take. Each colour and size becomes one lay."
           />
           <div className="overflow-x-auto">
-            {(x.colourTables ?? []).filter((t) => t.kind === 'PIECES' && t.block === 1).map((t) => {
-              const layers = (x.colourTables ?? []).find((o) => o.block === t.block && o.kind === 'LAYERS');
-              const meters = (x.colourTables ?? []).find((o) => o.block === t.block && o.kind === 'METERS');
+            {(x.colourTables ?? []).filter((t) => t.kind === 'PIECES' && t.block === 1).map((first) => {
+              const all = x.colourTables ?? [];
+              const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+              // The first table, plus any colour only a later copy plans — what the import reads.
+              const extra = all.filter((o) => o.kind === 'PIECES' && o.block > 1).flatMap((o) => o.rows)
+                .filter((r, i, arr) => !first.rows.some((f) => same(f.colour, r.colour)) && arr.findIndex((q) => same(q.colour, r.colour)) === i);
+              const t = { ...first, rows: [...first.rows, ...extra] };
+              const layers = all.find((o) => o.block === t.block && o.kind === 'LAYERS');
+              const meters = all.find((o) => o.block === t.block && o.kind === 'METERS');
               const sizes = t.sizes.filter((s) => t.rows.some((r) => (r.bySize[s] ?? 0) > 0));
               const sum = (by: Record<string, number> | undefined) => Object.values(by ?? {}).reduce((a, b) => a + Math.max(0, b), 0);
               return (
@@ -317,11 +323,11 @@ function MapStep({
                         <td colSpan={3} />
                       </tr>
                     )}
-                    {t.rows.map((r) => {
-                      const l = layers?.rows.find((o) => o.colour === r.colour);
-                      const m = meters?.rows.find((o) => o.colour === r.colour);
+                    {t.rows.map((r, i) => {
+                      const l = layers?.rows.find((o) => same(o.colour, r.colour));
+                      const m = meters?.rows.find((o) => same(o.colour, r.colour));
                       return (
-                        <tr key={r.colour}>
+                        <tr key={`${i}-${r.colour}`}>
                           <td className="td text-xs font-medium">{r.colour}</td>
                           {sizes.map((s) => (
                             <td key={s} className="td text-center"><span className={clsx('tnum text-sm', !r.bySize[s] && 'text-ink-300')}>{r.bySize[s] || '·'}</span></td>

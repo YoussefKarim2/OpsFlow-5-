@@ -64,3 +64,14 @@ describe('the BOM summary', () => {
     assert.equal(s.topShortages[0]!.item, 'Size');
   });
 });
+
+test('a bill with a line that has no requirement is not fully issued', () => {
+  const base = { id: 'x', category: 'ACCESSORY', item: 'Thread', unit: 'Pcs', unitPriceUsd: null, supplier: null, notes: null, color: null, position: null, description: null, consumptionPerPiece: null } as const;
+  const s = computeBomSummary([
+    { ...base, requiredQty: 10, issuedQty: 10 },
+    { ...base, id: 'y', requiredQty: 0, issuedQty: 0 },
+  ] as never);
+  assert.equal(s.shortItems, 0);
+  assert.equal(s.fullyIssued, false);
+  assert.equal(computeBomSummary([{ ...base, requiredQty: 10, issuedQty: 10 }] as never).fullyIssued, true);
+});

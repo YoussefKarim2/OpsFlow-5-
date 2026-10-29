@@ -24,6 +24,8 @@
  */
 
 import type ExcelJS from 'exceljs';
+import { formatRatioPart } from '@opsflow/shared';
+import { isUncachedFormula } from './extractor.js';
 
 export interface AgeLay {
   /** The sheet row, for messages. */
@@ -70,6 +72,8 @@ export interface AgeColourTable {
   totals: { bySize: Record<string, number>; total: number | null } | null;
   /** The per-size parameters above a PIECES table. */
   params: { eff: Record<string, number>; markerLengthM: Record<string, number>; rate: Record<string, number> } | null;
+  /** Rows with figures whose colour is a formula the file holds no result for; they could not be read. */
+  uncachedColours: number;
 }
 
 /**
@@ -219,8 +223,27 @@ function readBySize(row: ExcelJS.Row, sizes: ReadonlyArray<{ col: number; name: 
 /** "(YXS1), (YS1)" from pieces per size and the layer count, when the sheet left the ratio blank. */
 function ratioFrom(bySize: Record<string, number>, layers: number | null): string | null {
   if (!layers || layers <= 0) return null;
-  const parts = Object.entries(bySize).map(([size, qty]) => `(${size}${Math.max(1, Math.round(qty / layers))})`);
+  const parts = Object.entries(bySize).map(([size, qty]) => formatRatioPart(size, Math.max(1, Math.round(qty / layers))));
   return parts.length > 0 ? parts.join(', ') : null;
+}
+
+/**
+ * A date as the title block gives it: an Excel date cell reads as ISO text
+ * already; one typed as "21/10/2026" or "21.10.26" is day-first, as the
+ * factory writes dates.
+ */
+function isoDate(text: string | null): string | null {
+  if (!text) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+  const m = text.trim().match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2}|\d{4})$/);
+  if (!m) return null;
+  const day = Number(m[1]);
+  const month = Number(m[2]);
+  const year = m[3]!.length === 2 ? 2000 + Number(m[3]) : Number(m[3]);
+  if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const d = new Date(Date.UTC(year, month - 1, day));
+  if (d.getUTCMonth() !== month - 1) return null;
+  return d.toISOString().slice(0, 10);
 }
 
 // ── The title block ─────────────────────────────────────────────────────────
@@ -281,8 +304,7 @@ function readTitleBlock(ws: ExcelJS.Worksheet, headerRow: number): AgeLayingShee
   }
   const fabrics = [found.fabric1, found.fabric2, found.fabric3].filter((f): f is string => !!f && f !== '0');
   const pct = found.cutPercentage ? Number(found.cutPercentage.replace('%', '')) : null;
-  const dateText = found.fabricDateToExternal ?? null;
-  const date = dateText && /^\d{4}-\d{2}-\d{2}$/.test(dateText) ? dateText : null;
+  const date = isoDate(found.fabricDateToExternal ?? null);
   return {
     poNumber: found.poNumber ?? null, orderName: found.orderName ?? null, itemType: found.itemType ?? null,
     gender: found.gender ?? null, client: found.client ?? null, season, fabrics,
@@ -481,6 +503,7 @@ function readColourTables(ws: ExcelJS.Worksheet, layHeader: { row: number; cols:
 
       const rows: AgeColourTable['rows'] = [];
       let totals: AgeColourTable['totals'] = null;
+      let uncachedColours = 0;
       for (let k = r + 1; k <= Math.min(maxRow, r + 60); k++) {
         const line = ws.getRow(k);
         const fabric = cellStr(line.getCell(c)) || null;
@@ -490,11 +513,19 @@ function readColourTables(ws: ExcelJS.Worksheet, layHeader: { row: number; cols:
           totals = { bySize, total: totalCol != null ? cellNum(line.getCell(totalCol)) : null };
           break;
         }
+        // Without a Totals row the next table follows directly: its title
+        // ("LAYER") is a word in the fabric column with nothing beside it,
+        // and its header is another "fabric | … | PANAL" row.
+        if (key(fabric ?? '') === 'fabric' && /^pana?l$|^panel$/.test(key(cellStr(line.getCell(c + 2))))) break;
         if (!fabric && !colour) { if (Object.keys(bySize).length === 0) break; continue; }
-        if (!colour) continue;
+        if (!colour) {
+          if (Object.keys(bySize).length === 0) break;
+          if (isUncachedFormula(line.getCell(c + 1).value)) uncachedColours++;
+          continue;
+        }
         rows.push({ fabric, colour, panel: cellStr(line.getCell(c + 2)) || null, bySize, total: totalCol != null ? cellNum(line.getCell(totalCol)) : null });
       }
-      tables.push({ block, kind, title, sizes: sizes.map((s) => s.name), rows, totals, params });
+      tables.push({ block, kind, title, sizes: sizes.map((s) => s.name), rows, totals, params, uncachedColours });
       c += 3;
     }
   }
@@ -622,6 +653,11 @@ export function readAgeLayingSheet(ws: ExcelJS.Worksheet): AgeLayingSheet | null
     summary = [];
     for (const l of fabricLines) {
       if (l.department && !/fabric/i.test(l.department)) continue;
+      // A line with neither a quantity nor an issued figure says nothing the
+      // fabric position can use — on one sheet it was a row typed a column
+      // across, with "100% Polyester" where the quantity goes.
+      if (l.qty == null && l.issued == null) continue;
+      if (l.qty == null && !/^(m|met|meter|metre|mtr)s?\.?$/i.test(l.unit ?? '')) continue;
       const k = fabricKey(l.item, l.colour);
       if (seen.has(k)) continue;
       seen.add(k);

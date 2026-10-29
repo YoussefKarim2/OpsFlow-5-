@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
-import { computeBomSummary, groupBomByCategory, computeMarkerPlan, computeFabricPosition, parseSizeRatio, unitsCompatible, type BomItemInput, type CutSize, type LayInput } from '@opsflow/shared';
+import { computeBomSummary, groupBomByCategory, computeMarkerPlan, computeFabricPosition, parseSizeRatio, unitsCompatible, normaliseUnit, type BomItemInput, type CutSize, type LayInput } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
@@ -137,8 +137,8 @@ const bomItemSchema = z.object({
   description: z.string().max(2000).nullish(),
   colorId: z.string().nullish(),
   colorText: z.string().max(200).nullish(),
-  consumptionPerPiece: z.number().nonnegative().nullish(),
-  requiredQty: z.number().nonnegative(),
+  consumptionPerPiece: z.number().nonnegative().max(999_999.999999).nullish(),
+  requiredQty: z.number().nonnegative().max(9_999_999_999),
   /**
    * What the warehouse has actually issued.
    *
@@ -263,6 +263,36 @@ function toHistory(l: {
  * needed in three sizes would be counted once, or three times, depending on
  * which field the reader trusted.
  */
+/** Whether two spellings mean one unit: "pcs", "Pcs" and "PCS" are the same column. */
+const sameUnit = (a: string, b: string): boolean =>
+  (normaliseUnit(a) ?? a.trim().toLowerCase()) === (normaliseUnit(b) ?? b.trim().toLowerCase());
+
+/**
+ * Refuse a unit change the line's history cannot follow.
+ *
+ * The unit a line is counted in is the unit its issues were recorded in.
+ * Once anything has been issued, "100 Met." does not become "100 Cm." by
+ * renaming the column; and a line drawn from stock must stay in a unit the
+ * material can be converted to, or every later issue is refused.
+ */
+function assertUnitChange(
+  before: { item: string; unit: string; issuedQty: Prisma.Decimal; _count: { issues: number }; material: { unit: string } | null },
+  unit: string,
+): void {
+  if (sameUnit(unit, before.unit)) return;
+  if (Number(before.issuedQty.toString()) > 0) {
+    throw new ConflictError(`${before.item} has already been issued in ${before.unit}, so its unit cannot be changed to ${unit}. Correct the issued figure to 0 first, or add a new line.`);
+  }
+  if (before._count.issues > 0) {
+    throw new ConflictError(`${before.item} has issue records in ${before.unit}, so its unit cannot be changed to ${unit}. Add a new line in ${unit} instead.`);
+  }
+  if (before.material && !unitsCompatible(unit, before.material.unit)) {
+    throw new ValidationError(`${before.item} is drawn from stock held in ${before.material.unit}; ${unit} cannot be converted to it. Unlink the material on the Materials tab first.`);
+  }
+}
+
+const ISSUE_PERMISSION_MESSAGE = 'Changing the issued figure requires the "material:issue" permission. Leave the Issued column as it was.';
+
 /**
  * Set the issued quantity to a figure somebody typed, and record the change.
  *
@@ -289,6 +319,8 @@ async function setIssuedQty(
     const delta = issued - was;
     const movement = {
       materialId: item.materialId, orderId: item.orderId, unit: item.unit, bomItemId: item.id, reason: notes,
+      // The log row is written below with exactly the typed difference.
+      recordBomIssue: false,
     };
     if (delta > 0) await issueToProduction(actor, { ...movement, qty: delta });
     else await returnFromProduction(actor, { ...movement, qty: -delta });
@@ -352,22 +384,12 @@ materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHa
   // log gets a row — and issuing is the warehouse's permission, not the
   // editor's. A coordinator may write the whole bill and still not issue it.
   if (rows.some((r) => r.issuedQty != null) && !actor.permissions.includes('material:issue')) {
-    throw new ForbiddenError('Changing the issued figure requires the "material:issue" permission. Leave the Issued column as it was.');
+    throw new ForbiddenError(ISSUE_PERMISSION_MESSAGE);
   }
 
-  // The unit a line is counted in is the unit its issues were recorded in.
-  // Once anything has been issued, "100 Met." does not become "100 Cm." by
-  // renaming the column; and a line drawn from stock must stay in a unit the
-  // material can be converted to, or every later issue is refused.
   for (const r of rows) {
     const before = r.id ? known.get(r.id) : undefined;
-    if (!before || r.unit.trim() === before.unit.trim()) continue;
-    if (Number(before.issuedQty.toString()) > 0 || before._count.issues > 0) {
-      throw new ConflictError(`${before.item} has already been issued in ${before.unit}, so its unit cannot be changed to ${r.unit}. Correct the issued figure to 0 first, or add a new line.`);
-    }
-    if (before.material && !unitsCompatible(r.unit, before.material.unit)) {
-      throw new ValidationError(`${before.item} is drawn from stock held in ${before.material.unit}; ${r.unit} cannot be converted to it. Unlink the material on the Materials tab first.`);
-    }
+    if (before) assertUnitChange(before, r.unit);
   }
   const sent = new Set(rows.map((r) => r.id).filter((id): id is string => !!id));
   const removedRows = removeIds
@@ -399,7 +421,21 @@ materialsRouter.put('/:orderId/bom', requirePermission('material:edit'), asyncHa
   try {
     await prisma.$transaction(async (tx) => {
       // Deleting first frees any unique constraint the rewritten rows might want.
-      if (removed.length > 0) await tx.bomItem.deleteMany({ where: { id: { in: removed } } });
+      // The blocker above read the lines before this transaction; an issue the
+      // warehouse recorded in between would cascade away with its line, so the
+      // delete itself refuses a line that has history by now.
+      if (removed.length > 0) {
+        const { count } = await tx.bomItem.deleteMany({
+          where: {
+            id: { in: removed },
+            issues: { none: {} },
+            reservations: { none: { status: { in: ['ACTIVE', 'PENDING'] } } },
+          },
+        });
+        if (count !== removed.length) {
+          throw new ConflictError('Material was issued or reserved against a removed line while this editor was open. Reload the page and try again.');
+        }
+      }
 
       for (const [i, row] of rows.entries()) {
         const { id, sizes, issuedQty, ...fields } = row;
@@ -506,6 +542,7 @@ materialsRouter.post('/:orderId/bom', requirePermission('material:edit'), asyncH
   const actor = currentUser(req);
   const parsed = bomItemSchema.parse(req.body);
   const { rest: input, issued } = splitIssued(parsed);
+  if (issued != null && !actor.permissions.includes('material:issue')) throw new ForbiddenError(ISSUE_PERMISSION_MESSAGE);
 
   const order = await prisma.order.findUnique({ where: { id: req.params.orderId } });
   if (!order) throw new NotFoundError('Order');
@@ -530,9 +567,19 @@ materialsRouter.patch('/bom/:id', requirePermission('material:edit'), asyncHandl
   const actor = currentUser(req);
   const parsed = bomItemSchema.partial().parse(req.body);
   const { rest: input, issued } = splitIssued(parsed);
+  if (issued != null && !actor.permissions.includes('material:issue')) throw new ForbiddenError(ISSUE_PERMISSION_MESSAGE);
 
-  const item = await prisma.bomItem.findUnique({ where: { id: req.params.id } });
+  const item = await prisma.bomItem.findUnique({
+    where: { id: req.params.id },
+    include: { material: { select: { unit: true } }, sizes: { select: { qty: true } }, ...BOM_HISTORY_COUNT },
+  });
   if (!item) throw new NotFoundError('BOM item');
+  // The same rules as the whole-table save: the unit follows the line's
+  // history, and a line broken down by size is the sum of its sizes.
+  if (input.unit !== undefined) assertUnitChange(item, input.unit);
+  if (item.sizes.length > 0 && input.requiredQty !== undefined) {
+    input.requiredQty = item.sizes.reduce((a, z) => a + Number(z.qty.toString()), 0);
+  }
 
   // The row as it stands after this edit, so a correction to the issued
   // figure is read against the unit and material the line now has.
@@ -607,6 +654,8 @@ materialsRouter.post('/bom/:id/issue', requirePermission('material:issue'), asyn
     await issueToProduction(actor, {
       materialId: item.materialId, orderId: item.orderId, qty: input.qty, unit: item.unit,
       bomItemId: item.id, issuedToName: input.issuedToName ?? null, reason: input.notes ?? null,
+      // The log row is written below, with the recipient user as well.
+      recordBomIssue: false,
     });
   }
 

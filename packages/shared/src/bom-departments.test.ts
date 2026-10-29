@@ -38,3 +38,8 @@ test('a part typed under Yoko is named as one, and a named one is left alone', (
   assert.equal(bomDepartmentOf('Yoko Collar', 'FABRIC'), 'Yoko');
   assert.equal(bomDepartmentOf('Collar', 'FABRIC'), 'Fabric');
 });
+
+test('a Yoko-named line moved to another department comes back under that department', () => {
+  assert.equal(bomDepartmentOf('Yoko Collar', 'TRANSFER'), 'Press');
+  assert.equal(bomDepartmentOf('Yoko Collar', 'FABRIC'), 'Yoko');
+});

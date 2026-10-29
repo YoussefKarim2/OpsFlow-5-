@@ -277,6 +277,55 @@ describe('through the Laying & Marking extractor', () => {
     assert.equal(x.extras?.fabricSummary.length, 4);
   });
 
+  test('a size with pieces but no rate and no layer count is warned about, not invented', async () => {
+    const wb = tranmere();
+    const ws = wb.worksheets[0]!;
+    // Block 1: no RATE for YS, and 40 YS pieces for SILVER/BLACK, which the LAYER table leaves blank.
+    ws.getCell('AI10').value = null;
+    ws.getCell('AI14').value = 40;
+    const x = await extractLayingMarking(Buffer.from(await wb.xlsx.writeBuffer()));
+    const lays = x.rows.filter((row) => row.kind === 'LAY');
+    // COLUMBIA and HUNTER YS still come from the LAYER table (26 pcs over 9 layers → 3 per layer); SILVER YS is left out.
+    assert.deepEqual(lays.map((l) => [l.fabricColor, l.sizeRatio, l.layers]), [
+      ['Black', '(YXS)4, (YS)3', 26],
+      ['COLUMBIA/WH', '(YXS3)', 51], ['COLUMBIA/WH', '(YS3)', 9],
+      ['HUNTER/WHT', '(YXS3)', 38], ['HUNTER/WHT', '(YS3)', 51],
+      ['SILVER/BLACK', '(YXS3)', 23],
+    ]);
+    assert.ok(x.issues.some((i) => i.level === 'WARNING' && /No pieces-per-layer rate and no layer count for SILVER\/BLACK YS \(40 pcs\)/.test(i.message)), x.issues.map((i) => i.message).join('\n'));
+  });
+
+  test('an edited working copy is read once and warned about; a typed date is read day-first', async () => {
+    const wb = tranmere();
+    const ws = wb.worksheets[0]!;
+    ws.getCell('BD12').value = 150; // the copy's COLUMBIA/WH YXS differs from 152
+    ws.getCell('AC9').value = '21/10/2026';
+    const x = await extractLayingMarking(Buffer.from(await wb.xlsx.writeBuffer()));
+    const columbia = x.rows.filter((row) => row.kind === 'LAY' && row.fabricColor === 'COLUMBIA/WH');
+    assert.equal(columbia.length, 2);
+    assert.ok(x.issues.some((i) => i.level === 'WARNING' && /different figures for COLUMBIA\/WH; the first set is imported/.test(i.message)));
+    assert.equal(x.extras?.header.fabricDateToExternal, '2026-10-21');
+  });
+
+  test('a cut table with no Totals row ends where the next table begins', () => {
+    const wb = tranmere();
+    const ws = wb.worksheets[0]!;
+    ws.getCell('AF15').value = null; ws.getCell('AH15').value = null; ws.getCell('AI15').value = null; ws.getCell('AJ15').value = null;
+    const r = readAgeLayingSheet(ws)!;
+    const pieces = r.colourTables.find((t) => t.block === 1 && t.kind === 'PIECES')!;
+    assert.deepEqual(pieces.rows.map((x) => x.colour), ['COLUMBIA/WH', 'HUNTER/WHT', 'SILVER/BLACK']);
+    assert.equal(r.colourTables.filter((t) => t.block === 1).length, 3);
+  });
+
+  test('a sheet planned only in the cut tables, with an empty lay table, is still recognised', async () => {
+    const wb = tranmere();
+    const ws = wb.worksheets[0]!;
+    for (const c of ['C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O']) ws.getCell(`${c}13`).value = null;
+    const x = await extractLayingMarking(Buffer.from(await wb.xlsx.writeBuffer()));
+    assert.equal(x.extras?.layout, 'AGE');
+    assert.equal(x.rows.filter((row) => row.kind === 'LAY').length, 5);
+  });
+
   test('a generic laying table still goes through the column reader', async () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Laying');

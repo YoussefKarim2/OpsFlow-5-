@@ -84,7 +84,9 @@ export function bomItemsFor(department: BomDepartment | null | undefined): reado
  */
 export function bomDepartmentOf(item: string, category: string): BomDepartment | null {
   const k = key(item);
-  if (/\byoko\b/.test(k)) return 'Yoko';
+  // Only a fabric-category line: a "Yoko Collar" moved to Press is stored as
+  // a transfer and belongs there, whatever its name still says.
+  if (category === 'FABRIC' && /\byoko\b/.test(k)) return 'Yoko';
   // A listed item whose stored category is the one its list gives it — a
   // "Hang Tag" stored as an accessory — belongs to that list; the same name
   // stored under another department's category was typed there.

@@ -21,7 +21,7 @@ import {
 import { computeProductionAnalytics } from './production.js';
 import { computeBomSummary } from './materials.js';
 import { computeCosting } from './costing.js';
-import { parseSizeRatio, computeLay, computeMarkerPlan, type LayInput } from './materials.js';
+import { parseSizeRatio, formatRatioPart, computeLay, computeMarkerPlan, type LayInput } from './materials.js';
 import { computeAudit, lookupAql } from './quality.js';
 import { ProductionOperation } from '../enums.js';
 import { WORKFLOW_TEMPLATE, TEMPLATE_TOTAL_MINUTES } from '../workflow-template.js';
@@ -357,6 +357,12 @@ describe('materials — marker plan reproduces the Laying sheet', () => {
     assert.deepEqual(parseSizeRatio('(YXS1), (YS1), (YM1), (YL1), (M1)'), { YXS: 1, YS: 1, YM: 1, YL: 1, M: 1 });
     assert.deepEqual(parseSizeRatio('(2YXS1), (S3), (L1), (XL1)'), { '2YXS': 1, S: 3, L: 1, XL: 1 });
     assert.deepEqual(parseSizeRatio('(2YXS1), (2XL2)'), { '2YXS': 1, '2XL': 2 });
+    // The count outside the brackets: the factory's collar lays, and sizes that end in a digit.
+    assert.deepEqual(parseSizeRatio('(YXS)11, (YS)7, (YM)2, (YL)3'), { YXS: 11, YS: 7, YM: 2, YL: 3 });
+    assert.deepEqual(parseSizeRatio('(28)3, (30)2, (3XL1)'), { '28': 3, '30': 2, '3XL': 1 });
+    assert.equal(formatRatioPart('YXS', 3), '(YXS3)');
+    assert.equal(formatRatioPart('28', 3), '(28)3');
+    assert.deepEqual(parseSizeRatio([formatRatioPart('28', 3), formatRatioPart('2XL', 12)].join(', ')), { '28': 3, '2XL': 12 });
   });
 
   test('lay 1 yields 700 pieces over 140 layers — Laying!V15', () => {

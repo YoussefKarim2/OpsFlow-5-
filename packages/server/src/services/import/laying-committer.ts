@@ -303,19 +303,24 @@ export async function commitLayingImport(
       }
       for (const f of x.fabricSummary) {
         if (!f.fabric) continue;
+        // Only a row an earlier import wrote is updated: a record the
+        // warehouse typed by hand keeps its figures and its notes, and is
+        // not swept away by the next "replace the whole plan".
         const prior = await tx.fabricRecord.findFirst({
           where: {
-            orderId: order.id,
+            orderId: order.id, importJobId: { not: null },
             fabricName: { equals: f.fabric, mode: 'insensitive' },
             ...(f.color ? { colorName: { equals: f.color, mode: 'insensitive' } } : {}),
           },
         });
         // What the sheet's fabric table says was issued, when it says so;
-        // a blank leaves whatever the warehouse recorded.
+        // a blank leaves whatever the warehouse recorded. "Issued to" on
+        // the sheet is a department (CUT), so it goes in the notes rather
+        // than standing as the responsible person.
         const data = {
           fabricName: f.fabric, colorName: f.color, requiredM: f.meters, importJobId: input.jobId,
           ...(f.issuedM != null ? { issuedM: f.issuedM } : {}),
-          ...(f.issuedTo ? { responsibleName: f.issuedTo } : {}),
+          ...(f.issuedTo ? { notes: `Issued to ${f.issuedTo}` } : {}),
         };
         if (prior) await tx.fabricRecord.update({ where: { id: prior.id }, data });
         else { await tx.fabricRecord.create({ data: { ...data, orderId: order.id } }); fabricRecordsCreated++; }
