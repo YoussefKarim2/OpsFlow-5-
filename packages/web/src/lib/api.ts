@@ -33,6 +33,40 @@ export function setToken(token: string | null): void {
 /** Fired when the server says this account must change its password first. */
 export const PASSWORD_CHANGE_REQUIRED_EVENT = 'opsflow:password-change-required';
 
+/** A packing file read back: the server's `PackingLayout`, matched to the order. */
+export interface PackingFileLayoutDto {
+  fileName: string;
+  order: { colours: string[]; sizes: string[] };
+  match: { colours: Record<string, string | null>; cartonColours: Array<string | null>; cartonColourCandidates: number[]; sizes: Record<string, string | null> };
+  layout: {
+    fileKind: 'xlsx' | 'csv' | 'pdf';
+    sheetName: string | null;
+    sheets: string[];
+    details: Array<{ label: string; value: string }>;
+    titles: string[];
+    table: {
+      headerRow: number;
+      shape: 'ROW_PER_SIZE' | 'SIZES_ACROSS' | 'ROW_PER_CARTON';
+      columns: Array<{ index: number; heading: string; role: string }>;
+      sizes: string[];
+    } | null;
+    cartons: Array<{
+      number: string; count: number; colour: string | null; style: string | null;
+      bySize: Record<string, number>; perCarton: number; totalPieces: number;
+      grossKg: number | null; netKg: number | null; measurement: string | null;
+      sheetRow: number; lastRow: number;
+    }>;
+    totals: { cartons: number; pieces: number; grossKg: number | null; netKg: number | null; bySize: Record<string, number>; byColour: Record<string, number> };
+    printedTotals: { pieces: number | null; cartons: number | null; grossKg: number | null; netKg: number | null; sheetRow: number } | null;
+    preview: {
+      firstColumn: number;
+      rows: Array<{ row: number; cells: Array<{ text: string; span?: number }>; kind: 'HEADER' | 'CARTON' | 'TOTAL' | 'DETAIL' | 'OTHER' }>;
+      truncated: boolean;
+    };
+    issues: Array<{ level: 'INFO' | 'WARNING'; message: string }>;
+  };
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -1092,6 +1126,9 @@ export const api = {
 
   packing: {
     lists: (orderId: string) => get<{ data: unknown[] }>(`/packing/${orderId}`),
+    /** What a packing file attached to the order says, read back as a layout. Writes nothing. */
+    fileLayout: (orderId: string, attachmentId: string) =>
+      get<PackingFileLayoutDto>(`/packing/${orderId}/files/${attachmentId}/layout`),
     createList: (orderId: string, body?: unknown) => post<{ id: string }>(`/packing/${orderId}`, body ?? {}),
     addCarton: (listId: string, body: unknown) => post<{ id: string }>(`/packing/list/${listId}/cartons`, body),
     /** A whole size grid in one save, rather than one request per size. */

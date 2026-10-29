@@ -62,7 +62,7 @@ export function normaliseEuropeanNumbers(pages: Array<Array<{ cells: Array<{ tex
 const MEASUREMENT_ROW = /^(chest|bust|sleeve|sleeve\s*length|length|body\s*length|front\s*length|back\s*length|waist|hip|hips|hem|sweep|shoulder|across\s*shoulder|neck|collar|inseam|outseam|cuff|armhole|bicep|rise|thigh|bottom|opening)\b/i;
 
 /** One positioned run of text, as pdf.js reports it. */
-interface TextItem {
+export interface TextItem {
   text: string;
   x: number;
   y: number;
@@ -158,7 +158,7 @@ export const MAX_PDF_PAGES = 150;
 
 const STANDARD_FONTS_DIR = join(dirname(createRequire(import.meta.url).resolve('pdfjs-dist/package.json')), 'standard_fonts') + '/';
 
-async function readPdf(buffer: Buffer): Promise<PdfPage[]> {
+export async function readPdf(buffer: Buffer): Promise<PdfPage[]> {
   // Imported lazily and by its legacy build: the default entry point expects a
   // browser, and the server has no DOM to give it.
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');

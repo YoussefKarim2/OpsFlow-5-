@@ -5,7 +5,7 @@ import { CartonSizes } from '../../components/CartonSizes';
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, PackageCheck, Truck, Trash2 } from 'lucide-react';
+import { Plus, PackageCheck, Truck, Trash2, Table2 } from 'lucide-react';
 import { fmtDate, fmtNumber, type OrderDetailDto } from '@opsflow/shared';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -14,6 +14,7 @@ import {
   Card, CardHeader, StatTile, Num, Modal, Field, Spinner, ErrorNote, EmptyState, clsx, useToast,
 } from '../../components/ui';
 import { AttachmentsPanel } from '../../components/Attachments';
+import { PackingFileLayoutModal } from '../../components/PackingFileLayout';
 import { ComboSelect } from '../../components/ComboSelect';
 
 interface PackingList {
@@ -46,6 +47,9 @@ const SHIP_TONE: Record<string, string> = {
   DELIVERED: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20',
 };
 
+/** A packing file the server can read a layout from. */
+const readableLayout = (fileName: string): boolean => /\.(xlsx|xlsm|csv|txt|pdf)$/i.test(fileName);
+
 export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing" | "shipping" }) {
   const qc = useQueryClient();
   const { can } = useAuth();
@@ -57,6 +61,8 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
   const failed = (fallback: string) => (e: unknown) => toast.error(e instanceof ApiError ? e.message : fallback);
   const [editingCarton, setEditingCarton] = useState<{ id: string; number: string; lines: Array<{ orderSizeId: string | null; qty: number }> } | null>(null);
   const [shipping, setShipping] = useState(false);
+  /** The packing file whose layout is open. */
+  const [layoutOf, setLayoutOf] = useState<{ id: string; fileName: string } | null>(null);
 
   const lists = useQuery({ queryKey: ['packing', order.id], queryFn: () => api.packing.lists(order.id) });
   const shipments = useQuery({ queryKey: ['shipments', order.id], queryFn: () => api.packing.shipments(order.id) });
@@ -365,7 +371,23 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
         documentType="PACKING_LIST"
         stageKey="PACKING"
         title="Packing files"
-        detail="Packing lists and carton photographs for this order."
+        detail="Packing lists and carton photographs for this order. A packing list attached as Excel, CSV or PDF is read and its layout shown."
+        // A packing list attached here is read straight away and its layout
+        // shown; a photograph is just filed.
+        onUploaded={(d) => { if (readableLayout(d.fileName)) setLayoutOf({ id: d.id, fileName: d.fileName }); }}
+        rowAction={{
+          label: 'Layout',
+          title: 'Show what this packing file says',
+          icon: <Table2 className="mr-1 h-3.5 w-3.5" />,
+          applies: (d) => readableLayout(d.fileName),
+          run: (d) => setLayoutOf({ id: d.id, fileName: d.fileName }),
+        }}
+      />
+      <PackingFileLayoutModal
+        orderId={order.id}
+        attachmentId={layoutOf?.id ?? null}
+        fileName={layoutOf?.fileName}
+        onClose={() => setLayoutOf(null)}
       />
       {/* Shipping paperwork is filed separately: it belongs to the shipment,
           not the packing, and is what a forwarder asks for by name. */}

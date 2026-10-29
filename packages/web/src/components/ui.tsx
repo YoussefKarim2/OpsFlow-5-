@@ -268,7 +268,7 @@ export function ErrorNote({ error, onRetry }: { error: unknown; onRetry?: () => 
 }
 
 export function Modal({
-  open, onClose, title, subtitle, children, footer, wide,
+  open, onClose, title, subtitle, children, footer, wide, size,
 }: {
   open: boolean;
   onClose: () => void;
@@ -277,6 +277,8 @@ export function Modal({
   children: ReactNode;
   footer?: ReactNode;
   wide?: boolean;
+  /** "xl" for a document-sized window: a table read from a file. */
+  size?: 'xl';
 }) {
   useEffect(() => {
     if (!open) return;
@@ -290,7 +292,7 @@ export function Modal({
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-ink-950/40 p-4 pt-[6vh]">
       <div className="absolute inset-0" onClick={onClose} aria-hidden />
-      <div className={clsx('relative w-full rounded-lg bg-white shadow-panel', wide ? 'max-w-4xl' : 'max-w-lg')}>
+      <div className={clsx('relative w-full rounded-lg bg-white shadow-panel', size === 'xl' ? 'max-w-6xl' : wide ? 'max-w-4xl' : 'max-w-lg')}>
         <div className="flex items-start justify-between gap-4 border-b border-ink-200 px-5 py-3.5">
           <div>
             <h2 className="text-base font-semibold text-ink-900">{title}</h2>

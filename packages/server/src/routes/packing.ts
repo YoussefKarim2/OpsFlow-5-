@@ -13,6 +13,9 @@ import { cartonHolding, ledgerDeltas, repeatedCartonNumber } from '../services/i
 import { shipmentDates } from '../services/shipment-dates.js';
 import { dateInput } from '../util/date-input.js';
 import { cairoDay } from '../util/cairo-day.js';
+import { storage } from '../services/storage/index.js';
+import { readPackingDocument, matchPackingToOrder } from '../services/import/packing-reader.js';
+import { sizeAliasFor, inWearingOrder } from '../services/import/po-lines.js';
 
 export const packingRouter = Router();
 packingRouter.use(authenticate);
@@ -137,6 +140,42 @@ packingRouter.post('/:orderId', requirePermission('packing:write'), asyncHandler
   });
 
   res.status(201).json({ id: list.id });
+}));
+
+/**
+ * The layout of a packing file attached to the order: its details, its carton
+ * table as read, the totals, and the document itself as it looks — so the
+ * person who attached it sees what it says before anything is typed from it.
+ * Reads only; nothing is written.
+ */
+packingRouter.get('/:orderId/files/:attachmentId/layout', requirePermission('packing:read'), asyncHandler(async (req, res) => {
+  const attachment = await prisma.attachment.findFirst({
+    where: { id: req.params.attachmentId, orderId: req.params.orderId },
+    select: { id: true, fileName: true, storageKey: true },
+  });
+  if (!attachment) throw new NotFoundError('File');
+  if (!(await storage.exists(attachment.storageKey))) {
+    throw new ValidationError(`The contents of "${attachment.fileName}" are no longer stored. Attach it again to read it.`);
+  }
+  if (!/\.(xlsx|xlsm|csv|txt|pdf)$/i.test(attachment.fileName)) {
+    throw new ValidationError(
+      /\.xls$/i.test(attachment.fileName)
+        ? `"${attachment.fileName}" is an older .xls workbook, which cannot be read. Open it in Excel, save it as .xlsx, and attach that.`
+        : `"${attachment.fileName}" is not a spreadsheet or a PDF, so there is no table in it to read.`,
+    );
+  }
+
+  const [colours, sizes] = await Promise.all([
+    prisma.orderColor.findMany({ where: { orderId: req.params.orderId }, include: { color: true }, orderBy: { position: 'asc' } }),
+    prisma.orderSize.findMany({ where: { orderId: req.params.orderId }, include: { size: true } }),
+  ]);
+  const sizeNames = inWearingOrder(sizes.map((s) => ({ name: s.size.name, position: s.position }))).map((s) => s.name);
+  const colourNames = colours.map((c) => c.color.name);
+
+  const buffer = await storage.get(attachment.storageKey);
+  const layout = await readPackingDocument(buffer, attachment.fileName, { orderSizes: sizeNames });
+  const match = matchPackingToOrder(layout, { colours: colourNames, sizes: sizeNames }, sizeAliasFor);
+  res.json({ fileName: attachment.fileName, layout, match, order: { colours: colourNames, sizes: sizeNames } });
 }));
 
 const cartonSchema = z.object({

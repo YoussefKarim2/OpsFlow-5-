@@ -14,10 +14,10 @@
  * coordinator have to remember which of fifteen document types they chose.
  */
 
-import { useRef, useState } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Upload, FileText, Image as ImageIcon, ExternalLink, Trash2 } from 'lucide-react';
-import { fmtDate } from '@opsflow/shared';
+import { fmtDate, type AttachmentDto } from '@opsflow/shared';
 import { api, resolveFileUrl, ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { Card, EmptyState, Spinner, clsx, useToast } from './ui';
@@ -31,7 +31,7 @@ function sizeOf(bytes: number): string {
 }
 
 export function AttachmentsPanel({
-  orderId, documentType, stageKey, title, detail, accept,
+  orderId, documentType, stageKey, title, detail, accept, onUploaded, rowAction,
 }: {
   orderId: string;
   /** What anything uploaded here is filed as, and what is listed back. */
@@ -41,6 +41,10 @@ export function AttachmentsPanel({
   title?: string;
   detail?: string;
   accept?: string;
+  /** Called with the new file once it is attached — the Packing tab opens its layout. */
+  onUploaded?: (attachment: AttachmentDto) => void;
+  /** One extra button on each file the panel lists, for the files it applies to. */
+  rowAction?: { label: string; title: string; icon?: ReactNode; applies: (attachment: AttachmentDto) => boolean; run: (attachment: AttachmentDto) => void };
 }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -75,6 +79,7 @@ export function AttachmentsPanel({
         : ''));
       // What the reader was unsure of, so the grid it wrote is checked.
       for (const w of r.filledMainOrder?.warnings?.slice(0, 3) ?? []) toast.error(w);
+      onUploaded?.(r.data as AttachmentDto);
     },
     onError: (e) => toast.error(e instanceof ApiError ? e.message : 'Could not attach that file.'),
   });
@@ -136,6 +141,16 @@ export function AttachmentsPanel({
                 <span className="shrink-0 text-2xs text-ink-500">
                   {d.version > 1 && `v${d.version} · `}{sizeOf(d.sizeBytes)} · {d.uploadedByName} · {fmtDate(d.createdAt)}
                 </span>
+                {rowAction && d.available !== false && rowAction.applies(d) && (
+                  <button
+                    type="button"
+                    className="btn-ghost btn-sm shrink-0"
+                    title={rowAction.title}
+                    onClick={() => rowAction.run(d)}
+                  >
+                    {rowAction.icon}{rowAction.label}
+                  </button>
+                )}
                 {d.available !== false && (
                   <a
                     href={resolveFileUrl(d.downloadUrl)}
