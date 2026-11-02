@@ -222,3 +222,45 @@ describe('carton numbers and the order', () => {
     assert.deepEqual(m.sizes, { YXS: 'Youth XS', YS: 'Youth Small', M: 'Adult Medium', 'Adult Large': 'Adult Large' });
   });
 });
+
+describe('proformas and files saved without results', () => {
+  /** The factory's proforma: per-style lines, "Discription", cartons estimated as pieces ÷ 120. */
+  function proforma(wb: ExcelJS.Workbook, cached: boolean) {
+    const po = wb.addWorksheet('PO 84873 Tranmer shirt');
+    po.getCell('I16').value = 1092;
+    const ws = wb.addWorksheet('invoice');
+    ws.getCell('A19').value = 'No. of cartons';
+    ws.getCell('C19').value = '289 carton  NW:  KG.  Size 45x45x65CM';
+    ws.getRow(21).values = ['Qty', 'PO#', 'Part No.', 'Discription', 'HTS Code', 'G.W', 'N.W', 'No. Of Cartons', 'Unit'];
+    const f = (formula: string, result: number) => (cached ? { formula, result } : { formula }) as ExcelJS.CellValue;
+    ws.getRow(22).values = [f("'PO 84873 Tranmer shirt'!I16", 1092), 84873, 'XRA-1003', 'Tranmmer Shirt', 6109900000, null, null, f('A22/120', 9.1), 'pce'];
+    ws.getRow(23).values = [624, 84880, 'XRA-1051', 'Training Bib', 6109900000, null, null, f('ROUNDUP(A23/120,1)', 5.2), 'pce'];
+    ws.getRow(24).values = [f('SUM(A22:A23)', 1716), null, null, 'Total', null, null, null, f('SUM(H22:H23)', 14.3)];
+  }
+
+  for (const cached of [true, false]) {
+    test(`cartons are taken as written, styles read from "Discription" (${cached ? 'results saved' : 'no saved results'})`, async () => {
+      const r = await readPackingDocument(await xlsx((wb) => proforma(wb, cached)), 'proforma.xlsx');
+      assert.equal(r.table?.shape, 'ROW_PER_CARTON');
+      assert.deepEqual(r.cartons.map((c) => [c.style, c.count, c.totalPieces]), [['Tranmmer Shirt', 9.1, 1092], ['Training Bib', 5.2, 624]]);
+      assert.equal(r.totals.cartons, 14.3);
+      assert.equal(r.totals.pieces, 1716);
+      assert.equal(r.printedTotals?.pieces, 1716);
+      // Nothing disagrees with the document's own total, and nothing is unreadable.
+      assert.ok(!r.issues.some((i) => i.level === 'WARNING'), JSON.stringify(r.issues));
+      assert.ok(r.issues.some((i) => /not a whole number/.test(i.message)));
+      // "No. of cartons" is the label; the colons in its value do not split it.
+      assert.equal(r.details.find((d) => d.label === 'No. of cartons')?.value, '289 carton  NW:  KG.  Size 45x45x65CM');
+    });
+  }
+
+  test('a formula beyond the calculator is still reported as unreadable', async () => {
+    const r = await readPackingDocument(await xlsx((wb) => {
+      const ws = wb.addWorksheet('PL');
+      ws.getRow(1).values = ['C/No', 'Colour', 'Qty'];
+      ws.getRow(2).values = [1, 'Navy', { formula: 'VLOOKUP(1,Z1:Z2,1,0)' } as ExcelJS.CellValue];
+      ws.getRow(3).values = [2, 'Navy', 20];
+    }), 'pl.xlsx');
+    assert.ok(r.issues.some((i) => /1 formula cell has no saved result/.test(i.message)), JSON.stringify(r.issues));
+  });
+});

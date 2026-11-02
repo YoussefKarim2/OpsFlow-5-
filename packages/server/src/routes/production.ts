@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import {
   QtyLedger, computeProductionAnalytics, computeOperationTotals, computeLineTotals,
-  ledgerTotals, type ProductionEntry,
+  ledgerTotals, linePlanOf, type ProductionEntry,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
@@ -47,7 +47,63 @@ productionRouter.get('/:orderId', requirePermission('production:read'), asyncHan
     }),
     byOperation: computeOperationTotals(entries),
     byLine: computeLineTotals(entries),
+    linePlan: linePlanOf(order),
   });
+}));
+
+const linePlanSchema = z.object({
+  targetPerDay: z.number().int('The target is a whole number of pieces').min(0).max(1_000_000).nullable(),
+  lineName: z.string().trim().max(80).nullable().optional(),
+  machines: z.array(z.object({
+    type: z.string().trim().min(1, 'Every machine needs a type').max(60),
+    qty: z.number().int('Machine counts are whole numbers').min(0).max(9_999).nullable(),
+  })).max(40),
+});
+
+/**
+ * The line's machines and its target per day, saved together — the
+ * Production sheet's table beside the daily log.
+ */
+productionRouter.put('/:orderId/line-plan', requirePermission('production:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const input = linePlanSchema.parse(req.body ?? {});
+  const order = await prisma.order.findFirst({
+    where: { OR: [{ id: req.params.orderId }, { poNumber: req.params.orderId }] },
+    select: { id: true, targetPerDay: true, productionLineName: true, lineMachines: true },
+  });
+  if (!order) throw new NotFoundError('Order');
+
+  // One row per machine type: a type typed twice is one type, its counts added.
+  const machines: Array<{ type: string; qty: number | null }> = [];
+  for (const m of input.machines) {
+    const same = machines.find((x) => x.type.toLowerCase() === m.type.toLowerCase());
+    if (same) same.qty = same.qty == null && m.qty == null ? null : (same.qty ?? 0) + (m.qty ?? 0);
+    else machines.push({ type: m.type, qty: m.qty });
+  }
+  const before = linePlanOf(order);
+  const updated = await prisma.order.update({
+    where: { id: order.id },
+    data: {
+      targetPerDay: input.targetPerDay,
+      ...(input.lineName !== undefined ? { productionLineName: input.lineName || null } : {}),
+      lineMachines: machines,
+    },
+    select: { targetPerDay: true, productionLineName: true, lineMachines: true },
+  });
+  const after = linePlanOf(updated);
+  const changes = [
+    before.targetPerDay !== after.targetPerDay ? `target ${before.targetPerDay ?? '—'} → ${after.targetPerDay ?? '—'} pcs/day` : null,
+    before.lineName !== after.lineName ? `line ${before.lineName ?? '—'} → ${after.lineName ?? '—'}` : null,
+    JSON.stringify(before.machines) !== JSON.stringify(after.machines) ? `machines: ${after.machines.filter((m) => m.qty).map((m) => `${m.qty} ${m.type}`).join(', ') || 'none'} (${after.totalMachines} in all)` : null,
+  ].filter(Boolean);
+  if (changes.length > 0) {
+    await logActivity({
+      orderId: order.id, actorId: actor.id, actorName: actor.name,
+      action: 'LINE_PLAN_UPDATED', summary: `updated the production line plan: ${changes.join('; ')}`,
+      entityType: 'Order', entityId: order.id,
+    });
+  }
+  res.json(after);
 }));
 
 const recordSchema = z.object({

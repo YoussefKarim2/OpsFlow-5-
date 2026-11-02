@@ -38,8 +38,14 @@ export const BOM_DEPARTMENT_ITEMS: Record<BomDepartment, readonly string[]> = {
   ],
 };
 
-/** The template's unit list (Data-Base!AL). */
-export const BOM_UNITS = ['Met.', 'Pcs', 'Kg.', 'Grm.', 'Cm.', 'Block', 'Roll'] as const;
+/** The template's unit list (Data-Base!AL), widened on 2026-11-02 with the other units a bill uses. */
+export const BOM_UNITS = [
+  // Length, weight, volume — each converts to the others of its kind.
+  'Met.', 'Cm.', 'Yard', 'Kg.', 'Grm.', 'Litre',
+  // Counts: pieces and dozens convert; the rest are packs whose size varies.
+  'Pcs', 'Dozen', 'Pair', 'Set',
+  'Roll', 'Cone', 'Spool', 'Block', 'Sheet', 'Bag', 'Pack', 'Box', 'Carton',
+] as const;
 
 /** The stored category for each listed item. */
 const ITEM_CATEGORY: Record<string, string> = {

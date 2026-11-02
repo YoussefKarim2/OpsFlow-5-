@@ -204,6 +204,12 @@ model Order {
   /// cannot be turned into earned minutes. Null until somebody enters it;
   /// nothing else in the application knows the value.
   samMinutes               Decimal?              @db.Decimal(8, 3)
+  /// Target production per day, pieces — the Production sheet's "Target Production / Day".
+  targetPerDay             Int?
+  /// The production line the order runs on, as the factory names it ("Line 3").
+  productionLineName       String?
+  /// The line's machines: [{ type: "Single", qty: 4 }, …] — the sheet's Machine Qty / Machine Type table.
+  lineMachines             Json?
   /// Cut allowance, stored as a fraction (0.05 = 5%). Drives the cut matrix.
   cutPercentage            Decimal               @default(0.05) @db.Decimal(5, 4)
   /// When the cut order was last written. Set even when it came out empty

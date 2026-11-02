@@ -72,7 +72,8 @@ const UNIT_ALIASES: Record<string, UnitOfMeasure> = {
   PCS: 'PCS', PC: 'PCS', PIECE: 'PCS', PIECES: 'PCS', EA: 'PCS', EACH: 'PCS', NO: 'PCS', UNIT: 'PCS', UNITS: 'PCS',
   DZN: 'DZN', DZ: 'DZN', DOZ: 'DZN', DOZEN: 'DZN', DOZENS: 'DZN',
   ROLL: 'ROLL', ROLLS: 'ROLL',
-  CONE: 'CONE', CONES: 'CONE',
+  // A spool of thread is the same thing as a cone for the store.
+  CONE: 'CONE', CONES: 'CONE', SPOOL: 'CONE', SPOOLS: 'CONE',
   SET: 'SET', SETS: 'SET',
   BOX: 'BOX', BOXES: 'BOX', CTN: 'BOX', CARTON: 'BOX', CARTONS: 'BOX',
   L: 'L', LTR: 'L', LITRE: 'L', LITER: 'L', LITRES: 'L', LITERS: 'L',
@@ -123,6 +124,8 @@ export function convertQty(
  */
 const PACK_UNITS: Record<string, string> = {
   BLOCK: 'block', BLOCKS: 'block', BLK: 'block', BLKS: 'block',
+  PACK: 'pack', PACKS: 'pack', PKT: 'pack', BAG: 'bag', BAGS: 'bag', SHEET: 'sheet', SHEETS: 'sheet',
+  PAIR: 'pair', PAIRS: 'pair',
 };
 
 /**

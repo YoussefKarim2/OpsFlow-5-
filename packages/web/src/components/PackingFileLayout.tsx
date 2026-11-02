@@ -98,7 +98,7 @@ function Summary({ data }: { data: PackingFileLayoutDto }) {
   const { layout } = data;
   const t = layout.totals;
   const tiles: Array<[string, string]> = [
-    ['Cartons', fmt(t.cartons)],
+    ['Cartons', fmt(t.cartons, 2)],
     ['Pieces', fmt(t.pieces)],
     ['Gross weight', t.grossKg == null ? '—' : `${fmt(t.grossKg, 2)} kg`],
     ['Net weight', t.netKg == null ? '—' : `${fmt(t.netKg, 2)} kg`],
@@ -117,7 +117,12 @@ function Summary({ data }: { data: PackingFileLayoutDto }) {
       </div>
       <p className="mt-2 text-xs text-ink-500">
         Read from the {source}
-        {layout.table ? <>, carton table on row {layout.table.headerRow}: {SHAPE_LABEL[layout.table.shape]}.</> : '.'}
+        {layout.table ? <>, carton table on row {layout.table.headerRow}: {
+          // A proforma lists cartons by style, with no carton numbers.
+          layout.table.shape === 'ROW_PER_CARTON' && layout.cartons.length > 0 && layout.cartons.every((c) => !c.number)
+            ? 'one line per style, with its number of cartons'
+            : SHAPE_LABEL[layout.table.shape]
+        }.</> : '.'}
       </p>
     </div>
   );
@@ -202,7 +207,7 @@ function Cartons({ data }: { data: PackingFileLayoutDto }) {
               {layout.cartons.map((c, i) => (
                 <tr key={i} title={`Row ${c.sheetRow}${c.lastRow !== c.sheetRow ? `–${c.lastRow}` : ''} of the document`}>
                   <td className="td whitespace-nowrap text-sm font-medium">{c.number || "—"}</td>
-                  <td className="td text-right tnum text-sm">{c.count}</td>
+                  <td className="td text-right tnum text-sm">{fmt(c.count, 2)}</td>
                   {anyStyle && <td className="td text-sm">{c.style ?? '—'}</td>}
                   {anyColour && (
                     <td className="td text-sm">
@@ -224,7 +229,9 @@ function Cartons({ data }: { data: PackingFileLayoutDto }) {
                       <span className={clsx(!c.bySize[s] && 'text-ink-300')}>{c.bySize[s] ? fmt(c.bySize[s], 2) : '·'}</span>
                     </td>
                   ))}
-                  <td className="td text-right tnum text-sm">{fmt(c.perCarton, 2)}</td>
+                  <td className="td text-right tnum text-sm" title={c.number ? undefined : 'A line by style: pieces ÷ cartons, an average'}>
+                    {c.number ? fmt(c.perCarton, 2) : <span className="text-ink-500">≈ {fmt(c.perCarton, 1)}</span>}
+                  </td>
                   <td className="td text-right tnum text-sm font-semibold">{fmt(c.totalPieces, 2)}</td>
                   <td className="td text-right tnum text-sm">{fmt(c.netKg, 2)}</td>
                   <td className="td text-right tnum text-sm">{fmt(c.grossKg, 2)}</td>
@@ -235,7 +242,7 @@ function Cartons({ data }: { data: PackingFileLayoutDto }) {
             <tfoot className="border-t-2 border-ink-200 bg-ink-50 text-sm font-semibold">
               <tr>
                 <td className="td">Read</td>
-                <td className="td text-right tnum">{fmt(layout.totals.cartons)}</td>
+                <td className="td text-right tnum">{fmt(layout.totals.cartons, 2)}</td>
                 {anyStyle && <td className="td" />}
                 {anyColour && <td className="td" />}
                 {sizes.map((s) => <td key={s} className="td text-center tnum">{fmt(layout.totals.bySize[s], 2)}</td>)}
@@ -248,7 +255,7 @@ function Cartons({ data }: { data: PackingFileLayoutDto }) {
               {p && (
                 <tr className="font-normal text-ink-600">
                   <td className="td">Document's total (row {p.sheetRow})</td>
-                  <td className="td text-right tnum">{fmt(p.cartons)}</td>
+                  <td className="td text-right tnum">{fmt(p.cartons, 2)}</td>
                   {anyStyle && <td className="td" />}
                   {anyColour && <td className="td" />}
                   {sizes.map((s) => <td key={s} className="td" />)}

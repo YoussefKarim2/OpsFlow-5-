@@ -21,7 +21,7 @@
 
 import {
   Children, Fragment, isValidElement, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState,
-  type ChangeEvent, type KeyboardEvent, type ReactNode,
+  type ChangeEvent, type CSSProperties, type KeyboardEvent, type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronDown } from 'lucide-react';
@@ -59,6 +59,8 @@ export interface ComboSelectProps {
   onChange?: (e: ChangeEvent<HTMLSelectElement>) => void;
   children?: ReactNode;
   className?: string;
+  /** For the box itself: a width set by the table it sits in, say. */
+  style?: CSSProperties;
   disabled?: boolean;
   /** The field stores text: keep what is typed even when it is not in the list. */
   allowCustom?: boolean;
@@ -73,7 +75,7 @@ export interface ComboSelectProps {
 }
 
 export function ComboSelect({
-  value: rawValue, onChange, children, className, disabled, allowCustom, placeholder, id, name, title, autoFocus, maxLength,
+  value: rawValue, onChange, children, className, style, disabled, allowCustom, placeholder, id, name, title, autoFocus, maxLength,
   'aria-label': ariaLabel,
 }: ComboSelectProps) {
   const options = useMemo(() => collect(children, []), [children]);
@@ -231,6 +233,7 @@ export function ComboSelect({
         className,
         disabled && 'cursor-not-allowed !bg-ink-50 !text-ink-500',
       )}
+      style={style}
       title={title}
       onMouseDown={(e) => {
         // A click anywhere on the box opens the list, like a native dropdown.

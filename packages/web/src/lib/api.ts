@@ -9,7 +9,7 @@
 import type {
   OrderSummaryDto, OrderDetailDto, TaskDto, DashboardDto, FollowUpItemDto,
   MatrixResponseDto, NotificationDto, ActivityDto, ImportPreviewDto, Paginated,
-  StockPosition, MaterialPosition, InventorySummary, ImportConcept, ColumnAnalysis,
+  StockPosition, MaterialPosition, InventorySummary, ImportConcept, ColumnAnalysis, LinePlan, LineMachine,
   OrderStepsResult, Blocker, StageKey, StageStatus,
   NotificationPriority, ChangeCategory, ShipmentDto, ProductivityDto, ProductivityDayLogDto, ProductionOperation,
   CostingOverviewDto,
@@ -1044,7 +1044,11 @@ export const api = {
       analytics: OrderDetailDto['production'];
       byOperation: Array<{ operation: string; qty: number; days: number; avgPerDay: number | null }>;
       byLine: Array<{ line: string; qty: number; days: number; avgPerDay: number | null }>;
+      linePlan: LinePlan;
     }>(`/production/${orderId}`),
+    /** The line's machines and the target per day, saved together. */
+    saveLinePlan: (orderId: string, body: { targetPerDay: number | null; lineName: string | null; machines: LineMachine[] }) =>
+      put<LinePlan>(`/production/${orderId}/line-plan`, body),
     record: (orderId: string, body: unknown) => post<unknown>(`/production/${orderId}`, body),
     update: (recordId: string, body: unknown) => patch<unknown>(`/production/record/${recordId}`, body),
     remove: (recordId: string) => del(`/production/record/${recordId}`),

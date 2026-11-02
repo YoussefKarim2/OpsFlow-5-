@@ -14,7 +14,7 @@
  * classifies, it does not restrict.
  */
 
-import { Fragment, useState } from 'react';
+import { Fragment, useLayoutEffect, useMemo, useRef, useState, type TextareaHTMLAttributes } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Rows3, Scissors } from 'lucide-react';
 import {
@@ -28,8 +28,80 @@ import { ComboSelect } from './ComboSelect';
 /** The value of the item dropdown's "type it yourself" entry. */
 const OTHER_ITEM = '__other__';
 
-/** Columns in the table: Dep., Item, Position, Description, Colour, Cons./pc, Quantity, Issued, Unit, Unit price, Total, Supplier, actions. */
-const COLUMNS = 13;
+/** Columns in the table: Dep. over Item, Position, Description, Colour, Cons./pc, Quantity, Issued, Unit, Unit price, Total, Supplier, actions. */
+const COLUMNS = 12;
+
+/**
+ * Each column as wide as its longest entry, within limits, so the table takes
+ * the room its content needs. Fixed minimum widths made every column as wide
+ * as the widest thing it might ever hold, and the editor scrolled sideways
+ * even for a short bill. Position, Description and Supplier wrap onto more
+ * lines past their limit instead of widening the table.
+ *
+ * Widths are in characters (`ch`, the width of a "0"): capitals count wider
+ * and narrow letters narrower, so "LIME/BLACK" is not cut off.
+ */
+const WIDTH = {
+  department: [7, 11], item: [11, 15], position: [7, 9], description: [9, 10], colour: [6, 13],
+  cons: [4, 8], qty: [4, 9], issued: [3, 8], unit: [4, 8], price: [4, 8], supplier: [7, 9],
+} as const satisfies Record<string, readonly [number, number]>;
+type WidthKey = keyof typeof WIDTH;
+/** A dropdown's arrow takes room a plain box does not. */
+const ARROW: Partial<Record<WidthKey, true>> = { department: true, item: true, unit: true };
+
+/** How wide a text is, in `ch`. */
+function textWidth(t: string | null | undefined): number {
+  let w = 0;
+  for (const ch of t ?? '') w += /[A-Z@%&#]/.test(ch) ? (/[MW]/.test(ch) ? 1.7 : /[I]/.test(ch) ? 0.7 : 1.4) : /[iljtf.,:;'|!() /]/.test(ch) ? 0.6 : /[mw]/.test(ch) ? 1.4 : 1;
+  // A "0" is wider than the average letter of this typeface.
+  return w * 0.85;
+}
+
+function columnWidths(rows: readonly RowDraft[]): Record<WidthKey, string> {
+  const longest = (pick: (r: RowDraft) => string | null | undefined) => Math.max(0, ...rows.map((r) => textWidth(pick(r))));
+  const len: Record<WidthKey, number> = {
+    department: longest((r) => r.department ?? 'Choose…'),
+    item: longest((r) => r.item || 'Choose…'),
+    position: longest((r) => r.position),
+    description: longest((r) => r.description),
+    colour: longest((r) => r.colorText),
+    cons: longest((r) => r.consumptionPerPiece),
+    qty: longest((r) => r.requiredQty),
+    issued: longest((r) => r.issuedQty),
+    unit: longest((r) => r.unit),
+    price: longest((r) => r.unitPriceUsd),
+    supplier: longest((r) => r.supplier),
+  };
+  const width = {} as Record<WidthKey, string>;
+  for (const k of Object.keys(WIDTH) as WidthKey[]) {
+    const [min, max] = WIDTH[k];
+    const ch = Math.min(max, Math.max(min, Math.ceil(len[k]) + 1));
+    width[k] = `calc(${ch}ch + ${ARROW[k] ? '1.6rem' : k === 'colour' ? '1.2rem' : '0.8rem'})`;
+  }
+  return width;
+}
+
+/** Lines a wrapping box needs for its text at its width, one to four. */
+/** Editor headings: tight, and allowed to wrap ("Unit / price") so a heading never sets a column's width. */
+const TH = 'whitespace-normal px-1.5 py-2 text-left align-bottom text-2xs font-semibold uppercase leading-tight tracking-wide text-ink-500';
+const WRAP_BOX = 'input block resize-none overflow-hidden border-transparent bg-transparent px-1.5 leading-snug';
+/**
+ * A box of one line of text that wraps on screen and grows to show all of it:
+ * a long description is read in full, not cut off at the box's edge.
+ */
+function WrapBox(props: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight + 2}px`;
+  }, [props.value, props.style?.width]);
+  return <textarea ref={ref} rows={1} {...props} className={WRAP_BOX} onKeyDown={noNewLine} />;
+}
+
+/** One line of text that wraps on screen: Enter does not start a new line. */
+const noNewLine = (e: { key: string; preventDefault(): void }) => { if (e.key === 'Enter') e.preventDefault(); };
 
 /**
  * A row while it is being edited.
@@ -176,6 +248,20 @@ export function BomEditor({
   const qc = useQueryClient();
   const itemsFor: ItemsFor = (d) => (d === 'Fabric' ? fabrics : bomItemsFor(d));
   const [rows, setRows] = useState<RowDraft[]>(() => initial.map((r) => toDraft(r, itemsFor)));
+  const w = useMemo(() => columnWidths(rows), [rows]);
+  // The bill's own list, then the units set up under Settings, then any unit
+  // a line already uses — each once, whatever its case.
+  const unitOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const u of [...BOM_UNITS, ...units, ...rows.map((r) => r.unit)]) {
+      const t = (u ?? '').trim();
+      if (!t || seen.has(t.toLowerCase())) continue;
+      seen.add(t.toLowerCase());
+      out.push(t);
+    }
+    return out;
+  }, [units, rows]);
   /** The `uid` of the row whose breakdown is open. */
   const [expanded, setExpanded] = useState<number | null>(null);
   /**
@@ -311,22 +397,21 @@ export function BomEditor({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full border border-ink-200">
+        <table className="border border-ink-200">
           <thead className="border-b border-ink-200 bg-ink-50">
             <tr>
-              <th className="th min-w-[9rem]" title="Item Sort / Dep. — picks the item list">Dep.</th>
-              <th className="th min-w-[13rem]">Item</th>
-              <th className="th min-w-[8rem]" title="Where it goes — Inside Top Back, Main fabric…">Position</th>
-              <th className="th min-w-[12rem]">Description</th>
-              <th className="th min-w-[9rem]">Colour</th>
-              <th className="th w-24 text-right" title="Coms./Piece — what one garment uses">Cons./pc</th>
-              <th className="th w-28 text-right">Quantity</th>
-              <th className="th w-28 text-right">Issued</th>
-              <th className="th min-w-[5.5rem]">Unit</th>
-              <th className="th w-28 text-right">Unit price</th>
-              <th className="th w-28 text-right">Total</th>
-              <th className="th w-32">Supplier</th>
-              <th className="th w-20" />
+              <th className={TH} title="Item Sort / Dep. — picks the item list — over the item">Dep. · Item</th>
+              <th className={TH} title="Where it goes — Inside Top Back, Main fabric…">Position</th>
+              <th className={TH}>Description</th>
+              <th className={TH}>Colour</th>
+              <th className={clsx(TH, 'text-right')} title="Coms./Piece — what one garment uses">Cons. per pc</th>
+              <th className={clsx(TH, 'text-right')} title="Quantity required">Qty</th>
+              <th className={clsx(TH, 'text-right')}>Issued</th>
+              <th className={TH}>Unit</th>
+              <th className={clsx(TH, 'text-right')}>Unit price</th>
+              <th className={clsx(TH, 'text-right')}>Total</th>
+              <th className={TH}>Supplier</th>
+              <th className={TH} />
             </tr>
           </thead>
           <tbody className="divide-y divide-ink-100">
@@ -341,23 +426,26 @@ export function BomEditor({
             {rows.map((r, i) => (
               <Fragment key={r.uid}>
                 <tr>
+                  {/* The department sits over its item: the two are read
+                      together, and as columns of their own they took a
+                      tenth of the table's width. */}
                   <td className="p-1">
                     <ComboSelect
                       aria-label="Department"
-                      className={clsx('input border-transparent bg-transparent', !r.department && 'text-ink-400')}
+                      className={clsx('input border-transparent bg-transparent px-1.5 py-0.5 text-2xs font-medium uppercase tracking-wide text-ink-500', !r.department && '!text-red-600')}
+                      style={{ width: w.item }}
                       value={r.department ?? ''}
                       onChange={(e) => setDepartment(i, (e.target.value || null) as BomDepartment | null)}
                     >
-                      <option value="">Choose…</option>
+                      <option value="">Department…</option>
                       {BOM_DEPARTMENTS.map((d) => <option key={d} value={d}>{d}</option>)}
                     </ComboSelect>
-                  </td>
-                  <td className="p-1">
                     {r.typed ? (
                       <div className="flex items-center gap-1">
                         <input
                           aria-label="Item"
-                          className={clsx('input border-transparent bg-transparent', !r.item.trim() && 'ring-1 ring-red-400')}
+                          className={clsx('input border-transparent bg-transparent px-1.5', !r.item.trim() && 'ring-1 ring-red-400')}
+                          style={{ width: w.item }}
                           value={r.item}
                           list={itemsFor(r.department).length > 0 ? `bom-items-${r.department}` : 'bom-item-types'}
                           placeholder={r.department === 'Yoko' ? 'Yoko collar, Yoko cuffs…' : r.department === 'Fabric' ? 'Main fabric, Rib…' : 'Type the item…'}
@@ -372,7 +460,8 @@ export function BomEditor({
                       <ComboSelect
                         allowCustom
                         aria-label="Item"
-                        className={clsx('input border-transparent bg-transparent', !r.item.trim() && 'ring-1 ring-red-400')}
+                        className={clsx('input border-transparent bg-transparent px-1.5', !r.item.trim() && 'ring-1 ring-red-400')}
+                        style={{ width: w.item }}
                         value={r.item ? itemsFor(r.department).find((x) => x.toLowerCase() === r.item.trim().toLowerCase()) ?? r.item : ''}
                         onChange={(e) => (e.target.value === OTHER_ITEM ? setItem(i, '', true) : setItem(i, e.target.value, false))}
                       >
@@ -383,38 +472,41 @@ export function BomEditor({
                     )}
                   </td>
                   <td className="p-1">
-                    <input
+                    <WrapBox
                       aria-label="Position"
-                      className="input border-transparent bg-transparent"
+                      style={{ width: w.position }}
                       value={r.position ?? ''}
                       maxLength={200}
-                      placeholder="Inside Top Back…"
-                      onChange={(e) => setRow(i, { position: e.target.value || null })}
+                      placeholder="Position"
+                      onChange={(e) => setRow(i, { position: e.target.value.replace(/\n/g, ' ') || null })}
                     />
                   </td>
                   <td className="p-1">
-                    <input
+                    <WrapBox
                       aria-label="Description"
-                      className="input border-transparent bg-transparent"
+                      style={{ width: w.description }}
                       value={r.description ?? ''}
                       maxLength={2000}
-                      placeholder="Woven, 2 cm, heat seal…"
-                      onChange={(e) => setRow(i, { description: e.target.value || null })}
+                      placeholder="Description"
+                      onChange={(e) => setRow(i, { description: e.target.value.replace(/\n/g, ' ') || null })}
                     />
                   </td>
                   <td className="p-1">
                     <input
-                      className="input border-transparent bg-transparent"
+                      aria-label="Colour"
+                      className="input border-transparent bg-transparent px-1.5"
+                      style={{ width: w.colour }}
                       value={r.colorText ?? ''}
                       list="bom-colors"
-                      placeholder="Choose or type…"
+                      placeholder="Colour"
                       onChange={(e) => setRow(i, { colorText: e.target.value || null })}
                     />
                   </td>
                   <td className="p-1">
                     <input
                       aria-label="Consumption per piece"
-                      className="input tnum border-transparent bg-transparent text-right"
+                      className="input tnum border-transparent bg-transparent px-1.5 text-right"
+                      style={{ width: w.cons }}
                       inputMode="decimal"
                       value={r.consumptionPerPiece}
                       placeholder="—"
@@ -430,7 +522,9 @@ export function BomEditor({
                       </div>
                     ) : (
                       <input
-                        className="input tnum border-transparent bg-transparent text-right"
+                        aria-label="Quantity"
+                        className="input tnum border-transparent bg-transparent px-1.5 text-right"
+                        style={{ width: w.qty }}
                         inputMode="decimal"
                         value={r.requiredQty}
                         title={r.fromLayPlan ? 'From the lay plan: the next change to the lay plan sets this again' : undefined}
@@ -450,7 +544,8 @@ export function BomEditor({
                     {canIssue ? (
                       <input
                         aria-label="Issued"
-                        className="input tnum border-transparent bg-transparent text-right"
+                        className="input tnum border-transparent bg-transparent px-1.5 text-right"
+                        style={{ width: w.issued }}
                         inputMode="decimal"
                         value={r.issuedQty}
                         placeholder="—"
@@ -464,37 +559,46 @@ export function BomEditor({
                     )}
                   </td>
                   <td className="p-1">
-                    <input
-                      className="input border-transparent bg-transparent"
+                    <ComboSelect
+                      allowCustom
+                      aria-label="Unit"
+                      className={clsx('input border-transparent bg-transparent px-1.5', !r.unit.trim() && 'ring-1 ring-red-400')}
+                      style={{ width: w.unit }}
                       value={r.unit}
-                      list="bom-units"
+                      maxLength={40}
                       onChange={(e) => setRow(i, { unit: e.target.value })}
-                    />
+                    >
+                      {unitOptions.map((v) => <option key={v} value={v}>{v}</option>)}
+                    </ComboSelect>
                   </td>
                   <td className="p-1">
                     <input
-                      className="input tnum border-transparent bg-transparent text-right"
+                      aria-label="Unit price"
+                      className="input tnum border-transparent bg-transparent px-1.5 text-right"
+                      style={{ width: w.price }}
                       inputMode="decimal"
                       value={r.unitPriceUsd}
                       placeholder="—"
                       onChange={numeric((v) => setRow(i, { unitPriceUsd: v }))}
                     />
                   </td>
-                  <td className="td tnum text-right font-semibold">
-                    <Num value={parse(r.unitPriceUsd) == null ? null : rowQty(r) * parse(r.unitPriceUsd)!} kind="money" places={2} />
+                  <td className="whitespace-nowrap px-1.5 py-2.5 text-right text-sm font-semibold text-ink-700 tnum">
+                    <Num value={parse(r.unitPriceUsd) == null ? null : rowQty(r) * parse(r.unitPriceUsd)!} kind="money" places={2} fallback="—" />
                   </td>
                   <td className="p-1">
-                    <input
-                      className="input border-transparent bg-transparent"
+                    <WrapBox
+                      aria-label="Supplier"
+                      style={{ width: w.supplier }}
                       value={r.supplier ?? ''}
-                      onChange={(e) => setRow(i, { supplier: e.target.value || null })}
+                      placeholder="Supplier"
+                      onChange={(e) => setRow(i, { supplier: e.target.value.replace(/\n/g, ' ') || null })}
                     />
                   </td>
                   <td className="p-1">
                     <div className="flex items-center justify-end gap-1">
                       <button
                         type="button"
-                        className="btn-ghost btn-sm"
+                        className="btn-ghost btn-sm px-1.5"
                         title="Break this item down by size"
                         onClick={() => setExpanded(expanded === r.uid ? null : r.uid)}
                       >
@@ -503,7 +607,7 @@ export function BomEditor({
                       </button>
                       <button
                         type="button"
-                        className="btn-ghost btn-sm text-red-600"
+                        className="btn-ghost btn-sm px-1.5 text-red-600"
                         title="Remove this item"
                         onClick={() => {
                           const gone = rows[i]?.id;
@@ -626,9 +730,6 @@ export function BomEditor({
       </datalist>
       <datalist id="bom-colors">
         {colors.map((c) => <option key={c} value={c} />)}
-      </datalist>
-      <datalist id="bom-units">
-        {[...new Set([...BOM_UNITS, ...units])].map((v) => <option key={v} value={v} />)}
       </datalist>
       {BOM_DEPARTMENTS.map((d) => (
         <datalist key={d} id={`bom-items-${d}`}>

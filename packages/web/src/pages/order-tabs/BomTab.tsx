@@ -14,7 +14,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { PackagePlus, AlertTriangle, Layers } from 'lucide-react';
-import { fmtDate, BOM_DEPARTMENTS, bomDepartmentOf, type OrderDetailDto } from '@opsflow/shared';
+import { fmtDate, fmtMoney, BOM_DEPARTMENTS, bomDepartmentOf, type OrderDetailDto } from '@opsflow/shared';
 import { api, ApiError, type BomRowDto } from '../../lib/api';
 import { BomEditor } from '../../components/BomEditor';
 import { useAuth } from '../../lib/auth';
@@ -30,6 +30,7 @@ interface BomRow {
   shortage: number; shortQty: number; coveragePct: number | null;
   status: 'NOT_ISSUED' | 'PARTIAL' | 'COMPLETE' | 'OVER_ISSUED';
   issuedByName: string | null; issuedToName: string | null; issuedAt: string | null;
+  unitPriceUsd: number | null; supplier: string | null;
   sizes: Array<{ id: string; sizeLabel: string; qty: number }>;
   /** The lay plan's fabric: kept in step with Laying & Marking. */
   fromLayPlan?: boolean;
@@ -208,14 +209,20 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
 
       {[...byCategory.entries()].map(([category, items]) => {
         const shortInCategory = items.filter((i) => i.shortQty > 0).length;
+        const priced = items.filter((i) => i.unitPriceUsd != null);
+        const value = priced.reduce((a, i) => a + i.requiredQty * i.unitPriceUsd!, 0);
         return (
           <Card key={category}>
             <CardHeader
               title={category}
-              subtitle={`${items.length} line${items.length === 1 ? '' : 's'}${shortInCategory > 0 ? ` · ${shortInCategory} short` : ''}`}
+              subtitle={`${items.length} line${items.length === 1 ? '' : 's'}${shortInCategory > 0 ? ` · ${shortInCategory} short` : ''}`
+                + (priced.length > 0 ? ` · ${fmtMoney(value, '$', 2)}${priced.length < items.length ? ` for ${priced.length} priced` : ''}` : '')}
             />
             <div className="overflow-x-auto">
-              <table className="w-full">
+              {/* Tight cells, headings that may wrap and a description that
+                  wraps: with price, total and unit beside the shortage, the
+                  table fits the page instead of scrolling sideways. */}
+              <table className="w-full [&_td]:px-2 [&_th:first-child]:pl-4 [&_th]:px-2 [&_th]:align-bottom [&_th]:whitespace-normal [&_td:first-child]:pl-4">
                 <thead className="border-b border-ink-200 bg-ink-50">
                   <tr>
                     <th className="th">Item</th>
@@ -224,9 +231,12 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
                     <th className="th">Colour</th>
                     <th className="th text-right">Cons./pc</th>
                     <th className="th text-right">Required</th>
+                    <th className="th">Unit</th>
+                    <th className="th text-right">Unit price</th>
+                    <th className="th text-right">Total</th>
                     <th className="th text-right">Issued</th>
                     <th className="th text-right">Shortage</th>
-                    <th className="th w-24">Coverage</th>
+                    <th className="th">Coverage</th>
                     <th className="th">Status</th>
                     <th className="th" />
                   </tr>
@@ -249,20 +259,28 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
                           </span>
                         )}
                       </td>
-                      <td className="td text-xs text-ink-500">{r.position || '—'}</td>
-                      <td className="td text-xs">{r.description || '—'}</td>
+                      <td className="td max-w-[10rem] whitespace-normal text-xs text-ink-500">{r.position || '—'}</td>
+                      <td className="td min-w-[8rem] max-w-[16rem] whitespace-normal text-xs">{r.description || '—'}</td>
                       <td className="td text-xs">{r.color || '—'}</td>
                       <td className="td text-right text-xs">
                         <Num value={r.consumptionPerPiece} places={4} fallback="—" />
                       </td>
                       <td className="td text-right"><Num value={r.requiredQty} places={r.requiredQty % 1 === 0 ? 0 : 3} /></td>
+                      <td className="td text-xs text-ink-600">{r.unit}</td>
+                      <td className="td text-right text-xs">
+                        <Num value={r.unitPriceUsd} kind="money" places={r.unitPriceUsd != null && Math.round(r.unitPriceUsd * 100) !== r.unitPriceUsd * 100 ? 4 : 2} fallback="—" />
+                      </td>
+                      <td className="td text-right font-medium" title={r.supplier ? `Supplier: ${r.supplier}` : undefined}>
+                        <Num value={r.unitPriceUsd == null ? null : r.requiredQty * r.unitPriceUsd} kind="money" places={2} fallback="—" />
+                        {r.supplier && <span className="block text-2xs font-normal text-ink-500">{r.supplier}</span>}
+                      </td>
                       <td className="td text-right"><Num value={r.issuedQty} places={r.issuedQty % 1 === 0 ? 0 : 3} /></td>
                       <td className="td text-right">
                         <span className={clsx('tnum text-sm font-semibold', r.shortage < 0 ? 'text-red-600' : 'text-emerald-600')}>
                           <Num value={r.shortage} kind="variance" />
                         </span>
                       </td>
-                      <td className="td"><ProgressBar value={r.coveragePct} /></td>
+                      <td className="td min-w-[4rem]"><ProgressBar value={r.coveragePct} /></td>
                       <td className="td">
                         <span className={clsx('chip', STATUS_TONE[r.status])}>
                           {r.status.replace(/_/g, ' ')}

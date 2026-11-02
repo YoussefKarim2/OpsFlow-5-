@@ -21,6 +21,7 @@ import {
   Spinner, ErrorNote, EmptyState, useToast,
 } from '../../components/ui';
 import { ComboSelect } from '../../components/ComboSelect';
+import { LinePlanCard } from '../../components/LinePlanCard';
 
 const OPERATIONS = ['CUTTING', 'SEWING', 'PRINTING', 'EMBROIDERY', 'PACKING'] as const;
 
@@ -100,6 +101,8 @@ export function ProductionTab({ order }: { order: OrderDetailDto }) {
         />
       </div>
 
+      <LinePlanCard orderId={order.id} plan={data.linePlan} remaining={a.remainingQty} canEdit={can('production:write')} />
+
       <Card>
         <CardHeader
           title="Daily output"
@@ -137,6 +140,10 @@ export function ProductionTab({ order }: { order: OrderDetailDto }) {
                 <Legend wrapperStyle={{ fontSize: 11 }} formatter={(v) => (v === 'daily' ? 'Daily output' : 'Cumulative')} />
                 <ReferenceLine yAxisId="right" y={a.orderQty} stroke="#c81d25" strokeDasharray="4 4"
                   label={{ value: 'Order qty', fontSize: 10, fill: '#c81d25', position: 'insideTopRight' }} />
+                {data.linePlan.targetPerDay != null && data.linePlan.targetPerDay > 0 && (
+                  <ReferenceLine yAxisId="left" y={data.linePlan.targetPerDay} ifOverflow="extendDomain" stroke="#0f9d58" strokeDasharray="4 4"
+                    label={{ value: `Target ${data.linePlan.targetPerDay.toLocaleString()}/day`, fontSize: 10, fill: '#0f9d58', position: 'insideTopLeft' }} />
+                )}
                 <Bar yAxisId="left" dataKey="daily" fill="#8ec7ff" radius={[3, 3, 0, 0]} />
                 <Line yAxisId="right" type="monotone" dataKey="cumulative" stroke="#1c67f0" strokeWidth={2} dot={false} />
               </ComposedChart>

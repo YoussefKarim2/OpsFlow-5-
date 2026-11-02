@@ -138,7 +138,10 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
   label(13, 'On Board Date:', day(s.onBoardDate), { numFmt: DAY_FMT, merge: true });
   label(14, 'ETD:', day(s.etd), { numFmt: DAY_FMT, merge: true });
   const lead = s.leadDays ?? SHEET_DEFAULTS.leadDays;
-  label(15, 'ETA:', s.etd ? { formula: `C14+${lead}` } : null, { numFmt: DAY_FMT, merge: true });
+  // Every formula carries its result, so a reader that does not calculate —
+  // OpsFlow's own packing-file scanner among them — sees the figures.
+  const etd = day(s.etd);
+  label(15, 'ETA:', s.etd ? { formula: `C14+${lead}`, result: etd instanceof Date ? new Date(etd.getTime() + lead * 86_400_000) : undefined } : null, { numFmt: DAY_FMT, merge: true });
   ws.getCell('G15').value = `Based on ${lead} days lead time`;
   ws.getCell('G15').font = font20;
   label(16, 'Shipment From', s.portFrom ?? '');
@@ -147,8 +150,19 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
 
   // ── The table ────────────────────────────────────────────────────────────
   const HEAD = 21, FIRST = 22, LAST = FIRST + Math.max(rows.length, 1) - 1, TOTAL = LAST + 1;
+  const add = (pick: (r: (typeof rows)[number]) => number | null | undefined) => {
+    const v = rows.reduce((a, r) => a + (Number(pick(r)) || 0), 0);
+    return Math.round(v * 1e6) / 1e6;
+  };
+  const sums = {
+    A: add((r) => r.qty), F: add((r) => r.gw), G: add((r) => r.nw), H: add((r) => r.cartons),
+    K: add((r) => r.total), L: add((r) => r.containerShare),
+  };
+  // Excel's own text for a number in "&": no thousands separator, no trailing zeros.
+  const asText = (n: number) => String(Math.round(n * 1e6) / 1e6);
   label(19, 'No. of cartons', {
     formula: `H${TOTAL}&" carton NW: "&G${TOTAL}&" KG. GW: "&F${TOTAL}&" KG. Size "&"${(s.cartonSize ?? '').replace(/"/g, '""')}"`,
+    result: `${asText(sums.H)} carton NW: ${asText(sums.G)} KG. GW: ${asText(sums.F)} KG. Size ${s.cartonSize ?? ''}`,
   });
   const perContainer = s.cartonsPerContainer ?? SHEET_DEFAULTS.cartonsPerContainer;
   const box = ws.getCell('L20');
@@ -211,7 +225,7 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
 
   const tot = ws.getRow(TOTAL);
   tot.height = 39;
-  const sum = (c: string) => ({ formula: `SUM(${c}${FIRST}:${c}${LAST})` });
+  const sum = (c: keyof typeof sums) => ({ formula: `SUM(${c}${FIRST}:${c}${LAST})`, result: sums[c] });
   const totals: Array<[number, ExcelJS.CellValue, string?]> = [
     [1, sum('A'), ACCOUNTING_INT], [4, 'Total'], [6, sum('F'), '0.##'], [7, sum('G'), '0.##'],
     [8, sum('H'), '0'], [11, sum('K'), ACCOUNTING_USD], [12, perContainer > 0 ? sum('L') : null, '0%'],
@@ -238,7 +252,10 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
       r++;
     }
     ws.getCell(`D${r}`).value = 'Amount due';
-    ws.getCell(`K${r}`).value = { formula: `K${TOTAL}+SUM(K${TOTAL + 1}:K${r - 1})` };
+    ws.getCell(`K${r}`).value = {
+      formula: `K${TOTAL}+SUM(K${TOTAL + 1}:K${r - 1})`,
+      result: Math.round((sums.K + extras.reduce((a, e) => a + (Number(e.amount) || 0), 0)) * 1e6) / 1e6,
+    };
     ws.getCell(`K${r}`).numFmt = ACCOUNTING_USD;
     for (const a of [`D${r}`, `K${r}`]) ws.getCell(a).font = { name: 'Arial', size: 18, bold: true };
     ws.getRow(r).height = 25;
@@ -339,7 +356,7 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
       });
     });
     const gt = st.getRow(gtRow);
-    ['Grand Total', ...sizes.map((_, j) => ({ formula: `SUM(${col(j + 2)}6:${col(j + 2)}${gtRow - 1})` })), { formula: `SUM(${gtCol}6:${gtCol}${gtRow - 1})`, result: grid.total }]
+    ['Grand Total', ...sizes.map((_, j) => ({ formula: `SUM(${col(j + 2)}6:${col(j + 2)}${gtRow - 1})`, result: grid.rows.reduce((a, g) => a + (g.cells[j] ?? 0), 0) })), { formula: `SUM(${gtCol}6:${gtCol}${gtRow - 1})`, result: grid.total }]
       .forEach((v, j) => {
         const c = gt.getCell(j + 1);
         c.value = v as ExcelJS.CellValue;

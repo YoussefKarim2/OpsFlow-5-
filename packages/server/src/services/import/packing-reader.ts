@@ -26,6 +26,7 @@ import { openWorkbook, readCsvWorkbook } from './open-workbook.js';
 import { detectFileKind, type FileKind } from './file-kind.js';
 import { looksLikeSize } from './tabular-extractor.js';
 import { isUncachedFormula } from './extractor.js';
+import { evaluateCell } from './formula-eval.js';
 import { readPdf, groupIntoRows, rowToPositionedCells, findTableBands, type PdfPage } from './pdf-extractor.js';
 import { BadRequestError } from '../../errors.js';
 
@@ -153,7 +154,14 @@ function sheetToGrid(ws: ExcelJS.Worksheet): Grid {
     for (let c = 1; c <= lastCol; c++) {
       const cell = row.getCell(c);
       if (cell.isMerged && cell.master !== cell) { out.push(null); continue; }
-      if (isUncachedFormula(cell.value)) uncached++;
+      if (isUncachedFormula(cell.value)) {
+        // Saved without its result: worked out here when it is plain
+        // arithmetic, and only counted as unreadable when it is not.
+        const e = evaluateCell(ws, cell);
+        if (!e) { uncached++; out.push(null); continue; }
+        out.push(typeof e.value === 'string' ? (e.value.trim() || null) : e.value);
+        continue;
+      }
       out.push(excelValue(cell.value));
     }
     rows.push(out);
@@ -236,13 +244,14 @@ function roleOf(heading: string): PackingColumnRole | null {
   if (/^(total|total ?(qty|pcs|pieces|quantity|units)|qty ?total|grand ?total|ttl( ?pcs)?)$/.test(h)) return 'TOTAL';
   // "Units" is pieces; "Unit" alone is the unit of measure (pce, set).
   if (/^(qty|quantity|pcs|pieces|units|qty ?pcs)$/.test(h)) return 'QTY';
-  if (/^(style|style ?(no|#|name)|article|art ?no|item|item ?no|model|description)$/.test(h)) return 'STYLE';
+  // "Discription" is how the factory's own proforma spells it.
+  if (/^(style|style ?(no|#|name)|article|art ?no|item|item ?no|model|desc|description|discription|discreption|descripton)$/.test(h)) return 'STYLE';
   if (/^(po|po ?(no|#|number)|order ?(no|#))$/.test(h)) return 'PO';
   return null;
 }
 
 /** Labels of the title block that are known without a colon. */
-const KNOWN_LABEL = /^(po|po ?(no|#|number)|po ?date|order ?(no|name|date)|invoice ?(no|#|date)|date|style ?(no|#)?|season|client|buyer|customer|consignee|shipper|exporter|notify ?party|destination|port ?of ?(loading|discharge)|vessel|container ?(no)?|seal ?(no)?|bl ?no|awb ?no|method ?of ?shipping|ship ?(via|mode|date)|shipping ?(date|method|mode)|(shipping|billing|delivery) ?ad+r?ess|delivery ?date|required ?delivery ?date|prom+is+ed ?shipping ?date|coordinator|item ?type|gender|fabric|description|brand|country ?of ?origin|origin|terms|payment ?terms|incoterms?|price( ?in ?us)?|cut ?percentage|packing ?inst)$/;
+const KNOWN_LABEL = /^(po|po ?(no|#|number)|po ?date|order ?(no|name|date)|invoice ?(no|#|date)|date|style ?(no|#)?|season|client|buyer|customer|consignee|shipper|exporter|notify ?party|destination|port ?of ?(loading|discharge)|vessel|container ?(no)?|seal ?(no)?|bl ?no|awb ?no|method ?of ?shipping|ship ?(via|mode|date)|shipping ?(date|method|mode)|(shipping|billing|delivery) ?ad+r?ess|no ?of ?(ctns?|cartons?)|total ?(ctns?|cartons?)|delivery ?date|required ?delivery ?date|prom+is+ed ?shipping ?date|coordinator|item ?type|gender|fabric|description|brand|country ?of ?origin|origin|terms|payment ?terms|incoterms?|price( ?in ?us)?|cut ?percentage|packing ?inst)$/;
 
 const isLabelText = (s: string): boolean => {
   if (!s || isDecoration(s) || s.length > 40) return false;
@@ -392,6 +401,7 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
   let lastColour: string | null = null;
   let lastStyle: string | null = null;
   let unreadable = 0;
+  const fractional: number[] = [];
 
   for (let r = header.row + 1; r < grid.rows.length; r++) {
     const row = grid.rows[r] ?? [];
@@ -433,7 +443,11 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
       range = cartonRange(numberText);
     }
     const countCell = num(at(cCount));
-    const count = countCell != null && countCell > 0 ? Math.round(countCell) : range ? range[1] - range[0] + 1 : 1;
+    // A carton count is taken as written. A proforma estimates it — pieces ÷
+    // pieces per carton, 9.1 — and rounding each line made the cartons stop
+    // adding up to the document's own total.
+    const count = countCell != null && countCell > 0 ? Math.round(countCell * 1000) / 1000 : range ? range[1] - range[0] + 1 : 1;
+    if (!Number.isInteger(count)) fractional.push(r + 1);
 
     const colourCell = text(at(cColour)) || null;
     const styleCell = text(at(cStyle)) || null;
@@ -519,6 +533,13 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
       issues.push({ level: 'WARNING', message: `Row ${r + 1}: the row's total says ${printedTotal.toLocaleString('en-US')} pcs, but ${count} carton${count === 1 ? '' : 's'} × ${perCarton.toLocaleString('en-US')} pcs is ${(perCarton * count).toLocaleString('en-US')}.` });
     }
   }
+  if (fractional.length > 0) {
+    issues.push({
+      level: 'INFO',
+      message: `The carton count on ${fractional.length === 1 ? `row ${fractional[0]} is` : `${fractional.length} rows is`} not a whole number: `
+        + 'the document works it out from pieces ÷ pieces per carton. It is shown as written, so the cartons add up to the document\'s own total.',
+    });
+  }
   if (unreadable > 0) {
     issues.push({ level: 'WARNING', message: `${unreadable} row${unreadable === 1 ? '' : 's'} under the table had neither a carton number nor pieces, and ${unreadable === 1 ? 'was' : 'were'} not read.` });
   }
@@ -539,7 +560,9 @@ function readDetails(grid: Grid, upTo: number) {
       if (cell == null || used.has(c) || typeof cell !== 'string') continue;
       const t = cell.trim();
       if (isDecoration(t)) { used.add(c); continue; }
-      // "PO No: 12345" in one cell.
+      // "PO No: 12345" in one cell — unless the cell is the value of the
+      // label to its left: "No. of cartons | 289 carton NW: … KG." is one
+      // detail, not a detail named "289 carton NW".
       const inline = t.match(/^([^:：]{2,30}?)\s*[:：]\s*(.+)$/);
       if (inline && !/^https?$/i.test(inline[1]!)) {
         details.push({ label: cleanLabel(inline[1]!), value: inline[2]!.trim() });
