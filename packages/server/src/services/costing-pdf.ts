@@ -301,12 +301,14 @@ class Layout {
     this.grid([
       { label: 'Daily cost', value: money(c.dailyCostUsd), sub: 'the whole factory, per day' },
       { label: 'All factory machines', value: num(c.machineCount) },
-      { label: 'Line machines', value: num(c.lineMachineQty) },
+      { label: 'Line machines', value: num(c.lineMachineQty), sub: c.lineMachineSource === 'production' ? 'the Production machine table' : undefined },
       { label: 'Days in line', value: num(c.daysInLineUsed), sub: daysSub },
       { label: 'Machine cost', value: money(c.machineCostPerDay), key: 'machineCostPerDay', sub: 'per machine-day' },
       { label: 'Machine-days used', value: num(c.machineDaysUsed), key: 'machineDaysUsed', sub: 'line machines × days in line' },
       { label: 'Work days', value: num(c.workDays, 2), key: 'workDays', sub: 'machine-days ÷ all machines' },
       { label: 'Productivity rate', value: num(c.productivityRate, 2), key: 'productivityRate', sub: 'cut qty ÷ work days, pcs per day' },
+      { label: 'Target per day', value: num(c.targetPerDay), sub: 'from the Production step' },
+      { label: 'Cost per piece at target', value: c.targetCostPerPieceUsd == null ? DASH : fmtMoney(c.targetCostPerPieceUsd), sub: 'machine cost × line machines ÷ target' },
     ], 4);
   }
 
@@ -418,6 +420,15 @@ class Layout {
       cost: this.shown(money(c.cmCostUsd), 'cmCostUsd'),
       pct: pct(share(c.cmCostUsd)),
     }, { fill: INK[50] });
+    // The target's C.M beside the actual one, for comparison — not in the total.
+    if (c.targetCmCostUsd != null) {
+      this.tableRow({
+        section: '', item: `At the target of ${num(c.targetPerDay)} pcs/day (comparison, not in the total)`,
+        actual: num(c.firstDegreeQty), unit: 'PCS',
+        price: c.targetCostPerPieceUsd == null ? DASH : fmtMoney(c.targetCostPerPieceUsd),
+        cost: money(c.targetCmCostUsd), pct: DASH,
+      });
+    }
 
     this.tableRow({
       section: 'Total', item: 'Total actual cost',

@@ -8,6 +8,7 @@ import { installProcessGuards } from './process-guards.js';
 import { reconcileAllStockLedgers } from './services/stock-sync.js';
 import { refreshOrderCache } from './services/order-service.js';
 import { fillAllEmptyMainOrders } from './services/fill-main-order.js';
+import { refreshFactoryDefaults } from './services/factory-defaults.js';
 
 /**
  * Connect, and keep trying.
@@ -36,6 +37,8 @@ async function connectUntilUp(): Promise<void> {
 
 async function main(): Promise<void> {
   await connectUntilUp();
+  // The factory's daily cost and machine count, for costings that leave them blank.
+  await refreshFactoryDefaults().catch((e) => console.error('Could not read the factory defaults:', e));
 
   const app = createApp();
   const server = app.listen(config.PORT, () => {

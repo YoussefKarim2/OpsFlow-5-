@@ -68,6 +68,15 @@ export interface CostingInput {
   shippedQty: number | null;
   /** Factory daily running cost in US dollars. */
   dailyCostUsd: number | null;
+  /**
+   * The factory's daily cost and machine count as last entered on any order's
+   * costing. They are the factory's figures, not the order's, so a costing
+   * that leaves them blank uses these rather than waiting.
+   */
+  defaultDailyCostUsd?: number | null;
+  defaultMachineCount?: number | null;
+  /** The order whose costing those were last entered on. */
+  defaultsFromPo?: string | null;
   /** Total machines on the floor. 38 in the source workbook. */
   machineCount: number | null;
   /** Machine-days actually consumed by this order. 130 in the source workbook. */
@@ -84,6 +93,14 @@ export interface CostingInput {
   cutQtySource?: 'recorded' | 'cut order' | null;
   /** Machines on this order's line. The sheet's "Line Machines Qty". */
   lineMachineQty?: number | null;
+  /**
+   * The machine table on the Production tab's "Target production per day"
+   * card, totalled — the sheet's `'Production Follow up'!I11`. Used when
+   * nobody has typed the line machines on the costing.
+   */
+  planLineMachineQty?: number | null;
+  /** "Target Production / Day" from the same card — the sheet's productivity rate cell. */
+  targetPerDay?: number | null;
   /** Whether a costing record has been saved for this order. */
   hasRecord?: boolean;
   /** A-grade output. The sheet's "1st Degree Qty". */
@@ -125,6 +142,11 @@ export interface CostingInput {
 export interface CostingSource {
   orderQty: number;
   cutQty: number;
+  defaultDailyCostUsd: number | null;
+  defaultMachineCount: number | null;
+  defaultsFromPo: string | null;
+  planLineMachineQty: number | null;
+  targetPerDay: number | null;
   cutQtySource: 'recorded' | 'cut order' | null;
   sewingDays: number | null;
   shippedQty: number | null;
@@ -161,8 +183,12 @@ export interface CostingResult {
    *  off the order alone and nobody has entered the factory's figures yet. */
   hasRecord: boolean;
   costingDate: string | null;
-  /** The factory's daily running cost in dollars, as stored. */
+  /** The factory's daily running cost in dollars: this costing's, else the factory default. */
   dailyCostUsd: number | null;
+  dailyCostSource: 'typed' | 'factory' | null;
+  machineCountSource: 'typed' | 'factory' | null;
+  /** The order whose costing the factory figures were last entered on. */
+  defaultsFromPo: string | null;
   /** Whatever the coordinator wrote in the sheet's Notes row. */
   notes: string | null;
   /** Factory-wide machine count, as stored. */
@@ -192,8 +218,24 @@ export interface CostingResult {
   workDays: number | null;
   /** `=J12/D17` — pieces per work day. */
   productivityRate: number | null;
-  /** Machines on this order's line, as recorded. */
+  /** Machines on this order's line: typed on the costing, else the Production tab's machine table. */
   lineMachineQty: number | null;
+  lineMachineSource: 'typed' | 'production' | null;
+  /** The Production tab's target pieces per day. */
+  targetPerDay: number | null;
+  /**
+   * What a piece costs to make at the target: the line's machine cost per day
+   * (machine cost × line machines) over the pieces it is meant to make a day.
+   */
+  targetCostPerPieceUsd: number | null;
+  /**
+   * C.M at the target — the new costing sheet's `((H9×H12)/L15)×G15`, without
+   * the days in line it multiplied in (which made it days-in-line times too
+   * high). Shown beside the actual C.M for comparison; not in the total.
+   */
+  targetCmCostUsd: number | null;
+  /** Actual C.M per piece: the actual C.M over the 1st degree pieces it is charged to. */
+  cmCostPerPieceUsd: number | null;
   /** Calendar days the order occupied a line, as recorded. */
   daysInLine: number | null;
   /** The days in line the machine-days were worked out from: typed, or the sewing days. */
@@ -233,10 +275,12 @@ export interface CostingResult {
 export function computeCosting(input: CostingInput): CostingResult {
   const {
     orderQty: orderQtyIn, cutQty: cutQtyIn, shippedQty: shippedQtyIn,
-    dailyCostUsd, machineCount,
+    dailyCostUsd: dailyCostTyped, machineCount: machineCountTyped,
+    defaultDailyCostUsd = null, defaultMachineCount = null, defaultsFromPo = null,
     machineDaysUsed: machineDaysUsedIn, daysInLine, sewingDays = null,
     sellPriceUsd: sellPriceIn, lines,
-    lineMachineQty = null, firstDegreeQty: firstDegreeIn = null,
+    lineMachineQty: lineMachineTyped = null, planLineMachineQty = null, targetPerDay = null,
+    firstDegreeQty: firstDegreeIn = null,
     secondDegreeQty: secondDegreeIn = null, overrides,
     externalOpCostUsd = null, sublimationCostUsd = null, embroideryCostUsd = null,
   } = input;
@@ -275,6 +319,11 @@ export function computeCosting(input: CostingInput): CostingResult {
   const sellPriceUsd = pick('sellPriceUsd', sellPriceIn);
 
   // --- Machine economics -------------------------------------------------
+  // The factory's figures: this costing's, else as last entered on any costing.
+  const dailyCostUsd = dailyCostTyped ?? defaultDailyCostUsd;
+  const machineCount = machineCountTyped ?? defaultMachineCount;
+  const dailyCostSource: CostingResult['dailyCostSource'] = dailyCostTyped != null ? 'typed' : dailyCostUsd != null ? 'factory' : null;
+  const machineCountSource: CostingResult['machineCountSource'] = machineCountTyped != null ? 'typed' : machineCount != null ? 'factory' : null;
   // Actual Costing!D16/D17/D18: cost per machine-day, the factory days this
   // order consumed, and pieces cut per factory day.
   const machineCostPerDay = pick('machineCostPerDay', safeDiv(dailyCostUsd, machineCount));
@@ -292,13 +341,23 @@ export function computeCosting(input: CostingInput): CostingResult {
   // sewing on this order. A typed figure always wins; the records only fill
   // the gap, so nobody has to count days the application already counted.
   const daysInLineUsed = daysInLine ?? (sewingDays != null && sewingDays > 0 ? sewingDays : null);
+  // Line machines: typed on the costing, else the Production tab's machine table.
+  const lineMachineQty = lineMachineTyped ?? (planLineMachineQty != null && planLineMachineQty > 0 ? planLineMachineQty : null);
+  const lineMachineSource: CostingResult['lineMachineSource'] =
+    lineMachineTyped != null ? 'typed' : lineMachineQty != null ? 'production' : null;
   const daysInLineSource: CostingResult['daysInLineSource'] =
     daysInLine != null ? 'typed' : daysInLineUsed != null ? 'production' : null;
+  // Line machines typed on this costing are worked out with the days; a
+  // machine-days figure the costing already holds comes next; the Production
+  // step's machine table only fills a gap. Entering the machine table on the
+  // Production step must not quietly replace a figure a costing was struck on.
   const machineDaysUsed = pick(
     'machineDaysUsed',
-    lineMachineQty != null && daysInLineUsed != null
-      ? lineMachineQty * daysInLineUsed
-      : machineDaysUsedIn,
+    lineMachineTyped != null && daysInLineUsed != null
+      ? lineMachineTyped * daysInLineUsed
+      : machineDaysUsedIn != null
+        ? machineDaysUsedIn
+        : lineMachineQty != null && daysInLineUsed != null ? lineMachineQty * daysInLineUsed : null,
   );
 
   const workDays = pick('workDays', safeDiv(machineDaysUsed, machineCount));
@@ -395,6 +454,15 @@ export function computeCosting(input: CostingInput): CostingResult {
     costPerPiece != null && firstDegreeQty != null ? costPerPiece * firstDegreeQty : null,
   );
 
+  // C.M at the target, for comparison. The line's machine cost for a day over
+  // the pieces it is meant to make that day; charged against the same 1st
+  // degree pieces as the actual.
+  const targetCostPerPieceUsd = machineCostPerDay != null && lineMachineQty != null
+    ? safeDiv(machineCostPerDay * lineMachineQty, targetPerDay)
+    : null;
+  const targetCmCostUsd = targetCostPerPieceUsd != null && firstDegreeQty != null ? targetCostPerPieceUsd * firstDegreeQty : null;
+  const cmCostPerPieceUsd = safeDiv(cmCostUsd, firstDegreeQty);
+
   const costParts = [fabricCostUsd, accessoryCostUsd, externalCostUsd, cmCostUsd, otherCostUsd];
   const totalCostUsd = pick('totalCostUsd', costParts.every((p) => p == null) ? null : sum(costParts));
 
@@ -481,8 +549,13 @@ export function computeCosting(input: CostingInput): CostingResult {
       : productivityRate == null || productivityRate === 0 ? 'Waiting for the productivity rate'
       : firstDegreeQty == null ? 'Waiting for the 1st degree quantity' : null);
   needs('machineDaysUsed', machineDaysUsed,
-    lineMachineQty == null ? 'Waiting for the line machines'
+    lineMachineQty == null ? 'Waiting for the line machines — type them, or enter the machine table on the Production step'
       : 'Waiting for the days in line — type them, or record sewing on the Production step');
+  needs('targetCmCostUsd', targetCmCostUsd,
+    targetPerDay == null ? 'Waiting for the target production per day on the Production step'
+      : machineCostPerDay == null ? 'Waiting for the machine cost'
+      : lineMachineQty == null ? 'Waiting for the line machines'
+      : firstDegreeQty == null ? 'Waiting for the 1st degree quantity' : null);
   needs('fabricCostUsd', fabricCostUsd,
     fabricLines.length === 0 ? 'No fabric on the bill of materials yet'
       : 'Waiting for a unit price on the fabric rows');
@@ -510,6 +583,8 @@ export function computeCosting(input: CostingInput): CostingResult {
   return {
     source: {
       orderQty: orderQtyIn, cutQty: cutQtyIn, shippedQty: shippedQtyIn,
+      planLineMachineQty, targetPerDay,
+      defaultDailyCostUsd, defaultMachineCount, defaultsFromPo,
       cutQtySource: input.cutQtySource ?? null, sewingDays,
       firstDegreeQty: firstDegreeIn, secondDegreeQty: secondDegreeIn,
       sellPriceUsd: sellPriceIn, externalOpCostUsd,
@@ -530,14 +605,15 @@ export function computeCosting(input: CostingInput): CostingResult {
     },
     hasRecord: input.hasRecord ?? true,
     costingDate: input.costingDate ?? null,
-    dailyCostUsd, machineCount, machineDaysUsed,
+    dailyCostUsd, machineCount, machineDaysUsed, dailyCostSource, machineCountSource, defaultsFromPo,
     notes: input.notes ?? null,
     orderQty, cutQty, shippedQty,
     firstDegreeQty, secondDegreeQty,
     diffPct,
     shippedVsOrderedPct: shippedShare,
     machineCostPerDay, workDays, productivityRate,
-    lineMachineQty, daysInLine, daysInLineUsed, daysInLineSource,
+    lineMachineQty, lineMachineSource, targetPerDay, targetCostPerPieceUsd, targetCmCostUsd, cmCostPerPieceUsd,
+    daysInLine, daysInLineUsed, daysInLineSource,
     lines: linesOut, groups,
     fabricCostUsd, accessoryCostUsd, externalCostUsd,
     sublimationCostUsd: resolvedSublimation,

@@ -285,3 +285,65 @@ describe('filled in from the production records', () => {
     assert.equal(r.totalCostUsd, null, 'and no total of $0 is shown either');
   });
 });
+
+describe('the new costing sheet: line plan, target and factory figures', () => {
+  // The factory's own figures: $2,503 a day, 49 machines; a 13-machine line,
+  // a 500 pcs/day target, 11 days in line, 1,092 pieces passed out of 1,147 cut.
+  const sheet = (over: Partial<CostingInput> = {}) => computeCosting(base({
+    dailyCostUsd: 2503, machineCount: 49, daysInLine: 11,
+    cutQty: 1147, firstDegreeQty: 1092,
+    planLineMachineQty: 13, targetPerDay: 500, ...over,
+  }));
+
+  test('line machines come from the Production machine table when not typed', () => {
+    const c = sheet();
+    assert.equal(c.lineMachineQty, 13);
+    assert.equal(c.lineMachineSource, 'production');
+    assert.equal(c.machineDaysUsed, 143);
+    const typed = sheet({ lineMachineQty: 7 });
+    assert.equal(typed.lineMachineQty, 7);
+    assert.equal(typed.lineMachineSource, 'typed');
+  });
+
+  test('C.M at the target: line machine cost per day ÷ target × 1st degree, not in the total', () => {
+    const c = sheet();
+    const perPiece = (2503 / 49) * 13 / 500;
+    assert.ok(Math.abs(c.targetCostPerPieceUsd! - perPiece) < 1e-9);
+    assert.ok(Math.abs(c.targetCmCostUsd! - perPiece * 1092) < 1e-6);
+    // The actual C.M is the line's running cost spread over the pieces cut,
+    // charged for the pieces passed — and only it is in the total.
+    const runCost = (2503 / 49) * 143;
+    assert.ok(Math.abs(c.cmCostUsd! - runCost * 1092 / 1147) < 1e-6);
+    assert.ok(Math.abs(c.totalCostUsd! - c.cmCostUsd!) < 1e-9);
+    assert.ok(Math.abs(c.cmCostPerPieceUsd! - c.cmCostUsd! / 1092) < 1e-12);
+  });
+
+  test('no target: the comparison waits, the actual does not', () => {
+    const c = sheet({ targetPerDay: null });
+    assert.equal(c.targetCmCostUsd, null);
+    assert.match(c.waiting.targetCmCostUsd ?? '', /target production per day/);
+    assert.ok(c.cmCostUsd != null);
+  });
+
+  test("the factory's daily cost and machines fill a costing that leaves them blank", () => {
+    const c = sheet({ dailyCostUsd: null, machineCount: null, defaultDailyCostUsd: 2503, defaultMachineCount: 49, defaultsFromPo: '89-39' });
+    assert.equal(c.dailyCostUsd, 2503);
+    assert.equal(c.dailyCostSource, 'factory');
+    assert.equal(c.machineCountSource, 'factory');
+    assert.equal(c.defaultsFromPo, '89-39');
+    assert.ok(c.cmCostUsd != null);
+    // A typed figure wins.
+    const own = sheet({ dailyCostUsd: 3000, defaultDailyCostUsd: 2503 });
+    assert.equal(own.dailyCostUsd, 3000);
+    assert.equal(own.dailyCostSource, 'typed');
+  });
+});
+
+test("a costing's own machine-days are not replaced by the Production machine table", () => {
+  const c = computeCosting(base({ dailyCostUsd: 38.49, machineCount: 38, daysInLine: 11, machineDaysUsed: 130, planLineMachineQty: 14 }));
+  assert.equal(c.machineDaysUsed, 130);
+  assert.equal(c.lineMachineQty, 14);
+  // Typed line machines still win and are worked out with the days.
+  const typed = computeCosting(base({ dailyCostUsd: 38.49, machineCount: 38, daysInLine: 11, machineDaysUsed: 130, lineMachineQty: 13 }));
+  assert.equal(typed.machineDaysUsed, 143);
+});

@@ -654,16 +654,34 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
       <Card>
         <CardHeader
           title="What you enter"
-          subtitle="The factory's own figures, in dollars. These five are the only ones OpsFlow cannot work out for itself."
+          subtitle="The factory's own figures, in dollars. Left blank, each is taken from where OpsFlow already holds it, and says so."
         />
         <div className="grid gap-3 p-4 sm:grid-cols-3 lg:grid-cols-5">
           <StoredField
             label="Date" editing={editing} type="date"
             value={stored.costingDate} onChange={setField('costingDate')}
           />
-          {plain('Daily Cost', 'dailyCostUsd', '$ per day, the whole factory')}
-          {plain('All F. Machines', 'machineCount')}
-          {plain('Line Machines Qty', 'lineMachineQty')}
+          {plain('Daily Cost', 'dailyCostUsd',
+            stored.dailyCostUsd.trim() === '' && live.dailyCostSource === 'factory'
+              ? `Blank, so the factory's figure${live.defaultsFromPo ? `, last entered on PO ${live.defaultsFromPo},` : ''} is used`
+              : '$ per day, the whole factory',
+            live.dailyCostSource === 'factory' && live.dailyCostUsd != null
+              ? `${fmtMoney(live.dailyCostUsd)} — the factory's daily cost`
+              : undefined)}
+          {plain('All F. Machines', 'machineCount',
+            stored.machineCount.trim() === '' && live.machineCountSource === 'factory'
+              ? "Blank, so the factory's machine count is used"
+              : undefined,
+            live.machineCountSource === 'factory' && live.machineCount != null
+              ? `${fmtNumber(live.machineCount)} — the factory's machines`
+              : undefined)}
+          {plain('Line Machines Qty', 'lineMachineQty',
+            stored.lineMachineQty.trim() === '' && live.lineMachineSource === 'production'
+              ? 'Blank, so the machine table on the Production step is used'
+              : undefined,
+            live.lineMachineSource === 'production' && live.lineMachineQty != null
+              ? `${fmtNumber(live.lineMachineQty)} — the Production machine table`
+              : undefined)}
           {plain('Days in line', 'daysInLine',
             stored.daysInLine.trim() === '' && live.daysInLineSource === 'production'
               ? `Blank, so the ${live.daysInLineUsed} day${live.daysInLineUsed === 1 ? '' : 's'} with sewing recorded are used`
@@ -700,6 +718,18 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
           {field('1st Degree Qty', 'firstDegreeQty', live.source.firstDegreeQty, 'number', { from: 'out-line' })}
           {field('2nd Degree Qty', 'secondDegreeQty', live.source.secondDegreeQty, 'number', { from: '2nd-degree' })}
           {field('Diff. Percentage', 'diffPct', live.diffPct, 'percent', { hint: 'shipped ÷ ordered − 100%' })}
+          <Fact
+            label="Target per day"
+            value={live.targetPerDay == null ? null : `${fmtNumber(live.targetPerDay)} pcs`}
+            hint="the Production step's target production per day"
+            waiting={live.targetPerDay == null ? 'Waiting for the target on the Production step' : undefined}
+          />
+          <Fact
+            label="Cost per piece at target"
+            value={live.targetCostPerPieceUsd == null ? null : perPiece(live.targetCostPerPieceUsd)}
+            hint="machine cost × line machines ÷ target per day"
+            waiting={live.waiting.targetCmCostUsd && live.targetCostPerPieceUsd == null ? live.waiting.targetCmCostUsd : undefined}
+          />
         </div>
       </Card>
 
@@ -713,17 +743,19 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
               figure on this sheet is shown to two decimals, so "$1,234.56"
               has to fit without being cut off. The container scrolls
               sideways rather than squeezing the columns. */}
-          <table className="w-full min-w-[64rem]">
+          {/* Sized to its content with tight cells, so it fits beside the
+              step list instead of hiding its Percentage column off the edge. */}
+          <table className="w-full min-w-[46rem] [&_td]:px-2 [&_th]:px-2 [&_td:first-child]:pl-4 [&_th:first-child]:pl-4">
             <thead className="border-b border-ink-200 bg-ink-50">
               <tr>
-                <th className="th w-28">Section</th>
+                <th className="th">Section</th>
                 <th className="th">Item</th>
-                <th className="th w-28 text-right">Planned</th>
-                <th className="th w-32 text-right">Actual Cons.</th>
-                <th className="th w-24">Unit</th>
-                <th className="th w-36 text-right">Unit Price</th>
-                <th className="th w-36 text-right">Cost</th>
-                <th className="th w-20 text-right">Percentage</th>
+                <th className="th text-right">Planned</th>
+                <th className="th text-right">Actual Cons.</th>
+                <th className="th">Unit</th>
+                <th className="th text-right">Unit Price</th>
+                <th className="th text-right">Cost</th>
+                <th className="th text-right">%</th>
                 {editing && <th className="th w-10" />}
               </tr>
             </thead>
@@ -795,7 +827,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
                 </td>
                 <td className="td">PCS</td>
                 <td className="td tnum text-right">
-                  {cmPerPiece == null ? '—' : fmtMoney(cmPerPiece)}
+                  {cmPerPiece == null ? '—' : perPiece(cmPerPiece)}
                 </td>
                 <td className="td text-right">
                   <CostCell
@@ -804,6 +836,37 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
                   />
                 </td>
                 <td className="td tnum text-right">{fmtPct(pctOf(live.cmCostUsd, total), 2)}</td>
+                {editing && <td className="td" />}
+              </tr>
+              {/* The same C.M at the Production step's target, for comparison:
+                  what the pieces would have cost had the line made its target. */}
+              <tr className="bg-white">
+                <td className="td" />
+                <td className="td text-xs text-ink-500">
+                  At the target{live.targetPerDay != null ? ` of ${fmtNumber(live.targetPerDay)} pcs/day` : ''} — for comparison, not in the total
+                  {live.targetCmCostUsd == null && live.waiting.targetCmCostUsd && (
+                    <span className="block text-2xs text-amber-700">{live.waiting.targetCmCostUsd}</span>
+                  )}
+                </td>
+                <td className="td" />
+                <td className="td tnum text-right text-xs text-ink-500">
+                  {live.targetCmCostUsd == null || live.firstDegreeQty == null ? '—' : fmtNumber(live.firstDegreeQty)}
+                </td>
+                <td className="td text-xs text-ink-500">PCS</td>
+                <td className="td tnum text-right text-xs text-ink-500">
+                  {live.targetCostPerPieceUsd == null ? '—' : perPiece(live.targetCostPerPieceUsd)}
+                </td>
+                <td className="td tnum text-right text-xs text-ink-500">
+                  {live.targetCmCostUsd == null ? '—' : fmtMoney(live.targetCmCostUsd)}
+                  {live.targetCmCostUsd != null && live.cmCostUsd != null && live.cmCostUsd !== 0 && (
+                    <span className={clsx('block text-2xs', live.targetCmCostUsd < live.cmCostUsd ? 'text-amber-700' : 'text-emerald-700')}>
+                      {live.targetCmCostUsd < live.cmCostUsd
+                        ? `actual is ${fmtMoney(live.cmCostUsd - live.targetCmCostUsd)} above target`
+                        : `actual is ${fmtMoney(live.targetCmCostUsd - live.cmCostUsd)} under target`}
+                    </span>
+                  )}
+                </td>
+                <td className="td" />
                 {editing && <td className="td" />}
               </tr>
 
@@ -903,6 +966,21 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
  * worse than one that says nothing. It only speaks up when something is
  * outstanding or has failed.
  */
+/** A per-piece cost: four decimals below a dollar, where two would round $0.028 to $0.03. */
+const perPiece = (n: number) => fmtMoney(n, '$', Math.abs(n) < 1 ? 4 : 2);
+
+/** A figure shown, not typed: read from another section. */
+function Fact({ label, value, hint, waiting }: { label: string; value: string | null; hint?: string; waiting?: string }) {
+  return (
+    <div>
+      <p className="label">{label}</p>
+      <p className={clsx('text-sm tnum', value == null ? 'text-ink-300' : 'font-semibold text-ink-900')}>{value ?? '—'}</p>
+      {value == null && waiting ? <p className="mt-0.5 text-2xs text-amber-700">{waiting}</p>
+        : hint ? <p className="mt-0.5 text-2xs text-ink-500">{hint}</p> : null}
+    </div>
+  );
+}
+
 function SaveState({
   state, dirty, onRetry, onReload,
 }: {

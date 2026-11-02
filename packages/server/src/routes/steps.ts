@@ -50,6 +50,7 @@ import { refreshCutOrder } from '../services/cut-order.js';
 import { getOrderDetail, refreshOrderCache } from '../services/order-service.js';
 import { renderCostingPdf } from '../services/costing-pdf.js';
 import { applyStockRecordsToLedger, findStockRecordsForCell, orderAxisNames, resolveStockCell } from '../services/stock-sync.js';
+import { refreshFactoryDefaults } from '../services/factory-defaults.js';
 
 export const stepsRouter = Router();
 
@@ -1028,6 +1029,7 @@ stepsRouter.get('/:id/costing', requirePermission('costing:read'), asyncHandler(
   });
 }));
 
+
 /**
  * The costing as a PDF, from the same derivation the Costing tab shows.
  *
@@ -1208,6 +1210,9 @@ stepsRouter.put('/:id/costing', requirePermission('costing:read'), requirePermis
     });
     return { record, derived };
   });
+
+  // The factory's daily cost and machine count may have just changed.
+  await refreshFactoryDefaults();
 
   await logActivity({
     orderId, actorId: user.id, actorName: user.name,

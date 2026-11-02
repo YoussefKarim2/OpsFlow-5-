@@ -24,8 +24,10 @@ import {
   type TaskDto, type BomItemInput, type CostLineInput, type ProductionEntry, type Alert,
   type RequirementInput, type MaterialPosition, type ConsumptionVariance,
   type Blocker, type GateContext,
+  linePlanOf,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
+import { factoryDefaults } from './factory-defaults.js';
 import { inWearingOrder, sizeAliasFor } from './import/po-lines.js';
 import { NotFoundError } from '../errors.js';
 
@@ -585,9 +587,16 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     shippedQty: shippedQty > 0 ? shippedQty : null,
     dailyCostUsd: dec(cr?.dailyCostUsd),
     machineCount: cr?.machineCount ?? null,
+    defaultDailyCostUsd: factoryDefaults().dailyCostUsd,
+    defaultMachineCount: factoryDefaults().machineCount,
+    defaultsFromPo: factoryDefaults().fromPo,
     machineDaysUsed: cr?.machineDaysUsed ?? null,
     daysInLine: cr?.daysInLine ?? null,
     lineMachineQty: cr?.lineMachineQty ?? null,
+    // The Production tab's line plan: its machine table's total, and its
+    // target per day — the sheet's Production Follow up I11 and J13.
+    planLineMachineQty: linePlanOf(order).totalMachines || null,
+    targetPerDay: order.targetPerDay ?? null,
     // The sheet's 1st and 2nd Degree columns. OpsFlow already records both
     // facts: out-line is what passed end-line inspection, and second degree is
     // what was graded B. Neither is a subtraction — they are counted on the
