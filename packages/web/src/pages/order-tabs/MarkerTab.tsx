@@ -23,7 +23,7 @@ interface Plan {
     id: string; fabric: string; color: string; panel: string; ratio: string;
     layers: number; markerLengthM: number; nestPcs: number | null;
     efficiencyPct?: number | null; maxLayer?: number | null; markerNumber?: string | null; notes?: string | null;
-    output: Record<string, number>; totalPieces: number; totalLengthM: number;
+    output: Record<string, number>; totalPieces: number; totalLengthM: number; recordedTotalLengthM?: number | null;
     consumptionPerPieceM: number | null;
   }>;
   plannedBySize: Record<string, number>;
@@ -54,7 +54,7 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
     onSuccess: (r) => {
       setConfirmClear(false);
       toast.success(`Lay plan removed: ${r.markers} row${r.markers === 1 ? '' : 's'}.`);
-      for (const k of ['markers', 'order', 'order-steps', 'attachments', 'bom']) void qc.invalidateQueries({ queryKey: [k, order.id] });
+      for (const k of ['markers', 'order', 'order-steps', 'attachments', 'bom', 'costing']) void qc.invalidateQueries({ queryKey: [k, order.id] });
     },
     onError: (e) => toast.error(e),
   });
@@ -145,7 +145,10 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
         {editing ? (
           <LayPlanEditor
             orderId={order.id}
-            lays={lays.map((l) => ({ ...l, color: l.color ?? '', totalLengthM: l.totalLengthM }))}
+            // The recorded total only: a worked-out layers × length put in the
+            // box was saved back as typed, and the lay stopped following its
+            // layers — and the fabric, and the bill of materials, with it.
+            lays={lays.map((l) => ({ ...l, color: l.color ?? '', totalLengthM: l.recordedTotalLengthM ?? null }))}
             defaultFabric={plan.mainFabric ?? order.fabric ?? null}
             onSaved={() => setEditing(false)}
             onCancel={() => setEditing(false)}

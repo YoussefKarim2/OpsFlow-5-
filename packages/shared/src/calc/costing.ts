@@ -89,6 +89,14 @@ export interface CostingInput {
    * machine-days only when nobody has typed the days in line.
    */
   sewingDays?: number | null;
+  /**
+   * Pieces sewn so far, as the production records count them. The
+   * productivity rate is worked out from these once sewing is recorded: the
+   * line's running cost so far was spent on the pieces made so far, and
+   * spreading it over the whole cut (most of it not yet sewn) understated the
+   * C.M a hundredfold on an order in progress.
+   */
+  producedQty?: number | null;
   /** Where the cut quantity came from: what the cutting floor recorded, or the cut order. */
   cutQtySource?: 'recorded' | 'cut order' | null;
   /** Machines on this order's line. The sheet's "Line Machines Qty". */
@@ -149,6 +157,7 @@ export interface CostingSource {
   targetPerDay: number | null;
   cutQtySource: 'recorded' | 'cut order' | null;
   sewingDays: number | null;
+  producedQty: number | null;
   shippedQty: number | null;
   firstDegreeQty: number | null;
   secondDegreeQty: number | null;
@@ -216,8 +225,9 @@ export interface CostingResult {
   /** Dollars per machine-day: daily cost over all factory machines. */
   machineCostPerDay: number | null;
   workDays: number | null;
-  /** `=J12/D17` — pieces per work day. */
+  /** Pieces per work day: pieces sewn ÷ work days, or the cut ÷ work days before any sewing is recorded. */
   productivityRate: number | null;
+  productivityBasis: 'produced' | 'cut';
   /** Machines on this order's line: typed on the costing, else the Production tab's machine table. */
   lineMachineQty: number | null;
   lineMachineSource: 'typed' | 'production' | null;
@@ -277,7 +287,7 @@ export function computeCosting(input: CostingInput): CostingResult {
     orderQty: orderQtyIn, cutQty: cutQtyIn, shippedQty: shippedQtyIn,
     dailyCostUsd: dailyCostTyped, machineCount: machineCountTyped,
     defaultDailyCostUsd = null, defaultMachineCount = null, defaultsFromPo = null,
-    machineDaysUsed: machineDaysUsedIn, daysInLine, sewingDays = null,
+    machineDaysUsed: machineDaysUsedIn, daysInLine, sewingDays = null, producedQty = null,
     sellPriceUsd: sellPriceIn, lines,
     lineMachineQty: lineMachineTyped = null, planLineMachineQty = null, targetPerDay = null,
     firstDegreeQty: firstDegreeIn = null,
@@ -361,7 +371,8 @@ export function computeCosting(input: CostingInput): CostingResult {
   );
 
   const workDays = pick('workDays', safeDiv(machineDaysUsed, machineCount));
-  const productivityRate = pick('productivityRate', safeDiv(cutQty, workDays));
+  const productivityBasis: CostingResult['productivityBasis'] = producedQty != null && producedQty > 0 ? 'produced' : 'cut';
+  const productivityRate = pick('productivityRate', safeDiv(productivityBasis === 'produced' ? producedQty : cutQty, workDays));
 
   // --- Line costs --------------------------------------------------------
   const priced: Array<CostLineInput & { cost: number | null }> = lines.map((l) => ({
@@ -542,26 +553,35 @@ export function computeCosting(input: CostingInput): CostingResult {
   needs('productivityRate', productivityRate,
     workDays == null ? 'Waiting for the work days'
       : workDays === 0 ? 'Waiting for work days above zero — the machine-days used is 0'
-      : 'Waiting for a cut quantity');
+      : 'Waiting for a cut quantity or sewing output');
+  // A rate of 0 is a cut of 0 with no sewing yet: say what is missing, not
+  // "waiting for the productivity rate" beside a rate the sheet shows as 0.
+  if (productivityRate === 0 && waiting.productivityRate == null) waiting.productivityRate = 'Waiting for a cut quantity or sewing output';
   needs('cmCostUsd', cmCostUsd,
     noDaily ? `Waiting for ${noDaily}`
       : machineDaysUsed == null ? 'Waiting for the line machines and days in line'
-      : productivityRate == null || productivityRate === 0 ? 'Waiting for the productivity rate'
+      : noMachines ? `Waiting for ${noMachines}`
+      : productivityRate === 0
+        ? (overridden.includes('productivityRate') ? 'Waiting for a productivity rate above zero' : 'Waiting for a cut quantity or sewing output')
+      : productivityRate == null ? 'Waiting for the productivity rate'
       : firstDegreeQty == null ? 'Waiting for the 1st degree quantity' : null);
   needs('machineDaysUsed', machineDaysUsed,
     lineMachineQty == null ? 'Waiting for the line machines — type them, or enter the machine table on the Production step'
       : 'Waiting for the days in line — type them, or record sewing on the Production step');
   needs('targetCmCostUsd', targetCmCostUsd,
-    targetPerDay == null ? 'Waiting for the target production per day on the Production step'
-      : machineCostPerDay == null ? 'Waiting for the machine cost'
+    targetPerDay == null || targetPerDay <= 0 ? 'Waiting for the target production per day on the Production step'
+      : machineCostPerDay == null ? (noMachines ? `Waiting for ${noMachines}` : "Waiting for the factory's daily cost")
       : lineMachineQty == null ? 'Waiting for the line machines'
       : firstDegreeQty == null ? 'Waiting for the 1st degree quantity' : null);
-  needs('fabricCostUsd', fabricCostUsd,
-    fabricLines.length === 0 ? 'No fabric on the bill of materials yet'
-      : 'Waiting for a unit price on the fabric rows');
-  needs('accessoryCostUsd', accessoryCostUsd,
-    accessoryLines.length === 0 ? 'No accessories on the bill of materials yet'
-      : 'Waiting for a unit price on the accessory rows');
+  // Nothing issued is a different wait from nothing priced: the costing
+  // counts what the warehouse issued, and a priced line nobody has issued
+  // said "waiting for a unit price" when the price was already there.
+  const groupWait = (group: readonly CostLineInput[], noun: string, row: string): string =>
+    group.length === 0 ? `No ${noun} on the bill of materials yet`
+      : group.every((l) => l.quantity == null) ? `Waiting for the ${noun} to be issued — the actual consumption`
+      : `Waiting for a unit price on the ${row} rows`;
+  needs('fabricCostUsd', fabricCostUsd, groupWait(fabricLines, 'fabric', 'fabric'));
+  needs('accessoryCostUsd', accessoryCostUsd, groupWait(accessoryLines, 'accessories', 'accessory'));
   needs('totalCostUsd', totalCostUsd, 'Waiting for a priced cost row');
   needs('unitActualCostUsd', unitActualCostUsd,
     totalCostUsd == null ? 'Waiting for the costs below'
@@ -585,7 +605,7 @@ export function computeCosting(input: CostingInput): CostingResult {
       orderQty: orderQtyIn, cutQty: cutQtyIn, shippedQty: shippedQtyIn,
       planLineMachineQty, targetPerDay,
       defaultDailyCostUsd, defaultMachineCount, defaultsFromPo,
-      cutQtySource: input.cutQtySource ?? null, sewingDays,
+      cutQtySource: input.cutQtySource ?? null, sewingDays, producedQty,
       firstDegreeQty: firstDegreeIn, secondDegreeQty: secondDegreeIn,
       sellPriceUsd: sellPriceIn, externalOpCostUsd,
       customer: input.customer ?? null,
@@ -611,7 +631,7 @@ export function computeCosting(input: CostingInput): CostingResult {
     firstDegreeQty, secondDegreeQty,
     diffPct,
     shippedVsOrderedPct: shippedShare,
-    machineCostPerDay, workDays, productivityRate,
+    machineCostPerDay, workDays, productivityRate, productivityBasis,
     lineMachineQty, lineMachineSource, targetPerDay, targetCostPerPieceUsd, targetCmCostUsd, cmCostPerPieceUsd,
     daysInLine, daysInLineUsed, daysInLineSource,
     lines: linesOut, groups,

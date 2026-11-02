@@ -108,6 +108,7 @@ export function LayingMarkingImportWizard({
       qc.invalidateQueries({ queryKey: ['laying-import-history', orderId] });
       // The plan's fabric went onto the bill of materials with it.
       qc.invalidateQueries({ queryKey: ['bom', orderId] });
+      qc.invalidateQueries({ queryKey: ['costing', orderId] });
       // The import moves more than the lay list: the order's marker figures
       // and blockers, the workflow steps that read them, and the laying
       // sheet itself, which is filed as an attachment.
@@ -462,6 +463,20 @@ function ReviewStep({
   committing: boolean;
 }) {
   const conflictByKey = new Map(analysis.conflicts.map((c) => [c.key, c]));
+  // The server's own keys (laying-committer `layingRowKey`): a marker number
+  // used a second time is `marker:X#2`, counted over every row of the sheet.
+  // Keyed as plain `marker:X`, the second row showed the first row's conflict
+  // and its Keep/Replace choice landed on the first row's lay.
+  const rowKeys = new Map<number, string>();
+  {
+    const seen = new Map<string, number>();
+    for (const r of analysis.rows) {
+      if (!r.markerNumber) { rowKeys.set(r.rowNumber, `row:${r.rowNumber}`); continue; }
+      const n = (seen.get(r.markerNumber) ?? 0) + 1;
+      seen.set(r.markerNumber, n);
+      rowKeys.set(r.rowNumber, n > 1 ? `marker:${r.markerNumber}#${n}` : `marker:${r.markerNumber}`);
+    }
+  }
   const conflictKeys = analysis.conflicts.map((c) => c.key);
 
   const hasExisting = existingLays > 0 || conflictKeys.length > 0 || analysis.priorImportExists;
@@ -555,7 +570,7 @@ function ReviewStep({
               </thead>
               <tbody className="divide-y divide-ink-100">
                 {analysis.rows.filter((r) => r.kind !== 'PANEL').map((row: LayingRowDto) => {
-                  const key = row.markerNumber ? `marker:${row.markerNumber}` : `row:${row.rowNumber}`;
+                  const key = rowKeys.get(row.rowNumber) ?? `row:${row.rowNumber}`;
                   const conflict = replaceAll ? undefined : conflictByKey.get(key);
                   return (
                     <RowLine

@@ -109,6 +109,30 @@ export async function warnIfPoExists(
   });
 }
 
+/**
+ * Say so when this very file has been imported before.
+ *
+ * A file with no PO number gets a new stand-in number on every upload, so the
+ * PO check above can never match it — and the same 14,414-piece buy was
+ * imported as a new order each time. The imported file is filed on its order
+ * with a checksum; the same checksum names the order it became.
+ */
+async function warnIfAlreadyImported(extraction: ExtractionResult, buffer: Buffer): Promise<void> {
+  const checksum = createHash('sha256').update(buffer).digest('hex');
+  const filed = await prisma.attachment.findFirst({
+    where: { checksum, documentType: 'CUSTOMER_PO', order: { cancelled: false } },
+    orderBy: { createdAt: 'desc' },
+    select: { createdAt: true, order: { select: { poNumber: true, orderName: true } } },
+  });
+  if (!filed?.order) return;
+  extraction.issues.push({
+    level: 'WARNING', field: null, sheet: null, cell: null,
+    message:
+      `This exact file was already imported as PO ${filed.order.poNumber} (${filed.order.orderName}) on `
+      + `${filed.createdAt.toISOString().slice(0, 10)}. Confirming creates a second order from it — open the existing order instead, unless that is what you mean.`,
+  });
+}
+
 async function findOrderByPo(poNumber: string) {
   const o = await prisma.order.findUnique({ where: { poNumber }, select: { id: true, poNumber: true, client: { select: { name: true } } } });
   return o ? { id: o.id, poNumber: o.poNumber, clientName: o.client.name } : null;
@@ -143,7 +167,9 @@ async function readDocument(
     // too, which the generic reader cannot infer from a flat table.
     if (profiled.profileKey) {
       applyFieldOverrides(profiled, options.fieldOverrides);
-      return profiled;
+      // The same visible stand-in as every other file: a template with an
+      // empty "Po No" previewed as "—" and was created under a number nobody saw.
+      return placeholderIfUnnumbered(profiled, options.job);
     }
   }
 
@@ -399,6 +425,7 @@ importRouter.post('/upload', requirePermission('import:run'), upload.single('fil
 
   const result = await runExtraction(req.file.buffer, { job });
   await warnIfPoExists(result);
+  await warnIfAlreadyImported(result, req.file.buffer);
   await persistJob(job.id, result);
 
   res.json({ jobId: job.id, fileName: job.fileName, ...toResponse(result) });
@@ -694,7 +721,7 @@ importRouter.post('/:jobId/commit', requirePermission('import:run'), asyncHandle
   // that is enforced for every file type and every client.
   if (orderPieces(extraction) === 0) {
     throw new BadRequestError(
-      'No quantities were read from this file. Enter the colours, sizes and pieces in the Main Order grid on the review screen, then confirm again.',
+      'No quantities were read from this file, so there is nothing to create the order from. Check the file has a colour, size and quantity for each line (or a size grid), and upload it again.',
     );
   }
   refuseUnbelievable(extraction);

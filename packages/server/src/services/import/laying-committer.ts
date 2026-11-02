@@ -341,7 +341,13 @@ export async function commitLayingImport(
       const x = input.extras;
       const sheet = {
         header: x.header, signatures: x.signatures, sizes: x.sizes,
-        colourTables: x.colourTables, fabricLines: x.fabricLines,
+        // The working copy repeats a colour's fabric line; kept once, so the
+        // saved fabric table adds up to what the sheet needs.
+        colourTables: x.colourTables,
+        fabricLines: x.fabricLines.filter((l, i, all) => all.findIndex((o) =>
+          o.item.trim().toUpperCase() === l.item.trim().toUpperCase()
+          && (o.colour ?? '').trim().toUpperCase() === (l.colour ?? '').trim().toUpperCase()
+          && (o.description ?? '') === (l.description ?? '')) === i),
       };
       await tx.importJob.update({
         where: { id: input.jobId },

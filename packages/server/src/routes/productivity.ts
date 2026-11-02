@@ -310,7 +310,9 @@ productivityRouter.put('/day-log/:date', requirePermission('production:write'), 
 
   const data = {
     operators: input.operators, helpers: input.helpers, workingMinutes: input.workingMinutes,
-    machinesRunning: input.machinesRunning, notes: input.notes ?? null, recordedById: actor.id,
+    // Notes only when sent: the day-sheet form does not carry them, and every
+    // save of it used to erase whatever note the day had.
+    machinesRunning: input.machinesRunning, ...(input.notes !== undefined ? { notes: input.notes } : {}), recordedById: actor.id,
   };
   const saved = await prisma.productionDayLog.upsert({
     where: { date: day },

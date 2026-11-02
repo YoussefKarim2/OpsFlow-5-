@@ -678,6 +678,14 @@ materialsRouter.post('/bom/:id/issue', requirePermission('material:issue'), asyn
   // This route used to write `alreadyIssued + qty` back over it — a total
   // read before the issue — so two issues at once each wrote their own stale
   // sum and one of them vanished from the line while its stock had gone.
+  // The recipient is checked before any stock moves: an unknown user id
+  // failed the log row's insert after the shelf and the line had already
+  // moved, and a retry then issued the material twice.
+  if (input.issuedToId) {
+    const recipient = await prisma.user.findUnique({ where: { id: input.issuedToId }, select: { id: true } });
+    if (!recipient) throw new ValidationError('The person this is issued to was not found. Choose them again.');
+  }
+
   if (item.materialId) {
     await issueToProduction(actor, {
       materialId: item.materialId, orderId: item.orderId, qty: input.qty, unit: item.unit,

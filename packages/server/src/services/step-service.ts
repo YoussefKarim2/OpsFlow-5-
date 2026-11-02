@@ -38,11 +38,23 @@ import { buildStepContext, blockedStepKeys, type StepExtras } from './step-conte
 
 
 export async function loadStepExtras(orderId: string): Promise<StepExtras> {
-  const [attachments, instructions, proforma, stock] = await Promise.all([
+  const [attachments, instructions, proforma, issuedProforma, stock] = await Promise.all([
     prisma.attachment.count({ where: { orderId } }),
     prisma.customInstruction.count({ where: { orderId } }),
     prisma.proformaInvoice.findFirst({
       where: { orderId },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, _count: { select: { lines: true } } },
+    }),
+    // A proforma raised on the Proforma / Invoice page — for this order alone
+    // or for a buy that includes it — is the same answer to this step. Only
+    // the order's own tab used to count, so a proforma made there left the
+    // step saying "Create the proforma invoice".
+    prisma.invoice.findFirst({
+      where: {
+        kind: 'PROFORMA', status: { not: 'VOID' },
+        OR: [{ orderId }, { orders: { some: { orderId } } }],
+      },
       orderBy: { createdAt: 'desc' },
       select: { id: true, _count: { select: { lines: true } } },
     }),
@@ -52,8 +64,8 @@ export async function loadStepExtras(orderId: string): Promise<StepExtras> {
   return {
     referenceFileCount: attachments,
     customInstructionCount: instructions,
-    hasProformaInvoice: proforma != null,
-    proformaLineCount: proforma?._count.lines ?? 0,
+    hasProformaInvoice: proforma != null || issuedProforma != null,
+    proformaLineCount: Math.max(proforma?._count.lines ?? 0, issuedProforma?._count.lines ?? 0),
     stockQty: sum(stock.map((s) => s.availableQty)),
     // A stock row that reads zero is still an answer — somebody looked and
     // found none. `stockQty > 0` would treat "checked, none" as "not checked".

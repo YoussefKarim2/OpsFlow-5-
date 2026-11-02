@@ -217,6 +217,9 @@ export const CONCEPT_SYNONYMS: Record<ImportConcept, readonly string[]> = {
   COLOR: [
     'color', 'colour', 'shade', 'colorway', 'colourway', 'color name', 'colour name',
     'color code', 'colour code', 'col', 'shade name',
+    // An Excel pivot table heads its row field "Row Labels": on a PO sheet
+    // laid out as a pivot, that column is the colours.
+    'row labels', 'color/size', 'colour/size',
     // A buyer's ERP heads the colour column "Color description"; as a mere
     // containment it tied with Description and lost, and the order's name
     // became "HUNTER/WHT YOUTH SMALL".

@@ -16,6 +16,7 @@ import { ValidationError } from '../../errors.js';
 import { suppressChangeEvents } from '../../request-context.js';
 import { normalisePoNumber } from '../rules.js';
 import { syncLayPlanFabricToBom } from '../lay-plan-bom.js';
+import { cairoDay } from '../../util/cairo-day.js';
 
 export interface CommitOptions {
   actorId: string;
@@ -310,7 +311,10 @@ export async function commitImport(
   // `invalidDate.getTime()` is NaN, which would make the shipping date an
   // Invalid Date and push the failure into the database instead of the parser.
   // Belt and braces, because the cost of being wrong here is a bad order.
-  const poDate = isValidDate(f.poDate) ? f.poDate : new Date();
+  // Today as a date, not a moment — the Cairo calendar day, stored at UTC
+  // midnight like every date OpsFlow keeps.
+  const today = cairoDay();
+  const poDate = isValidDate(f.poDate) ? f.poDate : today;
   const shipDate = isValidDate(f.promisedShippingDate)
     ? f.promisedShippingDate
     : new Date(poDate.getTime() + 30 * 86_400_000);
@@ -388,8 +392,11 @@ export async function commitImport(
       if (!orderColorId) continue;
       for (const [size, qty] of Object.entries(row.cells)) {
         const orderSizeId = sizeIds.get(axisKey(size))?.id;
-        if (!orderSizeId || qty <= 0) continue;
-        qtyRows.push({ orderId: order.id, orderColorId, orderSizeId, ledger: 'ORDER', qty: Math.round(qty) });
+        // Rounded first, then skipped when nothing is left: a 0.4 was written
+        // as a 0-piece cell, where the review screen said it was left out.
+        const pieces = Math.round(qty);
+        if (!orderSizeId || pieces <= 0) continue;
+        qtyRows.push({ orderId: order.id, orderColorId, orderSizeId, ledger: 'ORDER', qty: pieces });
       }
     }
 

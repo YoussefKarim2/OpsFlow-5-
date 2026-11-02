@@ -163,11 +163,12 @@ describe('C.M when something it needs is missing', () => {
     assert.match(r.waiting.cmCostUsd!, /productivity rate/);
   });
 
-  test('no productivity rate at all says so', () => {
-    // Nothing cut, so the rate cannot be worked out either.
+  test('no productivity rate at all says what is missing', () => {
+    // Nothing cut and nothing sewn, so the rate cannot be worked out: the
+    // missing fact is the cut quantity, not "the productivity rate".
     const r = computeCosting({ ...partial, cutQty: 0 });
     assert.equal(r.cmCostUsd, null);
-    assert.match(r.waiting.cmCostUsd!, /productivity rate/);
+    assert.match(r.waiting.cmCostUsd!, /cut quantity/);
   });
 
   test('no 1st degree quantity says so', () => {
@@ -346,4 +347,25 @@ test("a costing's own machine-days are not replaced by the Production machine ta
   // Typed line machines still win and are worked out with the days.
   const typed = computeCosting(base({ dailyCostUsd: 38.49, machineCount: 38, daysInLine: 11, machineDaysUsed: 130, lineMachineQty: 13 }));
   assert.equal(typed.machineDaysUsed, 143);
+});
+
+test('an order in progress: the productivity rate counts the pieces sewn, not the whole cut', () => {
+  // 13 machines for 2 days of a 38-machine factory at $38.49 a day; 15,272 cut,
+  // 750 sewn so far, 100 passed.
+  const inProgress = computeCosting(base({
+    dailyCostUsd: 38.49, machineCount: 38, lineMachineQty: 13, daysInLine: 2,
+    cutQty: 15272, producedQty: 750, firstDegreeQty: 100,
+  }));
+  const runCost = (38.49 / 38) * 26;
+  assert.equal(inProgress.productivityBasis, 'produced');
+  assert.ok(Math.abs(inProgress.cmCostUsd! - runCost * 100 / 750) < 1e-9, String(inProgress.cmCostUsd));
+  // Before any sewing is recorded, the cut is the basis, as before.
+  const before = computeCosting(base({ dailyCostUsd: 38.49, machineCount: 38, lineMachineQty: 13, daysInLine: 2, cutQty: 15272, firstDegreeQty: 100 }));
+  assert.equal(before.productivityBasis, 'cut');
+  assert.ok(Math.abs(before.cmCostUsd! - runCost * 100 / 15272) < 1e-9);
+});
+
+test('a priced accessory nobody has issued waits for the issue, not for a price', () => {
+  const c = computeCosting(base({ lines: [{ group: 'ACCESSORY', label: 'Washing Inst.', quantity: null, unit: 'Pcs', unitPriceUsd: 0.01 }] }));
+  assert.match(c.waiting.accessoryCostUsd ?? '', /to be issued/);
 });

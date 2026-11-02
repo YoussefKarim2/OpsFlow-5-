@@ -67,7 +67,9 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
     },
     onSuccess: () => {
       setEditing(false); setError(null);
-      void qc.invalidateQueries({ queryKey: ['order', order.id] });
+      // A changed cut % rewrites the cut order, which the Cut Order grid and
+      // the step rail read from their own queries.
+      for (const k of ['order', 'matrix', 'order-steps', 'costing']) void qc.invalidateQueries({ queryKey: [k, order.id] });
     },
     onError: (e) => {
       setError(e instanceof ApiError || e instanceof Error ? e.message : 'Could not save.');

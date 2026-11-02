@@ -51,7 +51,7 @@ export interface StepOrderInput {
   bomItems: Array<{ requiredQty: unknown; issuedQty: unknown }>;
   externalOperations: Array<{ status: string }>;
   productionRecords: Array<{ qty: number; operation: string }>;
-  qualityAudits: Array<{ result: string; correctiveActionClosed: boolean; createdAt?: Date | null }>;
+  qualityAudits: Array<{ result: string; correctiveActionClosed: boolean; inspectionDate?: Date | null; createdAt?: Date | null }>;
   packingLists: Array<{ approved: boolean; cartons: Array<{ qty: number }> }>;
   shipments: Array<{ qty: number; status: string; actualShippingDate: Date | null }>;
   costing: { lines: Array<unknown> } | null;
@@ -123,8 +123,10 @@ export function buildStepContext(
   // The verdict that stands is the most recent one. A failed audit followed by
   // a closed corrective action and a passing re-inspection has passed; asking
   // every audit ever recorded to be a pass would keep the step open forever.
+  // By the day inspected, then by entry — the same order the order page uses.
   const latestDecided = [...decided].sort(
-    (a, b) => (a.createdAt?.getTime() ?? 0) - (b.createdAt?.getTime() ?? 0),
+    (a, b) => (a.inspectionDate?.getTime() ?? 0) - (b.inspectionDate?.getTime() ?? 0)
+      || (a.createdAt?.getTime() ?? 0) - (b.createdAt?.getTime() ?? 0),
   ).at(-1);
 
   // Task counts per step, for the steps whose completion is a task list rather

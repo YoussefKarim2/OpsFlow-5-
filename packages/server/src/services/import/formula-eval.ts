@@ -53,6 +53,10 @@ function formulaOf(cell: ExcelJS.Cell): string | null {
 
 function cellValue(ws: ExcelJS.Worksheet, row: number, col: number, depth: number, seen: Set<string>): Value {
   const cell = ws.getRow(row).getCell(col);
+  // A merged range holds its value once, in its first cell. ExcelJS hands the
+  // master's value back for every other cell of the range, so a SUM across a
+  // merge counted it once per cell; Excel counts it once.
+  if (cell.isMerged && cell.master !== cell) return null;
   const v = cell.value as unknown;
   if (v == null) return null;
   if (typeof v === 'number') return v;

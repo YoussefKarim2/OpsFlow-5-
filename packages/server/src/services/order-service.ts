@@ -406,7 +406,9 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
   // The verdict that stands is the most recent decided inspection.
   const latestDecidedAudit = order.qualityAudits
     .filter((a) => a.result !== 'PENDING')
-    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime())
+    // By the day it was inspected, then by when it was entered: a back-dated
+    // inspection typed in late is not the verdict that stands.
+    .sort((a, b) => a.inspectionDate.getTime() - b.inspectionDate.getTime() || a.createdAt.getTime() - b.createdAt.getTime())
     .at(-1);
 
   const status = deriveOrderStatus({
@@ -463,9 +465,15 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
       )
     : null;
 
-  const completedStages = new Set(
-    stages.filter((s) => s.status === 'COMPLETED').map((s) => s.stageKey),
-  );
+  // Finished by its tasks, or marked Done / Not required by a person. The
+  // rail already honours a person's decision; the gates did not, so the list
+  // and the dashboard went on reporting blockers for a step marked done.
+  const completedStages = new Set([
+    ...stages.filter((s) => s.status === 'COMPLETED').map((s) => s.stageKey),
+    ...order.stages
+      .filter((s) => s.statusOverride === 'COMPLETED' || s.statusOverride === 'NOT_REQUIRED')
+      .map((s) => s.stageKey),
+  ]);
 
   const worstShortage = materials?.topShortages[0] ?? null;
 
@@ -489,6 +497,10 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     markerShortfall: markerPlan ? -markerPlan.shortfallTotal : 0,
     hasOpenQualityFailure: openQualityFailure,
     qualityInspected: order.qualityAudits.some((a) => a.result !== 'PENDING'),
+    // The inspection that stands passed: a FAIL whose corrective action was
+    // closed is not a pass, and packing waits for the re-inspection.
+    qualityPassed: !openQualityFailure && latestDecidedAudit?.result === 'PASS'
+      && ['FINAL_AUDIT', 'BEFORE_PACKING', 'IN_PACKING'].includes(latestDecidedAudit.auditType),
     packingApproved: latestPackingList?.approved ?? false,
     hasCartons: order.packingLists.some((p) => p.cartons.length > 0),
     completedStages,
@@ -581,8 +593,12 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     // should divide by what was cut, not by what was meant to be.
     cutQty: costingCut.qty,
     cutQtySource: costingCut.source,
+    // Pieces sewn so far: the productivity rate is worked out from these once
+    // sewing is recorded, so the C.M of an order in progress is the line's
+    // cost so far over what it has made so far.
+    producedQty: production.producedQty > 0 ? production.producedQty : null,
     sewingDays: new Set(order.productionRecords
-      .filter((p) => p.operation === 'SEWING')
+      .filter((p) => p.operation === 'SEWING' && p.qty > 0)
       .map((p) => p.date.toISOString().slice(0, 10))).size,
     shippedQty: shippedQty > 0 ? shippedQty : null,
     dailyCostUsd: dec(cr?.dailyCostUsd),

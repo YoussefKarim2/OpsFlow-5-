@@ -205,7 +205,13 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
       row.cartonsTyped ? row.cartons : { formula: `ROUNDUP(A${r}/${row.perCarton},0)`, result: row.cartons },
       row.unit, row.unitPrice,
       // A style of several rates has its own exact total; one rate multiplies out.
-      row.mixedRates || row.unitPrice == null ? row.total : { formula: `A${r}*J${r}`, result: row.total ?? undefined },
+      // A formula only where Excel's own A×J gives the figure OpsFlow bills —
+      // OpsFlow totals each colour to the cent, and 122 + 133 pcs at $7.2535
+      // came to 1,849.65 here but 1,849.64 in Excel.
+      row.mixedRates || row.unitPrice == null || row.total == null
+        || Math.abs(Math.round(Number(row.qty) * row.unitPrice * 100) / 100 - row.total) > 0.000001
+        ? row.total
+        : { formula: `A${r}*J${r}`, result: row.total },
       perContainer > 0 ? { formula: `H${r}/$L$20`, result: row.containerShare ?? undefined } : null,
     ];
     values.forEach((v, j) => {

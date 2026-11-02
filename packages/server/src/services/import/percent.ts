@@ -9,5 +9,9 @@
 export function asPercent(n: number | null | undefined): number | null {
   if (n == null || !Number.isFinite(n)) return null;
   const v = n > 0 && n <= 1.5 ? n * 100 : n;
+  // Beyond what the column holds (Decimal 6,3) it is not a percentage — a
+  // column read as the wrong thing — and is left out rather than failing the
+  // whole import.
+  if (Math.abs(v) > 999.999) return null;
   return Math.round(v * 1000) / 1000;
 }

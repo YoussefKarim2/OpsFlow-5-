@@ -38,7 +38,7 @@ import { detectFileKind } from './file-kind.js';
 import {
   cellText, toNumber, toDate, buildLineItems, parseFieldOverride, isUncachedFormula, uncachedFormulaIssue,
 } from './extractor.js';
-import { toIsoDayOrNull } from '@opsflow/shared';
+import { toIsoDayOrNull, parseSpreadsheetDate } from '@opsflow/shared';
 import { loadWorkbook, readCsvWorkbook } from './open-workbook.js';
 import { readAgeLayingSheet } from './age-laying-reader.js';
 import { orderSizes, splitColourSize } from './po-lines.js';
@@ -56,6 +56,8 @@ export interface SheetTable {
   rows: unknown[][];
   /** How table-like this sheet looked. Used to pick the best sheet. */
   score: number;
+  /** Rows hidden in the sheet and so not read: a hidden row is a cancelled or superseded line. */
+  hiddenRows?: number;
   /**
    * The table's own "Total" row, read in the same columns as the rows, when
    * it has exactly one — the figure the customer will quote back, and so the
@@ -192,6 +194,17 @@ function rowIsBlank(row: ExcelJS.Row, cols: number): boolean {
     if (String(cellText(rawValue(row.getCell(c)))).trim() !== '') return false;
   }
   return true;
+}
+
+/**
+ * The sheet of a workbook that is the proforma itself, by its title — for the
+ * order's own Proforma step, which wants the invoice sheet, not whichever PO
+ * sheet scores best as an order table.
+ */
+export async function proformaSheetName(buffer: Buffer): Promise<string | null> {
+  const wb = new ExcelJS.Workbook();
+  try { await loadWorkbook(wb, buffer); } catch { return null; }
+  return wb.worksheets.find((ws) => ws.state === 'visible' && looksLikeProforma(ws))?.name ?? null;
 }
 
 /** "Proforma invoice" in the first forty rows of a sheet names the document. */
@@ -356,11 +369,16 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
   const sideEnded = sideMappings.map(() => false);
   let primaryEnded = false;
   let totalsRow: unknown[] | undefined;
+  let subtotals = 0;
+  let hiddenRows = 0;
 
   for (let r = headerRowIndex + 1; r <= last; r++) {
     const repeat = repeats.get(r);
     if (repeat) { mapping = repeat; blankRun = 0; continue; }
     const row = sheet.getRow(r);
+    // A hidden row is a line somebody took out of the order without deleting
+    // it — cancelled, or replaced. Imported, it came back.
+    if (row.hidden && row.hasValues) { hiddenRows++; continue; }
     const values = primaryEnded ? [] : read(row, mapping);
     const populated = values.filter(isFilled).length;
     const sides = sideMappings.map((m, k) => (sideEnded[k] ? null : read(row, m)));
@@ -394,10 +412,17 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
       const firstFilled = values.find(isFilled);
       if (isTotalsLabel(firstFilled)) {
         if (r < lastRepeat) continue;
+        // A subtotal with more rows of the table straight after it is one
+        // group's total, not the end: ending here lost every colour below it,
+        // and the cross-check, reading only the subtotal, agreed.
+        const next = nextPopulated(sheet, r + 1, Math.min(r + 3, last), columns);
+        if (next && !isTotalsLabel(next.firstText) && next.populated >= 2) { subtotals++; continue; }
         primaryEnded = true;
         // Kept for the cross-check only when it totals the whole table: a
         // sheet in blocks, or with tables side by side, has one per block.
-        if (repeats.size === 0 && sideMappings.length === 0) totalsRow = values;
+        // After subtotals, the last total may be a grand total or one more
+        // group's — it is not trusted as the cross-check either way.
+        if (repeats.size === 0 && sideMappings.length === 0 && subtotals === 0) totalsRow = values;
       } else {
         rows.push(values);
       }
@@ -415,6 +440,7 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
     rows,
     score: scoreTable(headers, rows),
     ...(totalsRow ? { totalsRow } : {}),
+    ...(hiddenRows > 0 ? { hiddenRows } : {}),
   };
 }
 
@@ -530,9 +556,12 @@ export function detectSizeColumns(
     // A formula with no saved result still counts: it is a number Excel has
     // not written down, and the column is reported rather than lost.
     const values = rows.slice(0, 30).map((r) => r[index]).filter((v) => isUncachedFormula(v) || !isEmptyCell(v));
-    if (values.length === 0) return;
+    // A size nobody ordered is still part of the grid: an empty XS column used
+    // to split the run, and every size on the shorter side of it was dropped.
+    if (values.length === 0) { candidates.push({ index, name: h.trim() }); return; }
     const numeric = values.filter((v) => isUncachedFormula(v) || toNumber(v) != null).length;
-    if (numeric / values.length >= 0.8) candidates.push({ index, name: h.trim() });
+    // Mostly numbers: a "TBC" here and there does not make it a column of words.
+    if (numeric / values.length >= 0.5) candidates.push({ index, name: h.trim() });
   });
 
   if (candidates.length < 2) return [];
@@ -551,7 +580,14 @@ export function detectSizeColumns(
   }
   if (run.length > best.length) best = run;
 
-  return best.length >= 2 ? best : [];
+  // Empty columns only at the edge of the run add nothing; and a run of nothing
+  // but empty columns is no grid at all.
+  const filled = (c: { index: number }) => rows.slice(0, 30).some((r) => isUncachedFormula(r[c.index]) || !isEmptyCell(r[c.index]));
+  if (best.filter(filled).length < 2) return [];
+  let from = 0, to = best.length - 1;
+  while (!filled(best[from]!)) from++;
+  while (!filled(best[to]!)) to--;
+  return best.slice(from, to + 1);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -738,8 +774,17 @@ function buildWideMatrix(ctx: BuildContext, sizeColumns: Array<{ index: number; 
     // Words under the sizes mean the grid has ended and another table begun
     // — a bill of materials below the order, its units under S and M. Its
     // rows were read as colours called "Jersey fabric" and "Thread".
-    const wordy = sizeColumns.some((s) => { const v = row[s.index]; return !isEmptyCell(v) && !isUncachedFormula(v) && toNumber(v) == null; });
-    if (wordy) continue;
+    // Mostly words, that is; a lone "TBC" under one size is that size not yet
+    // known, and dropping the whole colour for it lost every other size too.
+    const texts = sizeColumns.filter((s) => { const v = row[s.index]; return !isEmptyCell(v) && !isUncachedFormula(v) && toNumber(v) == null; });
+    const numbers = sizeColumns.filter((s) => toNumber(row[s.index]) != null).length;
+    if (texts.length > 0 && texts.length >= numbers) continue;
+    if (texts.length > 0) {
+      ctx.issues.push({
+        level: 'WARNING', field: null, sheet: ctx.table.sheetName, cell: null,
+        message: `${color}: ${texts.map((t) => `${t.name} says "${String(cellText(row[t.index])).trim()}"`).join(', ')} — not a quantity, so read as none. Check it with the customer.`,
+      });
+    }
     for (const s of sizeColumns) {
       const qty = toNumber(row[s.index]);
       // Added, not assigned: a heading written twice ("S M L S M L") is
@@ -864,6 +909,8 @@ function readHeaderBlock(
   issues: ImportIssue[],
 ): Record<string, string | number | Date | null> {
   const found: Record<string, string | number | Date | null> = {};
+  /** The label each field was read from. */
+  const fromLabel: Record<string, string> = {};
   if (aboveRow <= 1) return found;
 
   for (let r = 1; r < aboveRow; r++) {
@@ -877,7 +924,12 @@ function readHeaderBlock(
       if (guess.concept === ImportConcept.IGNORE || guess.confidence < 0.8) continue;
 
       const meta = CONCEPT_META[guess.concept];
-      if (!meta.field || found[meta.field] != null) continue;
+      if (!meta.field) continue;
+      // "Style # XRA-1025" beats a bare "Style Champion Shirt" read before it:
+      // the style number is the code, and the bare label is the style's name.
+      const betterStyle = meta.field === 'styleNumber' && found[meta.field] != null
+        && /^style\s*:?$/i.test(fromLabel[meta.field] ?? '') && /#|\bno\b|number|code/i.test(label);
+      if (found[meta.field] != null && !betterStyle) continue;
 
       // The value sits to the right, or occasionally directly below.
       for (const [dr, dc] of [[0, 1], [0, 2], [1, 0]] as const) {
@@ -905,6 +957,7 @@ function readHeaderBlock(
 
         if (parsed != null && parsed !== '') {
           found[meta.field] = parsed;
+          fromLabel[meta.field] = label;
           issues.push({
             level: 'INFO', field: meta.field, sheet: sheet.name, cell: null,
             message: `Read ${meta.label} as “${parsed instanceof Date ? (toIsoDayOrNull(parsed) ?? 'an unreadable date') : parsed}” from the sheet header.`,
@@ -978,11 +1031,23 @@ export async function extractTabular(
 
   // Read every sheet as a table, keep the ones that parse, rank them.
   const tables: SheetTable[] = [];
+  const hidden = new Set<string>();
   for (const sheet of wb.worksheets) {
     const table = readSheetTable(sheet);
-    if (table) tables.push(table);
+    if (!table) continue;
+    if (sheet.state === 'hidden' || sheet.state === 'veryHidden') hidden.add(sheet.name);
+    tables.push(table);
   }
-  tables.sort((a, b) => b.score - a.score);
+  // A hidden sheet is somebody's old season or scratch work. It won on size
+  // over the visible order and imported 3,435 pieces nobody could see; it is
+  // read only when no visible sheet has a table at all.
+  tables.sort((a, b) => Number(hidden.has(a.sheetName)) - Number(hidden.has(b.sheetName)) || b.score - a.score);
+  if (tables.length > 0 && hidden.has(tables[0]!.sheetName)) {
+    issues.push({
+      level: 'WARNING', field: null, sheet: tables[0]!.sheetName, cell: null,
+      message: `The order was read from "${tables[0]!.sheetName}", a hidden sheet — no visible sheet has an order table. Check it is the right one.`,
+    });
+  }
 
   // A factory laying sheet reads as a table too — panels as colours, lays as
   // sizes — and imported here it became an order of 84 "pieces" called front,
@@ -1043,6 +1108,13 @@ export async function extractTabular(
     return emptyResult(sheets, issues, {
       sheetName: '', headerRowIndex: 0, columns: [], layout: 'UNKNOWN', sizeColumns: [],
       readiness: assessMapping([]), candidateSheets: [], checklist: buildChecklist([]), rowsDetected: 0,
+    });
+  }
+
+  if (chosen.hiddenRows) {
+    issues.push({
+      level: 'WARNING', field: null, sheet: chosen.sheetName, cell: null,
+      message: `${chosen.hiddenRows} hidden row${chosen.hiddenRows === 1 ? ' was' : 's were'} left out of "${chosen.sheetName}" — a hidden line is usually cancelled. Unhide ${chosen.hiddenRows === 1 ? 'it' : 'them'} in the file and upload again if ${chosen.hiddenRows === 1 ? 'it belongs' : 'they belong'} on the order.`,
     });
   }
 
@@ -1223,7 +1295,7 @@ export async function extractTabular(
     issues.push({
       level: 'WARNING', field: missing, sheet: chosen.sheetName, cell: null,
       message: `No column was identified as ${CONCEPT_META[missing].label}. `
-        + `Map it below, or import now and fill it in on the order.`,
+        + `Import now and fill it in on the order.`,
     });
   }
 
@@ -1243,8 +1315,15 @@ export async function extractTabular(
     confidence: Math.min(1, chosen.score / 10),
     lineItems,
     sheets,
-    mappings: columns.map((c) => ({
-      field: c.concept,
+    mappings: columns.map((c) => {
+      // A date column offers its other reading when the day and month could
+      // be either: 05/07/2026 was taken as 5 July with nothing said, on a US
+      // customer's PO that meant 7 May. Keyed by the order field, as the
+      // template reader's dates are, so choosing the other reading applies.
+      const meta = CONCEPT_META[c.concept];
+      const dateRead = meta.type === 'date' && c.samples[0] ? parseSpreadsheetDate(c.samples[0]) : null;
+      return {
+      field: dateRead?.alternative && meta.field ? meta.field : c.concept,
       label: CONCEPT_META[c.concept].label,
       sheet: chosen.sheetName,
       anchor: c.header,
@@ -1264,10 +1343,15 @@ export async function extractTabular(
         : c.confidence >= 0.8 ? 'HIGH'
         : 'MEDIUM',
       interpretation:
-        `Matched the column headed “${c.header}” on ${chosen.sheetName}` +
-        (c.needsConfirmation ? ' — please confirm' : ''),
-      alternative: null,
-    })),
+        dateRead?.alternative
+          ? `${dateRead.interpretation} — column “${c.header}” on ${chosen.sheetName}; it could also be the other way round`
+          : `Matched the column headed “${c.header}” on ${chosen.sheetName}` + (c.needsConfirmation ? ' — please confirm' : ''),
+      alternative: dateRead?.alternative
+        ? { value: toIsoDayOrNull(dateRead.alternative.value) ?? '', interpretation: dateRead.alternative.interpretation }
+        : null,
+      ...(dateRead?.alternative ? { confidence: 'MEDIUM' as const, resolved: false } : {}),
+    };
+    }),
     fields,
     matrices: matrix ? [matrix] : [],
     bom: [],

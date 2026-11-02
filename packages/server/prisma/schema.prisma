@@ -1186,6 +1186,11 @@ model CostingRecord {
   /// holds. Null until somebody enters it; the sheet says it is waiting.
   dailyCostUsd           Decimal?   @db.Decimal(14, 4)
   machineCount           Int?
+  /// When a person last entered the daily cost or the machine count on this
+  /// costing. The factory's figures are the most recently *entered* ones —
+  /// not the costing saved last for some other reason, nor an import.
+  dailyCostEnteredAt     DateTime?
+  machineCountEnteredAt  DateTime?
   machineDaysUsed        Int?
   daysInLine             Int?
   /// Machines on this order's line. The costing sheet takes it as its own

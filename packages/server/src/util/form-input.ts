@@ -94,6 +94,38 @@ export const shortText = (max = 200) =>
     z.string().max(max).optional(),
   );
 
+/**
+ * A text field an edit can clear. Absent leaves the stored value alone; blank
+ * or null clears it. `shortText` reads blank as "absent", which was right for
+ * a create and wrong for an edit: emptying Style no. on Order Details saved
+ * "successfully" and the old value came straight back.
+ */
+export const clearableText = (max = 200) =>
+  z.preprocess(
+    (v) => {
+      const t = stripUnstorable(v);
+      if (t === undefined) return undefined;
+      if (t === null || (typeof t === 'string' && t.trim() === '')) return null;
+      return t;
+    },
+    z.string().max(max).nullable().optional(),
+  );
+
+/** A money value an edit can clear: absent leaves it, blank or null clears it. */
+export const clearableMoney = (maxValue = 999_999.9999) =>
+  z.preprocess(
+    (v) => (v === undefined ? undefined : v === '' || v === null || (typeof v === 'number' && Number.isNaN(v)) ? null : v),
+    z.number().nonnegative().max(maxValue).nullable().optional(),
+  );
+
+/** A date an edit can clear, refused when it is not a day a person could mean. */
+export const clearableDate = z
+  .string()
+  .max(40)
+  .nullable()
+  .optional()
+  .refine((v) => v == null || v === '' || isPlausibleDate(v), { message: 'Not a valid date' });
+
 export const longText = (max = 20_000) =>
   z.preprocess(
     (v) => { const t = stripUnstorable(v); return t === '' ? undefined : t; },

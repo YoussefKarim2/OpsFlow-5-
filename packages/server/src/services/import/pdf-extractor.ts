@@ -31,6 +31,7 @@ import type { ImportIssue, ImportSheetInfo } from '@opsflow/shared';
 import { BadRequestError } from '../../errors.js';
 import type { ExtractionResult } from './extractor.js';
 import { toDate, buildLineItems } from './extractor.js';
+import { parseSpreadsheetDate } from '@opsflow/shared';
 import { detectSizeColumns, buildTransposedMatrix } from './tabular-extractor.js';
 import { readPoLines, readPoHeader, poLinesToOrder, detectDayFirst, findBoilerplate, orderSizes, type PoTextLine } from './po-lines.js';
 import { createRequire } from 'node:module';
@@ -871,7 +872,10 @@ export async function extractFromPdf(
       const n = toNum(raw);
       if (n != null) named[meta.field] = n;
     } else if (meta.type === 'date') {
-      const d = toDate(raw);
+      // In the document's own day/month order, worked out from its dates: a
+      // pair read day-first while the table was read month-first gave the
+      // same document two calendars.
+      const d = /^\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}$/.test(raw) ? parseSpreadsheetDate(raw, dayFirst).value : toDate(raw);
       if (d != null) named[meta.field] = d;
     } else {
       named[meta.field] = raw;

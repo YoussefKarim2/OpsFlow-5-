@@ -162,10 +162,14 @@ externalRouter.patch('/operations/:id', requirePermission('external:write'), asy
   const op = await prisma.externalOperation.findUnique({ where: { id: req.params.id } });
   if (!op) throw new NotFoundError('External operation');
 
+  // Work already sent keeps the quantity and price it went out with, here as
+  // on the bulk save.
+  const fields: Record<string, unknown> = { ...input };
+  if (isLockedStatus(op.status)) { delete fields.qty; delete fields.unitRate; delete fields.unitPriceUsd; }
   await prisma.externalOperation.update({
     where: { id: op.id },
     data: {
-      ...input,
+      ...fields,
       ...(input.expectedReturnDate !== undefined
         ? { expectedReturnDate: input.expectedReturnDate ? new Date(input.expectedReturnDate) : null }
         : {}),
@@ -289,6 +293,10 @@ export function bulkUpdateData(
 externalRouter.put('/:orderId/operations', requirePermission('external:write'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   const rows = z.array(bulkRowSchema).parse(req.body.operations);
+  // The operations the editor removed. Present, only these are deleted; an
+  // operation added by somebody else after the editor opened is left alone.
+  // Absent (an older client), the old rule of "stored minus sent" applies.
+  const removeIds = z.array(z.string()).max(500).optional().parse(req.body.removeIds);
 
   const order = await prisma.order.findFirst({
     where: { OR: [{ id: req.params.orderId }, { poNumber: req.params.orderId }] },
@@ -322,8 +330,9 @@ externalRouter.put('/:orderId/operations', requirePermission('external:write'), 
       select: { id: true, status: true },
     });
     const keep = new Set(rows.map((r) => r.id).filter((id): id is string => !!id));
+    const named = removeIds ? new Set(removeIds) : null;
     removable = existing
-      .filter((e) => !keep.has(e.id) && (e.status === 'NOT_SENT' || e.status === 'WAITING_APPROVAL'))
+      .filter((e) => (named ? named.has(e.id) : !keep.has(e.id)) && (e.status === 'NOT_SENT' || e.status === 'WAITING_APPROVAL'))
       .map((e) => e.id);
 
     if (removable.length > 0) {
@@ -348,6 +357,7 @@ externalRouter.put('/:orderId/operations', requirePermission('external:write'), 
         await tx.externalOperation.create({
           data: {
             ...fields,
+            colorIds: fields.colorIds ?? [],
             orderId: order.id,
             qty: row.qty ?? 0,
             expectedReturnDate: expectedReturnDate ? new Date(expectedReturnDate) : null,

@@ -22,7 +22,7 @@ import { clsx } from './ui';
 
 export interface LayRowInput {
   id: string; markerNumber?: string | null; fabric: string; color: string; panel: string; ratio: string;
-  layers: number; markerLengthM: number; totalLengthM: number; nestPcs: number | null;
+  layers: number; markerLengthM: number; totalLengthM: number | null; nestPcs: number | null;
   efficiencyPct?: number | null; maxLayer?: number | null; notes?: string | null;
 }
 
@@ -67,7 +67,7 @@ export function LayPlanEditor({ orderId, lays, defaultFabric, onSaved, onCancel 
     onSuccess: () => {
       setError(null);
       // The plan's fabric is on the bill of materials, which follows it.
-      for (const k of ['markers', 'order', 'order-steps', 'bom']) void qc.invalidateQueries({ queryKey: [k, orderId] });
+      for (const k of ['markers', 'order', 'order-steps', 'bom', 'costing']) void qc.invalidateQueries({ queryKey: [k, orderId] });
       onSaved();
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not save the lay plan.'),
@@ -133,8 +133,8 @@ export function LayPlanEditor({ orderId, lays, defaultFabric, onSaved, onCancel 
                 <td className="p-1"><input aria-label={`Lay ${i + 1} layers`} inputMode="numeric" className={clsx(cell, 'tnum text-right')} value={r.layers} onChange={numeric((v) => set(i, { layers: v }))} /></td>
                 <td className="td tnum text-right font-semibold">{pieces(r).toLocaleString()}</td>
                 <td className="p-1"><input aria-label={`Lay ${i + 1} marker length`} inputMode="decimal" className={clsx(cell, 'tnum text-right')} value={r.markerLengthM} onChange={numeric((v) => set(i, { markerLengthM: v }))} /></td>
-                <td className="p-1"><input aria-label={`Lay ${i + 1} total length`} inputMode="decimal" className={clsx(cell, 'tnum text-right')} placeholder="—" value={r.totalLengthM} onChange={numeric((v) => set(i, { totalLengthM: v }))} /></td>
-                <td className="p-1"><input aria-label={`Lay ${i + 1} nest`} inputMode="numeric" className={clsx(cell, 'tnum text-right')} placeholder="—" value={r.nestPcs} onChange={numeric((v) => set(i, { nestPcs: v }))} /></td>
+                <td className="p-1"><input aria-label={`Lay ${i + 1} total length`} inputMode="decimal" className={clsx(cell, 'tnum text-right')} placeholder={num(r.layers) != null && num(r.markerLengthM) != null ? String(Math.round((num(r.layers)! * num(r.markerLengthM)!) * 100) / 100) : '—'} title="Blank: layers × marker length" value={r.totalLengthM} onChange={numeric((v) => set(i, { totalLengthM: v }))} /></td>
+                <td className="p-1"><input aria-label={`Lay ${i + 1} nest`} inputMode="decimal" className={clsx(cell, 'tnum text-right')} placeholder="—" value={r.nestPcs} onChange={numeric((v) => set(i, { nestPcs: v }))} /></td>
                 <td className="p-1"><input aria-label={`Lay ${i + 1} efficiency`} inputMode="decimal" className={clsx(cell, 'tnum text-right')} placeholder="—" value={r.efficiencyPct} onChange={numeric((v) => set(i, { efficiencyPct: v }))} /></td>
                 <td className="p-1"><input aria-label={`Lay ${i + 1} max layer`} inputMode="numeric" className={clsx(cell, 'tnum text-right')} placeholder="—" value={r.maxLayer} onChange={numeric((v) => set(i, { maxLayer: v }))} /></td>
                 <td className="p-1 text-right">

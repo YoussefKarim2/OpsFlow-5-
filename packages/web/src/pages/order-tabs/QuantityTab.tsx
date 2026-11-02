@@ -292,7 +292,7 @@ export function QuantityTab({
                 title={`Each size: ROUNDUP(main order × ${(1 + order.cutPercentage).toFixed(4)})`}
               >
                 <Wand2 className="h-3.5 w-3.5" />
-                {generateCut.isPending ? 'Generating…' : `Regenerate at ${(order.cutPercentage * 100).toFixed(0)}%`}
+                {generateCut.isPending ? 'Generating…' : `Regenerate at ${Number((order.cutPercentage * 100).toFixed(2))}%`}
               </button>
             )}
             {dirty && (

@@ -1077,14 +1077,19 @@ export async function returnFromProduction(
       if (bom) {
         // Back into the line's unit, as on the way out.
         const lineQty = convertQty(qty, material.unit, bom.unit) ?? qty;
+        const issuedBefore = decOr0(bom.issuedQty);
+        const issuedAfter = Math.max(0, qtySub(issuedBefore, lineQty));
+        // What actually came off this line — no more than it had issued — is
+        // what the log records, so the log still adds up to the line's total.
+        const takenOff = qtySub(issuedBefore, issuedAfter);
         await tx.bomItem.update({
           where: { id: input.bomItemId },
-          data: { issuedQty: Math.max(0, qtySub(decOr0(bom.issuedQty), lineQty)) },
+          data: { issuedQty: issuedAfter },
         });
-        if (input.recordBomIssue !== false) {
+        if (input.recordBomIssue !== false && takenOff > 0) {
           await tx.materialIssue.create({
             data: {
-              orderId: input.orderId, bomItemId: bom.id, qty: -lineQty, unit: bom.unit,
+              orderId: input.orderId, bomItemId: bom.id, qty: -takenOff, unit: bom.unit,
               issuedById: actor.id, notes: input.reason ?? 'Returned unused to stock',
             },
           });

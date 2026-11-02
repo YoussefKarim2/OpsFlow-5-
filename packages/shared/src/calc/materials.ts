@@ -182,6 +182,8 @@ export interface LayResult extends Omit<LayInput, 'totalLengthM'> {
   theoreticalLengthM: number;
   /** Metres actually consumed: the recorded figure, or the product as a floor. */
   totalLengthM: number;
+  /** The figure the sheet or a person recorded, or null when `totalLengthM` is worked out. */
+  recordedTotalLengthM: number | null;
   /** How far the real consumption exceeds the marker product. */
   allowancePct: number | null;
   /** Metres of fabric consumed per finished piece. */
@@ -243,6 +245,7 @@ export function computeLay(lay: LayInput): LayResult {
     totalPieces,
     theoreticalLengthM,
     totalLengthM,
+    recordedTotalLengthM: lay.totalLengthM ?? null,
     allowancePct: safePct(totalLengthM - theoreticalLengthM, theoreticalLengthM),
     consumptionPerPieceM: safeDiv(totalLengthM, totalPieces),
   };

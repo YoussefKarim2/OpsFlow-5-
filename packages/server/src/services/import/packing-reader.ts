@@ -402,6 +402,8 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
   let lastStyle: string | null = null;
   let unreadable = 0;
   const fractional: number[] = [];
+  /** Rows read as a whole run and split per carton — undone below if the TOTAL row says otherwise. */
+  const split: Array<{ index: number; count: number }> = [];
 
   for (let r = header.row + 1; r < grid.rows.length; r++) {
     const row = grid.rows[r] ?? [];
@@ -507,6 +509,7 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
     if (shape === 'SIZES_ACROSS' && count > 1 && printedTotal != null && perCarton === printedTotal && perCarton % count === 0) {
       for (const k of Object.keys(bySize)) bySize[k] = bySize[k]! / count;
       perCarton = perCarton / count;
+      split.push({ index: cartons.length, count });
     }
 
     const gross = num(at(cGross)) ?? (num(at(cGrossT)) != null ? num(at(cGrossT))! / count : null);
@@ -543,6 +546,23 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
   if (unreadable > 0) {
     issues.push({ level: 'WARNING', message: `${unreadable} row${unreadable === 1 ? '' : 's'} under the table had neither a carton number nor pieces, and ${unreadable === 1 ? 'was' : 'were'} not read.` });
   }
+  // A Total column can be per carton as easily as per run. Where the rows were
+  // read as runs and split, the document's own TOTAL row decides: if it adds
+  // up only with the rows taken as per carton, they were per carton.
+  if (split.length > 0 && printed?.pieces != null) {
+    const asRead = cartons.reduce((a, c) => a + c.totalPieces, 0);
+    const unsplit = asRead + split.reduce((a, sp) => a + cartons[sp.index]!.totalPieces * (sp.count - 1), 0);
+    if (Math.abs(unsplit - printed.pieces) < 0.5 && Math.abs(asRead - printed.pieces) >= 0.5) {
+      for (const sp of split) {
+        const c = cartons[sp.index]!;
+        for (const k of Object.keys(c.bySize)) c.bySize[k] = c.bySize[k]! * sp.count;
+        c.perCarton *= sp.count;
+        c.totalPieces = c.perCarton * c.count;
+      }
+    }
+  }
+  // Pieces per carton from a division carry float noise (120.00000000000001).
+  for (const c of cartons) c.perCarton = Math.round(c.perCarton * 1000) / 1000;
   return { cartons, shape, printed, rowKinds, sizes: shape === 'SIZES_ACROSS' ? sizeCols.map((c) => c.heading) : null };
 }
 

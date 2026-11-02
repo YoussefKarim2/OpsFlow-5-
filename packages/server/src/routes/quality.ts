@@ -12,6 +12,7 @@ import { logActivity } from '../services/activity-service.js';
 import { createCorrectiveActionTask } from '../services/workflow-service.js';
 import { pickReinspectionTarget } from '../services/reinspection.js';
 import { cairoDay } from '../util/cairo-day.js';
+import { optionalDate } from '../util/form-input.js';
 
 export const qualityRouter = Router();
 qualityRouter.use(authenticate);
@@ -78,7 +79,7 @@ qualityRouter.get('/:orderId', requirePermission('quality:read'), asyncHandler(a
 }));
 
 const auditSchema = z.object({
-  inspectionDate: z.string().optional(),
+  inspectionDate: optionalDate,
   factoryId: z.string().optional(),
   auditType: z.enum(['FINAL_AUDIT', 'BEFORE_IRON', 'BEFORE_PACKING', 'IN_PACKING', 'INLINE']).default('FINAL_AUDIT'),
   availableQty: z.number().int().positive(),

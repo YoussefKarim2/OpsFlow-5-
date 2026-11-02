@@ -712,7 +712,10 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
             places: 2, hint: 'machine-days ÷ all machines',
           })}
           {field('Productivity rate', 'productivityRate', live.productivityRate, 'number', {
-            places: 2, hint: 'cut qty ÷ work days',
+            places: 2,
+            hint: live.productivityBasis === 'produced'
+              ? `pieces sewn (${fmtNumber(live.source.producedQty ?? 0)}) ÷ work days`
+              : 'cut qty ÷ work days — sewn pieces once sewing is recorded',
           })}
           {field('Cutted Qty', 'cutQty', live.source.cutQty, 'number', { from: live.source.cutQtySource === 'recorded' ? 'cutting records' : 'cut order' })}
           {field('1st Degree Qty', 'firstDegreeQty', live.source.firstDegreeQty, 'number', { from: 'out-line' })}

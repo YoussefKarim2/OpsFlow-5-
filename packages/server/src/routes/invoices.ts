@@ -38,6 +38,7 @@ import {
   carriedRates, fillFromLetterhead, getCompanyProfile, invoiceToDto, invoiceToListRow, isStale, lineToDto, loadInvoice, loadOrderForBuild, partsOf, pickDefaults, qtyPerOrder,
   profileToDto, sourcesOf, toBuildOrder, toBuildPackingList, toBuildShipment, withAllocatedNumber,
 } from '../services/invoice-service.js';
+import { cairoDay } from '../util/cairo-day.js';
 
 export const invoicesRouter = Router();
 invoicesRouter.use(authenticate);
@@ -351,7 +352,9 @@ invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async 
   const first = parts[0]!;
   // Numbered in the year it is raised, whatever date the goods left: a run of
   // numbers belongs to the year the office is working in.
-  const year = new Date().getUTCFullYear();
+  // The year in Cairo, so a document raised in the first hours of 1 January
+  // is numbered in the new year.
+  const year = cairoDay().getUTCFullYear();
   const qty = computeInvoiceTotals(doc.lines).totalQty;
   // Every document carries the exporter block and signature; a proforma is
   // also laid out as the factory's own sheet. Typed fields carry over from

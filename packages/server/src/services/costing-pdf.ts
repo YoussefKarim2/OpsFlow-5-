@@ -304,9 +304,9 @@ class Layout {
       { label: 'Line machines', value: num(c.lineMachineQty), sub: c.lineMachineSource === 'production' ? 'the Production machine table' : undefined },
       { label: 'Days in line', value: num(c.daysInLineUsed), sub: daysSub },
       { label: 'Machine cost', value: money(c.machineCostPerDay), key: 'machineCostPerDay', sub: 'per machine-day' },
-      { label: 'Machine-days used', value: num(c.machineDaysUsed), key: 'machineDaysUsed', sub: 'line machines × days in line' },
+      { label: 'Machine-days used', value: num(c.machineDaysUsed), key: 'machineDaysUsed', sub: c.lineMachineSource === 'production' && c.machineDaysUsed != null && c.lineMachineQty != null && c.daysInLineUsed != null && c.machineDaysUsed !== c.lineMachineQty * c.daysInLineUsed ? 'as recorded on this costing' : 'line machines × days in line' },
       { label: 'Work days', value: num(c.workDays, 2), key: 'workDays', sub: 'machine-days ÷ all machines' },
-      { label: 'Productivity rate', value: num(c.productivityRate, 2), key: 'productivityRate', sub: 'cut qty ÷ work days, pcs per day' },
+      { label: 'Productivity rate', value: num(c.productivityRate, 2), key: 'productivityRate', sub: c.productivityBasis === 'produced' ? 'pieces sewn ÷ work days' : 'cut qty ÷ work days' },
       { label: 'Target per day', value: num(c.targetPerDay), sub: 'from the Production step' },
       { label: 'Cost per piece at target', value: c.targetCostPerPieceUsd == null ? DASH : fmtMoney(c.targetCostPerPieceUsd), sub: 'machine cost × line machines ÷ target' },
     ], 4);

@@ -494,6 +494,7 @@ export function BomEditor({
                   <td className="p-1">
                     <input
                       aria-label="Colour"
+                      maxLength={200}
                       className="input border-transparent bg-transparent px-1.5"
                       style={{ width: w.colour }}
                       value={r.colorText ?? ''}
@@ -588,6 +589,7 @@ export function BomEditor({
                   <td className="p-1">
                     <WrapBox
                       aria-label="Supplier"
+                      maxLength={200}
                       style={{ width: w.supplier }}
                       value={r.supplier ?? ''}
                       placeholder="Supplier"

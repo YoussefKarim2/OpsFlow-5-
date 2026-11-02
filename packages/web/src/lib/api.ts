@@ -1091,8 +1091,9 @@ export const api = {
     updateOperation: (id: string, body: unknown) => patch<{ ok: true }>(`/external/operations/${id}`, body),
     removeOperation: (id: string) => del(`/external/operations/${id}`),
     /** Save the whole table at once — the Proforma Invoice's pattern. */
-    saveOperations: (orderId: string, operations: unknown[]) =>
-      put<{ ok: true; count: number; removed: number }>(`/external/${orderId}/operations`, { operations }),
+    /** Only the operations named in `removeIds` are deleted; ones this editor did not load are left alone. */
+    saveOperations: (orderId: string, operations: unknown[], removeIds: string[] = []) =>
+      put<{ ok: true; count: number; removed: number }>(`/external/${orderId}/operations`, { operations, removeIds }),
     setStatus: (opId: string, body: unknown) => post<{ ok: true }>(`/external/operations/${opId}/status`, body),
   },
 

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { QtyLedger } from '@opsflow/shared';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
@@ -16,6 +17,7 @@ import { cairoDay } from '../util/cairo-day.js';
 import { storage } from '../services/storage/index.js';
 import { readPackingDocument, matchPackingToOrder } from '../services/import/packing-reader.js';
 import { sizeAliasFor, inWearingOrder } from '../services/import/po-lines.js';
+import { optionalDate } from '../util/form-input.js';
 
 export const packingRouter = Router();
 packingRouter.use(authenticate);
@@ -213,6 +215,32 @@ const cartonLineSchema = z.object({
 });
 
 /**
+ * The colours and sizes a carton names must be this order's own. They arrive
+ * from the client, and another order's ids wrote a PACKED cell no grid shows
+ * but every total counts — the guard the quantity grid already has.
+ */
+async function assertOwnAxes(orderId: string, colorIds: ReadonlyArray<string | null | undefined>, sizeIds: ReadonlyArray<string | null | undefined>) {
+  const colours = [...new Set(colorIds.filter((x): x is string => !!x))];
+  const sizes = [...new Set(sizeIds.filter((x): x is string => !!x))];
+  const [c, z] = await Promise.all([
+    colours.length ? prisma.orderColor.count({ where: { orderId, id: { in: colours } } }) : 0,
+    sizes.length ? prisma.orderSize.count({ where: { orderId, id: { in: sizes } } }) : 0,
+  ]);
+  if (c !== colours.length || z !== sizes.length) {
+    throw new ValidationError('A carton names a colour or size that is not on this order. Reload the page and try again.');
+  }
+}
+
+/**
+ * Packed pieces cannot be fewer than none. Taking a carton's pieces off a
+ * cell that the grid had already lowered left it negative; whatever the
+ * cartons give back below zero is simply nothing packed.
+ */
+async function floorPacked(tx: Prisma.TransactionClient, orderId: string) {
+  await tx.stageQuantity.updateMany({ where: { orderId, ledger: 'PACKED', qty: { lt: 0 } }, data: { qty: 0 } });
+}
+
+/**
  * Replace a carton's size breakdown.
  *
  * The carton's own `qty` becomes the sum of its rows, so the PACKED ledger, the
@@ -250,6 +278,7 @@ packingRouter.put('/cartons/:cartonId/lines', requirePermission('packing:write')
 
   const orderId = carton.packingList.orderId;
   const colorId = carton.orderColorId;
+  await assertOwnAxes(orderId, [], rows.map((r) => r.orderSizeId));
 
   // What each size held before, and what it holds now. Only rows tied to a real
   // order size touch the ledger — a free-text size is not a cell in the matrix.
@@ -298,6 +327,7 @@ packingRouter.put('/cartons/:cartonId/lines', requirePermission('packing:write')
           update: { qty: { increment: delta } },
         });
       }
+      await floorPacked(tx, orderId);
     }
   });
 
@@ -353,6 +383,7 @@ packingRouter.delete('/cartons/:cartonId', requirePermission('packing:write'), a
           update: { qty: { increment: delta } },
         });
       }
+      await floorPacked(tx, orderId);
     }
     // Its size rows go with it (onDelete: Cascade).
     await tx.carton.delete({ where: { id: carton.id } });
@@ -384,6 +415,7 @@ packingRouter.post('/list/:listId/cartons/bulk', requirePermission('packing:writ
     }
   }
   await assertCartonNumbersFree(list.id, rows.map((r) => r.cartonNumber));
+  await assertOwnAxes(list.orderId, rows.map((r) => r.orderColorId), rows.map((r) => r.orderSizeId));
   await assertPackedCeiling(
     list.orderId,
     rows.reduce((a, r) => a + (r.orderColorId && r.orderSizeId ? r.qty : 0), 0),
@@ -437,6 +469,7 @@ packingRouter.post('/list/:listId/cartons', requirePermission('packing:write'), 
     throw new ValidationError('Net weight cannot exceed gross weight.');
   }
   await assertCartonNumbersFree(list.id, [input.cartonNumber]);
+  await assertOwnAxes(list.orderId, [input.orderColorId], [input.orderSizeId]);
   await assertPackedCeiling(list.orderId, input.orderColorId && input.orderSizeId ? input.qty : 0);
 
   const count = await prisma.carton.count({ where: { packingListId: list.id } });
@@ -596,7 +629,7 @@ const shipmentSchema = z.object({
   method: z.string().optional(),
   status: z.enum(['NOT_READY', 'READY', 'BOOKED', 'SHIPPED', 'DELIVERED']).default('NOT_READY'),
   qty: z.number().int().nonnegative().default(0),
-  actualShippingDate: z.string().optional(),
+  actualShippingDate: optionalDate,
   trackingNumber: z.string().optional(),
   carrier: z.string().optional(),
   awbNumber: z.string().optional(),

@@ -39,6 +39,8 @@ export interface GateContext {
   markerShortfall: number;
   hasOpenQualityFailure: boolean;
   qualityInspected: boolean;
+  /** The latest decided final-type inspection passed. */
+  qualityPassed?: boolean;
   packingApproved: boolean;
   hasCartons: boolean;
   /** Stage keys whose tasks are all complete. */
@@ -184,11 +186,15 @@ export const STAGE_GATES: Partial<Record<StageKey, GateRequirement[]>> = {
       key: 'quality-passed',
       label: 'Final inspection passed',
       severity: 'BLOCKER',
-      test: (c) => c.qualityInspected && !c.hasOpenQualityFailure,
+      // A pass, not just an inspection: a FAIL whose corrective action was
+      // closed is waiting for the re-inspection, not cleared for packing.
+      test: (c) => (c.qualityPassed ?? (c.qualityInspected && !c.hasOpenQualityFailure)) && !c.hasOpenQualityFailure,
       explain: (c) =>
         c.hasOpenQualityFailure
           ? 'The final inspection failed and the corrective action is still open.'
-          : 'No final inspection has been recorded.',
+          : c.qualityInspected
+            ? 'The latest final inspection has not passed — re-inspect before packing.'
+            : 'No final inspection has been recorded.',
       action: () => ({ label: 'Record the inspection', tab: 'quality' }),
     },
   ],

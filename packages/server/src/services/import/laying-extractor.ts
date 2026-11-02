@@ -490,7 +490,7 @@ export async function extractLayingMarking(
       totalLengthM: toNumber(cellAt(row, ImportConcept.TOTAL_LENGTH)),
       nestPcs: toNumber(cellAt(row, ImportConcept.NEST_PCS)),
       efficiencyPct: asPercent(toNumber(cellAt(row, ImportConcept.EFFICIENCY))),
-      wastagePct: toNumber(cellAt(row, ImportConcept.WASTAGE)),
+      wastagePct: asPercent(toNumber(cellAt(row, ImportConcept.WASTAGE))),
       fabricConsumptionM: toNumber(cellAt(row, ImportConcept.FABRIC_CONSUMPTION)),
       cutDate: safeDate(cellAt(row, ImportConcept.CUT_DATE)),
       cutByName: toText(cellAt(row, ImportConcept.RESPONSIBLE_PERSON)),

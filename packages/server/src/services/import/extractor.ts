@@ -370,6 +370,31 @@ function readAnchored(
   return { value: null, cell: `${colLetter(anchor.col + dc)}${targetRow}`, found: true };
 }
 
+/**
+ * Every line of a notes block: the label is merged down rows N..M, and each
+ * row beside it holds one line. Null when the label is not merged (a one-line
+ * note), so the single-cell read stands.
+ */
+function readNoteBlock(sheet: ExcelJS.Worksheet, spec: FieldSpec): string | null {
+  const anchor = findAnchor(sheet, spec.anchor);
+  if (!anchor) return null;
+  const top = `${colLetter(anchor.col)}${anchor.row}`;
+  const range = ((sheet.model as { merges?: string[] }).merges ?? [])
+    .map((m) => /^([A-Z]+)(\d+):([A-Z]+)(\d+)$/.exec(m))
+    .find((m) => m && `${m[1]}${m[2]}` === top);
+  if (!range) return null;
+  const last = Number(range[4]);
+  if (!(last > anchor.row)) return null;
+  const lines: string[] = [];
+  for (let r = anchor.row + spec.offset[0]; r <= last; r++) {
+    const raw = cellValue(sheet.getRow(r).getCell(anchor.col + spec.offset[1]));
+    if (raw == null || isExcelError(raw)) continue;
+    const t = String(cellText(raw)).trim();
+    if (t) lines.push(t);
+  }
+  return lines.length > 0 ? lines.join('\n') : null;
+}
+
 function colLetter(n: number): string {
   let s = '';
   while (n > 0) { const m = (n - 1) % 26; s = String.fromCharCode(65 + m) + s; n = Math.floor((n - m) / 26); }
@@ -758,7 +783,11 @@ export async function extractWorkbook(buffer: Buffer, forcedProfile?: ImportProf
       continue;
     }
 
-    const { value, cell, found } = readAnchored(sheet, spec, anchorsBySheet.get(spec.sheet));
+    const anchored = readAnchored(sheet, spec, anchorsBySheet.get(spec.sheet));
+    const { cell, found } = anchored;
+    // A notes block is a label merged down several rows, one line of text per
+    // row beside it. Only the first line was read; the rest were lost.
+    const value = /Notes$/.test(spec.field) ? readNoteBlock(sheet, spec) ?? anchored.value : anchored.value;
 
     let parsed: string | number | Date | null = null;
     if (value != null && !isExcelError(value)) {
@@ -783,7 +812,7 @@ export async function extractWorkbook(buffer: Buffer, forcedProfile?: ImportProf
       issues.push({
         level: 'WARNING', field: spec.field, sheet: spec.sheet, cell,
         message: `${spec.label} is expected here but is empty${found ? '' : ' (anchor not found)'}. `
-          + `Set it on the review screen, or on the order after importing.`,
+          + `Set it on Order Details after importing.`,
       });
     }
 

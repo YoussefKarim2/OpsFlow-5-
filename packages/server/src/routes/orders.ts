@@ -7,6 +7,7 @@ import {
 import { prisma } from '../db.js';
 import {
   relationId, requiredRelationId, optionalDate, optionalNumber, shortText, longText, money, optionalQueryDate,
+  clearableText, clearableMoney, clearableDate,
 } from '../util/form-input.js';
 import { storage } from '../services/storage/index.js';
 import { authenticate, requirePermission, requireSuperAdmin, currentUser } from '../middleware/auth.js';
@@ -122,22 +123,22 @@ const createSchema = z.object({
   // rather than a save refused with a validation error.
   season: z.string().trim().max(200).transform((v) => (v === '' ? 'Unspecified' : v)),
   clientId: z.string().min(1),
-  itemType: shortText(),
-  gender: shortText(),
-  styleNumber: shortText(),
-  fit: shortText(),
-  blockPattern: shortText(),
-  fabric: shortText(),
+  itemType: clearableText(),
+  gender: clearableText(),
+  styleNumber: clearableText(),
+  fit: clearableText(),
+  blockPattern: clearableText(),
+  fabric: clearableText(),
   // External Order_Ex.Op shows three fabric slots and both supplier dates;
   // all five were already columns and none of them were writable.
-  fabric2: shortText().nullable(),
-  fabric3: shortText().nullable(),
+  fabric2: clearableText(),
+  fabric3: clearableText(),
   /** Fabrics past the third. Order Details sends all four fields together. */
   moreFabrics: z.array(z.string().trim().min(1).max(200)).max(30).optional(),
-  fabricDeliveryToSupplier: z.string().optional().nullable(),
-  supplierDeliveryDate: z.string().optional().nullable(),
-  shippingMethod: shortText(),
-  pricePerPieceUsd: money(),
+  fabricDeliveryToSupplier: clearableDate,
+  supplierDeliveryDate: clearableDate,
+  shippingMethod: clearableText(),
+  pricePerPieceUsd: clearableMoney(),
   // Standard allowed minutes per garment. A time-study figure, so three
   // decimals; the ceiling only rules out a typed-in seconds or pieces count.
   samMinutes: z.preprocess(
@@ -153,13 +154,13 @@ const createSchema = z.object({
   externalFactoryId: relationId,
   coordinatorId: relationId,
   outsideWorkManagerId: relationId,
-  externalReference: shortText(),
-  externalWorkSort: shortText(),
-  externalWorkType: shortText(),
-  shippingAddress: longText(2000),
-  billingAddress: longText(2000),
+  externalReference: clearableText(),
+  externalWorkSort: clearableText(),
+  externalWorkType: clearableText(),
+  shippingAddress: clearableText(2000),
+  billingAddress: clearableText(2000),
   /// The factory's own PO date, distinct from the customer's.
-  internalPoDate: z.string().optional().nullable(),
+  internalPoDate: clearableDate,
   /// Null is "nobody has said yet", which is not the same as "no".
   productionSample: z.boolean().optional().nullable(),
   /// Typed instead of Yes or No. Blank clears it.
@@ -504,6 +505,17 @@ ordersRouter.put('/:id/matrix', requirePermission('order:edit'), asyncHandler(as
   // through the grid is held to the same.
   if (ledger === QtyLedger.CUT && !actor.permissions.includes('cutting:write')) {
     throw new ForbiddenError('Changing the cut order requires the "cutting:write" permission.');
+  }
+
+  // Shipped and packed are what the shipments and the cartons record, each
+  // under its own permission. Typed through the grid with only order:edit,
+  // they skipped both — and a shipped figure here becomes the order's shipped
+  // quantity.
+  if (ledger === QtyLedger.SHIPPED && !actor.permissions.includes('shipment:write')) {
+    throw new ForbiddenError('Changing the shipped quantities requires the "shipment:write" permission.');
+  }
+  if (ledger === QtyLedger.PACKED && !actor.permissions.includes('packing:write')) {
+    throw new ForbiddenError('Changing the packed quantities requires the "packing:write" permission.');
   }
 
   for (const c of cells) assertValidQuantity(c.qty, 'Quantity');

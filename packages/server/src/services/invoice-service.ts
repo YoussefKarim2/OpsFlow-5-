@@ -31,6 +31,7 @@ import {
 import { prisma } from '../db.js';
 import { inWearingOrder } from './import/po-lines.js';
 import { ConflictError, NotFoundError, ValidationError } from '../errors.js';
+import { cairoDay } from '../util/cairo-day.js';
 
 const dec = (v: { toString(): string } | null | undefined): number | null =>
   v == null ? null : Number(v.toString());
@@ -310,7 +311,9 @@ export function buildInvoiceDocument(input: {
   // a quotation is dated today and stands for a fortnight.
   const date = kind === InvoiceKind.INVOICE && shipment?.actualShippingDate
     ? dayOf(shipment.actualShippingDate)
-    : dayOf(now);
+    // Today in Cairo: a document raised at 01:00 Cairo time is today's, not
+    // yesterday's as the UTC date said.
+    : cairoDay(now);
   const dueDate = kind === InvoiceKind.PROFORMA ? addDays(date, PROFORMA_VALID_DAYS) : date;
   const shippedOn = kind === InvoiceKind.INVOICE
     ? shipment?.actualShippingDate ?? null
@@ -450,7 +453,7 @@ export function buildCombinedDocument(input: {
   const shippedDates = parts.map((p) => p.shipment?.actualShippingDate ?? null).filter((d): d is Date => d != null);
   const lastShipped = shippedDates.length > 0 ? new Date(Math.max(...shippedDates.map((d) => d.getTime()))) : null;
   const promised = parts.map((p) => p.order.promisedShippingDate).filter((d): d is Date => d != null);
-  const date = kind === InvoiceKind.INVOICE && lastShipped ? dayOf(lastShipped) : dayOf(now);
+  const date = kind === InvoiceKind.INVOICE && lastShipped ? dayOf(lastShipped) : cairoDay(now);
   const dueDate = kind === InvoiceKind.PROFORMA ? addDays(date, PROFORMA_VALID_DAYS) : date;
   const shippedOn = kind === InvoiceKind.INVOICE
     ? lastShipped

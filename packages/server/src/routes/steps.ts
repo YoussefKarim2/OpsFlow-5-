@@ -24,7 +24,7 @@ import { extractFromPdf } from '../services/import/pdf-extractor.js';
 import { sizeRank } from '../services/import/po-lines.js';
 import { fillMainOrderFromDocuments } from '../services/fill-main-order.js';
 import { readInstructionFile } from '../services/import/instruction-reader.js';
-import { extractTabular } from '../services/import/tabular-extractor.js';
+import { proformaSheetName, extractTabular } from '../services/import/tabular-extractor.js';
 import { buildProformaDraft } from '../services/import/proforma-target.js';
 import { contentDisposition, decodeUploadName } from '../util/upload-name.js';
 import { signedFileUrl } from '../services/file-links.js';
@@ -51,6 +51,7 @@ import { getOrderDetail, refreshOrderCache } from '../services/order-service.js'
 import { renderCostingPdf } from '../services/costing-pdf.js';
 import { applyStockRecordsToLedger, findStockRecordsForCell, orderAxisNames, resolveStockCell } from '../services/stock-sync.js';
 import { refreshFactoryDefaults } from '../services/factory-defaults.js';
+import { readProformaSheet } from '../services/import/proforma-sheet-reader.js';
 
 export const stepsRouter = Router();
 
@@ -783,9 +784,26 @@ stepsRouter.post(
 
     // Throws with an explanation for .xls, .ods and anything unreadable.
     const kind = detectFileKind(req.file.buffer, req.file.originalname);
+    // The proforma sheet itself, when the workbook has one: a buy workbook
+    // carries a sheet per PO as well, and the best-scoring one was read — a
+    // PO cell as the invoice number and no lines at all.
+    const sheetName = kind === 'pdf' ? null : await proformaSheetName(req.file.buffer);
     const extraction = kind === 'pdf'
       ? await extractFromPdf(req.file.buffer)
-      : await extractTabular(req.file.buffer, {});
+      : await extractTabular(req.file.buffer, sheetName ? { sheetName } : {});
+    // "Import it on the order's Proforma Invoice step instead" — this is that step.
+    extraction.issues = extraction.issues.filter((i) => i.field !== 'documentKind');
+    // The proforma's own layout — title block, then one line per style — read
+    // by itself: the general table reader took the title block for the table.
+    if (sheetName) {
+      const sheet = await readProformaSheet(req.file.buffer, sheetName);
+      if (sheet) {
+        if ((extraction.lineItems ?? []).length === 0 && sheet.lines.length > 0) extraction.lineItems = sheet.lines;
+        if (sheet.number) extraction.fields.poNumber = sheet.number;
+        // ORDER_DATE's field — what the draft reads its date from.
+        if (sheet.date) extraction.fields.poDate = sheet.date;
+      }
+    }
 
     const draft = buildProformaDraft(extraction);
     res.json({
@@ -1174,15 +1192,27 @@ stepsRouter.put('/:id/costing', requirePermission('costing:read'), requirePermis
      * lock, that the version it was edited from is gone.
      */
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${orderId}))`;
-    const current = await tx.costingRecord.findUnique({ where: { orderId }, select: { updatedAt: true } });
+    const current = await tx.costingRecord.findUnique({
+      where: { orderId }, select: { updatedAt: true, dailyCostUsd: true, machineCount: true },
+    });
     if (costingIsStale(current?.updatedAt ?? null, expectedUpdatedAt)) {
       throw new ConflictError(COSTING_STALE_MESSAGE, { reason: 'COSTING_CHANGED' });
     }
 
+    // The factory's figures move only when somebody enters a different one
+    // here — a note or a cost row saved on an old costing must not make its
+    // old daily cost the factory's again.
+    const now = new Date();
+    const storedDaily = current?.dailyCostUsd == null ? null : Number(current.dailyCostUsd.toString());
+    const enteredField = {
+      ...(rest.dailyCostUsd !== undefined && rest.dailyCostUsd != null && rest.dailyCostUsd !== storedDaily ? { dailyCostEnteredAt: now } : {}),
+      ...(rest.machineCount !== undefined && rest.machineCount != null && rest.machineCount !== (current?.machineCount ?? null) ? { machineCountEnteredAt: now } : {}),
+    };
+
     const record = await tx.costingRecord.upsert({
       where: { orderId },
-      create: { orderId, ...rest, ...dateField, ...overrideField },
-      update: { ...rest, ...dateField, ...overrideField },
+      create: { orderId, ...rest, ...dateField, ...overrideField, ...enteredField },
+      update: { ...rest, ...dateField, ...overrideField, ...enteredField },
       select: { id: true, hiddenCostRefs: true, updatedAt: true },
     });
     const derived = visibleDerivedLines(
@@ -1211,8 +1241,9 @@ stepsRouter.put('/:id/costing', requirePermission('costing:read'), requirePermis
     return { record, derived };
   });
 
-  // The factory's daily cost and machine count may have just changed.
-  await refreshFactoryDefaults();
+  // The factory's daily cost and machine count may have just changed. The
+  // save has committed; a failure here must not report it as failed.
+  await refreshFactoryDefaults().catch((e) => console.error('Could not refresh the factory defaults:', e));
 
   await logActivity({
     orderId, actorId: user.id, actorName: user.name,

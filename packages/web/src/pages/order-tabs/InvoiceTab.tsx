@@ -58,7 +58,10 @@ export function InvoiceTab({ order }: { order: OrderDetailDto }) {
   // Both or neither. A total from a quantity with no price is a guess.
   const invoiceTotal = shipped > 0 && price != null ? shipped * price : null;
 
-  const shipment = (shipmentRes?.data ?? [])[0] ?? null;
+  // The consignment that has gone, if one has — not simply the newest row, or
+  // an order with one shipment gone and a second being prepared read "Not yet".
+  const shipments = shipmentRes?.data ?? [];
+  const shipment = shipments.find((s) => s.actualShippingDate) ?? shipments[0] ?? null;
   const hasShipped = Boolean(shipment?.actualShippingDate);
 
   return (
@@ -136,8 +139,9 @@ export function InvoiceTab({ order }: { order: OrderDetailDto }) {
           )}
           {invoiceTotal != null && (
             <p className="mt-1 text-xs text-ink-500">
-              {shipped.toLocaleString()} pieces × ${price!.toFixed(2)} — from what actually shipped,
-              not from what was ordered.
+              {shipped.toLocaleString()} pieces × ${price!.toFixed(price! % 0.01 ? 4 : 2)}, the order's price per piece — from what
+              actually shipped, not from what was ordered. Where colours are priced differently, the invoice
+              document's own total is the one billed.
             </p>
           )}
         </div>

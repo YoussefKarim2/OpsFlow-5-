@@ -52,7 +52,8 @@ export function LinePlanCard({
     onSuccess: () => {
       setDraft(null); setError(null);
       toast.success('Line plan saved');
-      void qc.invalidateQueries({ queryKey: ['production', orderId] });
+      // The costing reads the line machines and the target from here.
+      for (const k of ['production', 'order', 'costing']) void qc.invalidateQueries({ queryKey: [k, orderId] });
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not save the line plan.'),
   });

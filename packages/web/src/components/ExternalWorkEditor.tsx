@@ -57,6 +57,8 @@ export function ExternalWorkEditor({
 }) {
   const qc = useQueryClient();
   const [rows, setRows] = useState<ExternalOpRow[]>(initial);
+  /** Operations removed here: only these are deleted, never ones this editor did not load. */
+  const [removedIds, setRemovedIds] = useState<string[]>([]);
 
   /**
    * Values a new row starts with.
@@ -84,8 +86,9 @@ export function ExternalWorkEditor({
       unitPriceUsd: r.unitPriceUsd ?? undefined,
       expectedReturnDate: r.expectedReturnDate || null,
       notes: r.notes?.trim() || null,
-      colorIds: [],
-    }))),
+      // The colour is not edited here: left out, it is left as it is. Sent as
+      // [] it wiped the colour every operation was imported with.
+    })), removedIds),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['external', orderId] });
       void qc.invalidateQueries({ queryKey: ['order', orderId] });
@@ -234,7 +237,11 @@ export function ExternalWorkEditor({
                       </span>
                     ) : (
                       <button type="button" className="btn-ghost btn-sm text-red-600"
-                        onClick={() => setRows(rows.filter((_, n) => n !== i))}>
+                        onClick={() => {
+                          const gone = rows[i]?.id;
+                          if (gone) setRemovedIds((ids) => (ids.includes(gone) ? ids : [...ids, gone]));
+                          setRows(rows.filter((_, n) => n !== i));
+                        }}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
                     )}
