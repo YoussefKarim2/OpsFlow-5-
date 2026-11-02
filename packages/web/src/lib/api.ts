@@ -1073,7 +1073,7 @@ export const api = {
     bomFromLayPlan: (orderId: string) => post<LayPlanBomDto>(`/materials/${orderId}/bom/from-lay-plan`, {}),
     issue: (bomItemId: string, body: { qty: number; issuedToName?: string; notes?: string }) =>
       post<{ id: string; newIssuedQty: number; stillShort: number }>(`/materials/bom/${bomItemId}/issue`, body),
-    markers: (orderId: string) => get<{ plan: unknown; fabrics: unknown[]; cutting: unknown[] }>(`/materials/${orderId}/markers`),
+    markers: (orderId: string) => get<{ plan: unknown; fabrics: unknown[]; cutting: unknown[]; sheet?: unknown }>(`/materials/${orderId}/markers`),
     addMarker: (orderId: string, body: unknown) => post<{ id: string }>(`/materials/${orderId}/markers`, body),
     /** The lay plan as edited on screen: changed rows, new rows, and the ids of removed rows. */
     saveMarkers: (orderId: string, body: { items: LayDraftDto[]; removeIds: string[] }) =>

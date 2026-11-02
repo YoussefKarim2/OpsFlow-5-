@@ -768,7 +768,7 @@ materialsRouter.get('/:orderId/markers', requirePermission('cutting:read'), asyn
     // back to layers × marker length and "Fabric required" came out short by
     // the allowance — about 7% on a typical lay plan.
     totalLengthM: dec(m.totalLengthM),
-    nestPcs: m.nestPcs, efficiencyPct: dec(m.efficiencyPct),
+    nestPcs: dec(m.nestPcs), efficiencyPct: dec(m.efficiencyPct),
     maxLayer: m.maxLayer, markerNumber: m.markerNumber, notes: m.notes,
   }));
 
@@ -787,14 +787,17 @@ materialsRouter.get('/:orderId/markers', requirePermission('cutting:read'), asyn
       mainFabric: order.fabric,
       sizeAlias: sizeAliasFor(lays.flatMap((l) => Object.keys(parseSizeRatio(l.ratio))), d.sizes.map((s) => s.name)),
     }),
-    fabrics: order.fabricRecords.map((f) =>
-      computeFabricPosition({
+    fabrics: order.fabricRecords.map((f) => ({
+      ...computeFabricPosition({
         fabric: f.fabricName, color: f.colorName ?? '',
         requiredM: Number(f.requiredM?.toString() ?? 0),
         availableM: dec(f.availableM), issuedM: dec(f.issuedM),
         actualConsumptionM: dec(f.actualConsumptionM),
       }),
-    ),
+      id: f.id, description: f.description, issuedTo: f.issuedTo, notes: f.notes,
+      fromSheet: f.importJobId != null,
+    })),
+    sheet: await layingSheetOf(order.id, order.markers.map((m) => m.importJobId)),
     cutting: order.cuttingRecords.map((c) => ({
       id: c.id, cutDate: c.cutDate?.toISOString() ?? null, cuttingTeam: c.cuttingTeam,
       cutByName: c.cutByName, inspectedByName: c.inspectedByName,
@@ -804,6 +807,25 @@ materialsRouter.get('/:orderId/markers', requirePermission('cutting:read'), asyn
   });
 }));
 
+/**
+ * The laying sheet behind the order's lay plan, as its import kept it: the
+ * colour × size tables, the fabric tables, header and sign-offs. Only while
+ * the plan still comes from that import — once the plan is cleared, or every
+ * lay of it replaced, the sheet is history and not shown as the plan.
+ */
+async function layingSheetOf(orderId: string, markerJobIds: ReadonlyArray<string | null>) {
+  const ids = [...new Set(markerJobIds.filter((id): id is string => !!id))];
+  if (ids.length === 0) return null;
+  const job = await prisma.importJob.findFirst({
+    where: { id: { in: ids }, targetOrderId: orderId, target: 'LAYING_MARKING', status: 'COMMITTED' },
+    orderBy: { committedAt: 'desc' },
+    select: { id: true, fileName: true, committedAt: true, preview: true },
+  });
+  const preview = job?.preview && typeof job.preview === 'object' && !Array.isArray(job.preview) ? job.preview as Record<string, unknown> : null;
+  if (!job || !preview?.sheet) return null;
+  return { jobId: job.id, fileName: job.fileName, importedAt: job.committedAt?.toISOString() ?? null, ...(preview.sheet as object) };
+}
+
 const markerSchema = z.object({
   markerNumber: z.string().optional(),
   fabricName: z.string().min(1),
@@ -812,7 +834,7 @@ const markerSchema = z.object({
   sizeRatio: z.string().min(1),
   layers: z.number().int().positive(),
   markerLengthM: z.number().positive(),
-  nestPcs: z.number().int().positive().optional(),
+  nestPcs: z.number().positive().max(100_000).optional(),
   efficiencyPct: z.number().optional(),
   notes: z.string().optional(),
 });
@@ -827,7 +849,7 @@ const layRowSchema = z.object({
   layers: z.number().int().min(0).max(100_000),
   markerLengthM: z.number().min(0).max(100_000),
   totalLengthM: z.number().min(0).max(10_000_000).optional().nullable(),
-  nestPcs: z.number().int().min(0).max(100_000).optional().nullable(),
+  nestPcs: z.number().min(0).max(100_000).optional().nullable(),
   efficiencyPct: z.number().min(0).max(100).optional().nullable(),
   maxLayer: z.number().int().min(0).max(100_000).optional().nullable(),
   notes: z.string().trim().max(2000).optional().nullable(),

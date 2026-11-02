@@ -26,6 +26,7 @@
 import type ExcelJS from 'exceljs';
 import { formatRatioPart } from '@opsflow/shared';
 import { isUncachedFormula } from './extractor.js';
+import { asPercent } from './percent.js';
 
 export interface AgeLay {
   /** The sheet row, for messages. */
@@ -120,7 +121,7 @@ export interface AgeLayingSheet {
    * or, when the sheet has none, its fabric tables in the BOM layout — which
    * also say what was issued and to whom.
    */
-  fabricSummary: Array<{ fabric: string; color: string | null; meters: number | null; issuedM?: number | null; issuedTo?: string | null }>;
+  fabricSummary: Array<{ fabric: string; color: string | null; meters: number | null; issuedM?: number | null; issuedTo?: string | null; description?: string | null }>;
   panelTables: AgePanelTable[];
   colourTables: AgeColourTable[];
   fabricLines: AgeFabricLine[];
@@ -496,7 +497,10 @@ function readColourTables(ws: ExcelJS.Worksheet, layHeader: { row: number; cols:
           const label = key(cellStr(line.getCell(c + 1)));
           const hit = PARAM_LABELS.find(([, re]) => re.test(label));
           if (!hit) continue;
-          for (const s of sizes) { const n = cellNum(line.getCell(s.col)); if (n != null) p[hit[0]][s.name] = n; }
+          for (const s of sizes) {
+            const n = cellNum(line.getCell(s.col));
+            if (n != null) p[hit[0]][s.name] = hit[0] === 'eff' ? asPercent(n)! : n;
+          }
         }
         if (Object.keys(p.rate).length > 0 || Object.keys(p.markerLengthM).length > 0 || Object.keys(p.eff).length > 0) params = p;
       }
@@ -637,7 +641,7 @@ export function readAgeLayingSheet(ws: ExcelJS.Worksheet): AgeLayingSheet | null
       totalLengthM: cols.totalLength != null ? cellNum(row.getCell(cols.totalLength)) : null,
       nestPcs: cols.nest != null ? cellNum(row.getCell(cols.nest)) : null,
       markerLengthM: cols.markerLength != null ? cellNum(row.getCell(cols.markerLength)) : null,
-      efficiencyPct: cols.eff != null ? cellNum(row.getCell(cols.eff)) : null,
+      efficiencyPct: cols.eff != null ? asPercent(cellNum(row.getCell(cols.eff))) : null,
       maxLayer: cols.maxLayer != null ? cellNum(row.getCell(cols.maxLayer)) : null,
     });
   }
@@ -661,7 +665,7 @@ export function readAgeLayingSheet(ws: ExcelJS.Worksheet): AgeLayingSheet | null
       const k = fabricKey(l.item, l.colour);
       if (seen.has(k)) continue;
       seen.add(k);
-      summary.push({ fabric: l.item, color: l.colour, meters: l.qty, issuedM: l.issued, issuedTo: l.issuedTo });
+      summary.push({ fabric: l.item, color: l.colour, meters: l.qty, issuedM: l.issued, issuedTo: l.issuedTo, description: l.description });
     }
   }
   return {

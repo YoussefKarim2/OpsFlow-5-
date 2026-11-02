@@ -802,7 +802,8 @@ model Marker {
   /// lay, which across six lays is 80 m. Deriving it would under-state the
   /// fabric requirement, which is how a cutting floor runs short mid-lay.
   totalLengthM  Decimal?   @db.Decimal(12, 3)
-  nestPcs       Int?
+  /// Pieces in one marker. A half is possible: a collar marker nests 11.5 garments' worth.
+  nestPcs       Decimal?   @db.Decimal(10, 2)
   efficiencyPct Decimal?   @db.Decimal(6, 3)
   /// Fabric wastage for this lay, as a percentage — reported by the sheet
   /// directly rather than derived, matching totalLengthM's reasoning above.
@@ -835,6 +836,10 @@ model FabricRecord {
   issuedM            Decimal?   @db.Decimal(12, 3)
   actualConsumptionM Decimal?   @db.Decimal(12, 3)
   responsibleName    String?
+  /// The laying sheet's fabric-table Description: ALL, Collar, Sleeve…
+  description        String?
+  /// The laying sheet's "Issued to": the department the fabric goes to (CUT, PRINT).
+  issuedTo           String?
   recordedAt         DateTime   @default(now())
   notes              String?
   /// Set when this row came from a Laying & Marking Excel import.

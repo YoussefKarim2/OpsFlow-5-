@@ -16,6 +16,7 @@ import { Card, CardHeader, StatTile, Num, Spinner, EmptyState, ConfirmDialog, cl
 import { LayingMarkingImportWizard } from './LayingMarkingImportWizard';
 import { AttachmentsPanel } from '../../components/Attachments';
 import { LayPlanEditor } from '../../components/LayPlanEditor';
+import { ColourTablesCard, FabricPositionCard, CuttingCard, type FabricRow, type CuttingRow, type LayingSheet } from '../../components/LayingSheetParts';
 
 interface Plan {
   lays: Array<{
@@ -39,11 +40,6 @@ interface Plan {
   shortfallTotal?: number;
 }
 
-interface FabricPos {
-  fabric: string; color: string; requiredM: number; availableM: number | null;
-  issuedM: number | null; actualConsumptionM: number | null; remainingM: number | null;
-  shortageM: number; consumptionVsPlanPct: number | null;
-}
 
 export function MarkerTab({ order }: { order: OrderDetailDto }) {
   const { can } = useAuth();
@@ -76,12 +72,9 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
   if (!data) return null;
 
   const plan = data.plan as unknown as Plan;
-  const fabrics = data.fabrics as unknown as FabricPos[];
-  const cutting = data.cutting as unknown as Array<{
-    id: string; cutDate: string | null; cuttingTeam: string | null; cutByName: string | null;
-    inspectedByName: string | null; numberingByName?: string | null; bundledByName?: string | null; approvedByName?: string | null;
-    actualCutQty: number | null; fabricUsedM: number | null; notes: string | null;
-  }>;
+  const fabrics = data.fabrics as unknown as FabricRow[];
+  const cutting = data.cutting as unknown as CuttingRow[];
+  const sheet = (data as { sheet?: LayingSheet | null }).sheet ?? null;
 
   // The factory sheet's per-colour panel tables come in as one-layer markers
   // of a part with no marker length. They are shown as the sheet shows them —
@@ -207,9 +200,9 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
                     <td className="td text-right font-semibold"><Num value={l.totalPieces} /></td>
                     <td className="td text-right"><Num value={l.layers} /></td>
                     <td className="td text-right"><Num value={l.totalLengthM} places={0} /></td>
-                    <td className="td text-right"><Num value={l.nestPcs} fallback="—" /></td>
+                    <td className="td text-right"><Num value={l.nestPcs} places={(l.nestPcs ?? 0) % 1 === 0 ? 0 : 2} fallback="—" /></td>
                     <td className="td text-right"><Num value={l.markerLengthM} places={2} /></td>
-                    <td className="td text-right"><Num value={l.efficiencyPct} places={1} fallback="—" /></td>
+                    <td className="td text-right"><Num value={l.efficiencyPct} places={(l.efficiencyPct ?? 0) % 1 === 0 ? 0 : 1} suffix="%" fallback="—" /></td>
                     <td className="td text-right"><Num value={l.maxLayer} fallback="—" /></td>
                   </tr>
                 ))}
@@ -273,6 +266,8 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
         )}
       </Card>
 
+      {sheet && <ColourTablesCard sheet={sheet} />}
+
       {panelsByColour.size > 0 && (
         <Card>
           <CardHeader title="Panels by colour" subtitle="From the laying sheet: how many of each part are cut per size, for each colour" />
@@ -303,77 +298,9 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
         </Card>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader title="Fabric position" />
-          {fabrics.length === 0 ? (
-            <EmptyState title="No fabric records" />
-          ) : (
-            <table className="w-full">
-              <thead className="border-b border-ink-200 bg-ink-50">
-                <tr>
-                  <th className="th">Fabric</th>
-                  <th className="th text-right">Required</th>
-                  <th className="th text-right">Issued</th>
-                  <th className="th text-right">Consumed</th>
-                  <th className="th text-right">Short</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-ink-100">
-                {fabrics.map((f, i) => (
-                  <tr key={i}>
-                    <td className="td font-medium">{f.fabric}{f.color && <span className="text-ink-400"> · {f.color}</span>}</td>
-                    <td className="td text-right"><Num value={f.requiredM} places={0} suffix=" m" /></td>
-                    <td className="td text-right"><Num value={f.issuedM} places={0} suffix=" m" fallback="—" /></td>
-                    <td className="td text-right"><Num value={f.actualConsumptionM} places={0} suffix=" m" fallback="—" /></td>
-                    <td className="td text-right">
-                      <span className={clsx('tnum text-sm font-semibold', f.shortageM > 0 ? 'text-red-600' : 'text-emerald-600')}>
-                        {f.shortageM > 0 ? `${Math.round(f.shortageM).toLocaleString()} m` : 'Covered'}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </Card>
-
-        <Card>
-          <CardHeader title="Cutting records" />
-          {cutting.length === 0 ? (
-            <EmptyState title="Nothing cut yet" />
-          ) : (
-            <table className="w-full">
-              <thead className="border-b border-ink-200 bg-ink-50">
-                <tr>
-                  <th className="th">Date</th>
-                  <th className="th">Team</th>
-                  <th className="th">Cut by</th>
-                  <th className="th">Signed off</th>
-                  <th className="th text-right">Qty</th>
-                  <th className="th text-right">Fabric</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-ink-100">
-                {cutting.map((c) => (
-                  <tr key={c.id}>
-                    <td className="td">{c.cutDate ? fmtDate(c.cutDate) : '—'}</td>
-                    <td className="td text-xs">{c.cuttingTeam || '—'}</td>
-                    <td className="td text-xs">{c.cutByName || '—'}</td>
-                    <td className="td text-2xs text-ink-600">
-                      {[['Numbering', c.numberingByName], ['Inspected', c.inspectedByName], ['Bundled', c.bundledByName], ['Approved', c.approvedByName]]
-                        .filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(' · ') || '—'}
-                      {c.notes && <span className="mt-0.5 block whitespace-pre-line text-ink-500" dir="auto">{c.notes}</span>}
-                    </td>
-                    <td className="td text-right font-semibold"><Num value={c.actualCutQty} fallback="—" /></td>
-                    <td className="td text-right"><Num value={c.fabricUsedM} places={0} suffix=" m" fallback="—" /></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </Card>
-      </div>
+      {/* Full width, each: side by side, both tables were cut off. */}
+      <FabricPositionCard fabrics={fabrics} />
+      <CuttingCard cutting={cutting} />
 
       {history && history.data.length > 0 && (
         <Card>

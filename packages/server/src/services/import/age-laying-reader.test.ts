@@ -252,7 +252,8 @@ describe('through the Laying & Marking extractor', () => {
     assert.equal(r.header.cutNotes, 'Use the short table');
     assert.equal(r.lays.length, 1);
     assert.deepEqual(r.colourTables.map((t) => [t.block, t.kind, t.rows.length]), [[1, 'PIECES', 3], [2, 'PIECES', 2], [1, 'LAYERS', 3], [1, 'METERS', 3]]);
-    assert.deepEqual(r.colourTables[0]!.params, { eff: { YXS: 0.83, YS: 0.77 }, markerLengthM: { YXS: 1.24, YS: 1.57 }, rate: { YXS: 3, YS: 3 } });
+    // EFF% is written as a fraction on the sheet (0.83 shown as 83%); it is kept as a percentage.
+    assert.deepEqual(r.colourTables[0]!.params, { eff: { YXS: 83, YS: 77 }, markerLengthM: { YXS: 1.24, YS: 1.57 }, rate: { YXS: 3, YS: 3 } });
     assert.equal(r.colourTables[0]!.totals?.total, 507);
     assert.equal(r.fabricLines.length, 5);
     // The fabric tables stand in for the FABRIC / COLOR / METER summary; the working copy's repeat is read once.
@@ -264,13 +265,13 @@ describe('through the Laying & Marking extractor', () => {
     const lays = x.rows.filter((row) => row.kind === 'LAY');
     // One collar lay, then one lay per colour and size with pieces: COLUMBIA 2, HUNTER 2, SILVER 1 — the repeat is not a second plan.
     assert.deepEqual(lays.map((l) => [l.fabricName, l.fabricColor, l.sizeRatio, l.layers, l.markerLengthM, l.totalLengthM, l.efficiencyPct]), [
-      ['Rib 37', 'Black', '(YXS)4, (YS)3', 26, 0.5, 14, 0.81],
-      ['Tranmmere', 'COLUMBIA/WH', '(YXS3)', 51, 1.24, 64, 0.83],
-      ['Tranmmere', 'COLUMBIA/WH', '(YS3)', 9, 1.57, 18, 0.77],
-      ['Tranmmere', 'HUNTER/WHT', '(YXS3)', 38, 1.24, 48, 0.83],
-      ['Tranmmere', 'HUNTER/WHT', '(YS3)', 51, 1.57, 81, 0.77],
+      ['Rib 37', 'Black', '(YXS)4, (YS)3', 26, 0.5, 14, 81],
+      ['Tranmmere', 'COLUMBIA/WH', '(YXS3)', 51, 1.24, 64, 83],
+      ['Tranmmere', 'COLUMBIA/WH', '(YS3)', 9, 1.57, 18, 77],
+      ['Tranmmere', 'HUNTER/WHT', '(YXS3)', 38, 1.24, 48, 83],
+      ['Tranmmere', 'HUNTER/WHT', '(YS3)', 51, 1.57, 81, 77],
       // No LAYER or METER figure for this one: layers from pieces ÷ rate, meters from layers × marker length.
-      ['Tranmmere', 'SILVER/BLACK', '(YXS3)', 23, 1.24, 29, 0.83],
+      ['Tranmmere', 'SILVER/BLACK', '(YXS3)', 23, 1.24, 29, 83],
     ]);
     assert.ok(x.issues.some((i) => /5 lays by colour and size/.test(i.message)), x.issues.map((i) => i.message).join('\n'));
     assert.ok(x.issues.some((i) => /repeats 1 colour row/.test(i.message)));
@@ -335,5 +336,15 @@ describe('through the Laying & Marking extractor', () => {
     assert.equal(r.rows.length, 1);
     assert.equal(r.extras, undefined);
     assert.equal(r.rows[0]!.markerNumber, 'M1');
+  });
+});
+
+describe('efficiency as a percentage', () => {
+  test('a fraction is scaled; a percentage is kept', async () => {
+    const { asPercent } = await import('./percent.js');
+    assert.equal(asPercent(0.81), 81);
+    assert.equal(asPercent(81), 81);
+    assert.equal(asPercent(null), null);
+    assert.equal(asPercent(0), 0);
   });
 });

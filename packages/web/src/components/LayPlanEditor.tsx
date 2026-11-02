@@ -60,7 +60,7 @@ export function LayPlanEditor({ orderId, lays, defaultFabric, onSaved, onCancel 
       items: rows.map((d): LayDraftDto => ({
         id: d.id, markerNumber: d.markerNumber.trim() || null, fabricName: d.fabric.trim(), fabricColor: d.color.trim() || null,
         panel: d.panel.trim() || 'ALL', sizeRatio: d.ratio.trim(), layers: Math.round(num(d.layers) ?? 0), markerLengthM: num(d.markerLengthM) ?? 0,
-        totalLengthM: num(d.totalLengthM), nestPcs: num(d.nestPcs) == null ? null : Math.round(num(d.nestPcs)!),
+        totalLengthM: num(d.totalLengthM), nestPcs: num(d.nestPcs) == null ? null : Math.round(num(d.nestPcs)! * 100) / 100,
         efficiencyPct: num(d.efficiencyPct), maxLayer: num(d.maxLayer) == null ? null : Math.round(num(d.maxLayer)!),
       })),
     }),

@@ -317,17 +317,36 @@ export async function commitLayingImport(
           },
         });
         // What the sheet's fabric table says was issued, when it says so;
-        // a blank leaves whatever the warehouse recorded. "Issued to" on
-        // the sheet is a department (CUT), so it goes in the notes rather
-        // than standing as the responsible person.
+        // a blank leaves whatever the warehouse recorded. "Issued to" is a
+        // department (CUT, PRINT), kept in its own column, not as the
+        // responsible person.
         const data = {
           fabricName: f.fabric, colorName: f.color, requiredM: f.meters, importJobId: input.jobId,
           ...(f.issuedM != null ? { issuedM: f.issuedM } : {}),
-          ...(f.issuedTo ? { notes: `Issued to ${f.issuedTo}` } : {}),
+          ...(f.issuedTo ? { issuedTo: f.issuedTo } : {}),
+          ...(f.description ? { description: f.description } : {}),
         };
         if (prior) await tx.fabricRecord.update({ where: { id: prior.id }, data });
         else { await tx.fabricRecord.create({ data: { ...data, orderId: order.id } }); fabricRecordsCreated++; }
       }
+    }
+
+    // The sheet as the factory laid it out — its colour × size tables, its
+    // fabric tables, header and sign-offs — kept with the import, so the
+    // Laying & Marker screen can show the sheet's own tables (including
+    // sizes the lays could not be made from) and not only the lays.
+    if (input.extras) {
+      const job = await tx.importJob.findUnique({ where: { id: input.jobId }, select: { preview: true } });
+      const prior = job?.preview && typeof job.preview === 'object' && !Array.isArray(job.preview) ? job.preview as Record<string, unknown> : {};
+      const x = input.extras;
+      const sheet = {
+        header: x.header, signatures: x.signatures, sizes: x.sizes,
+        colourTables: x.colourTables, fabricLines: x.fabricLines,
+      };
+      await tx.importJob.update({
+        where: { id: input.jobId },
+        data: { preview: JSON.parse(JSON.stringify({ ...prior, sheet })) },
+      });
     }
 
     // The plan's fabric goes on the bill of materials in the same

@@ -27,6 +27,7 @@ import { findHeaderCandidates, readTableAt, type SheetTable } from './tabular-ex
 import { openWorkbook, readCsvWorkbook } from './open-workbook.js';
 import { detectFileKind } from './file-kind.js';
 import { readAgeLayingSheet, type AgeLayingSheet } from './age-laying-reader.js';
+import { asPercent } from './percent.js';
 
 const LAYING_CONCEPTS = new Set<ImportConcept>([
   // MATERIAL as well as FABRIC: plenty of laying sheets head that column
@@ -488,7 +489,7 @@ export async function extractLayingMarking(
       markerWidthM: toNumber(cellAt(row, ImportConcept.MARKER_WIDTH)),
       totalLengthM: toNumber(cellAt(row, ImportConcept.TOTAL_LENGTH)),
       nestPcs: toNumber(cellAt(row, ImportConcept.NEST_PCS)),
-      efficiencyPct: toNumber(cellAt(row, ImportConcept.EFFICIENCY)),
+      efficiencyPct: asPercent(toNumber(cellAt(row, ImportConcept.EFFICIENCY))),
       wastagePct: toNumber(cellAt(row, ImportConcept.WASTAGE)),
       fabricConsumptionM: toNumber(cellAt(row, ImportConcept.FABRIC_CONSUMPTION)),
       cutDate: safeDate(cellAt(row, ImportConcept.CUT_DATE)),

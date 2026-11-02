@@ -491,7 +491,7 @@ export async function commitImport(
           // Stored, not derived — see the schema: it carries the end loss that
           // layers × length leaves out.
           totalLengthM: lay.totalLengthM,
-          nestPcs: lay.nestPcs == null ? null : Math.round(lay.nestPcs),
+          nestPcs: lay.nestPcs == null ? null : Math.round(lay.nestPcs * 100) / 100,
           position: i,
         },
       });

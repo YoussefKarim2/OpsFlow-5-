@@ -442,7 +442,7 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
           layers: m.layers,
           markerLengthM: Number(m.markerLengthM.toString()),
           totalLengthM: dec(m.totalLengthM),
-          nestPcs: m.nestPcs,
+          nestPcs: m.nestPcs == null ? null : Number(m.nestPcs.toString()),
         })),
         Object.fromEntries(
           order.sizes.map((s) => [
