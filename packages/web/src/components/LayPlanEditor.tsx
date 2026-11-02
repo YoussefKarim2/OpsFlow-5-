@@ -66,7 +66,8 @@ export function LayPlanEditor({ orderId, lays, defaultFabric, onSaved, onCancel 
     }),
     onSuccess: () => {
       setError(null);
-      for (const k of ['markers', 'order', 'order-steps']) void qc.invalidateQueries({ queryKey: [k, orderId] });
+      // The plan's fabric is on the bill of materials, which follows it.
+      for (const k of ['markers', 'order', 'order-steps', 'bom']) void qc.invalidateQueries({ queryKey: [k, orderId] });
       onSaved();
     },
     onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not save the lay plan.'),

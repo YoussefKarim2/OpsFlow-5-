@@ -464,3 +464,74 @@ export function computeFabricPosition(i: {
     consumptionVsPlanPct: safePct(consumed, i.requiredM),
   };
 }
+
+/** One fabric and colour the lay plan needs, as a bill-of-materials line takes it. */
+export interface LayPlanFabric {
+  fabric: string;
+  color: string | null;
+  /** Metres the lays consume (lay allowance included), or the sheet's own figure when no lay uses it. */
+  metres: number;
+  /** Metres per piece cut, when the lays say it unambiguously; null otherwise. */
+  consumptionPerPiece: number | null;
+  /** Where the figure came from. */
+  from: 'LAYS' | 'SHEET';
+}
+
+/** The key a fabric and colour are matched under: case and spacing ignored. */
+export function layFabricKey(fabric: string | null | undefined, color: string | null | undefined): string {
+  const n = (s: string | null | undefined) => (s ?? '').trim().replace(/\s+/g, ' ').toUpperCase();
+  return `${n(fabric)}|${n(color)}`;
+}
+
+/**
+ * The fabric a lay plan needs, one entry per fabric and colour, in the order
+ * the plan first mentions them.
+ *
+ * Metres are each lay's recorded total (the lay allowance included), or
+ * layers × marker length where none was recorded — what the Laying & Marker
+ * screen calls "Fabric required". Panel rows with no marker length carry no
+ * metres and add nothing.
+ *
+ * A fabric and colour no lay uses still counts when the sheet's own fabric
+ * table gives its metres (`sheet`): a rib or a lining planned on the sheet
+ * without a lay of its own.
+ *
+ * Metres per piece are given only when every lay of the pair cuts the same
+ * panel: a body cut front and back separately produces two pieces per
+ * garment, and dividing by both would halve the true consumption.
+ */
+export function layPlanFabric(
+  lays: readonly LayInput[],
+  sheet: ReadonlyArray<{ fabric: string; color: string | null; metres: number | null }> = [],
+): LayPlanFabric[] {
+  const out = new Map<string, LayPlanFabric & { pieces: number; panels: Set<string> }>();
+  for (const lay of lays) {
+    const r = computeLay(lay);
+    if (!(r.totalLengthM > 0)) continue;
+    const key = layFabricKey(lay.fabric, lay.color);
+    const e = out.get(key) ?? {
+      fabric: lay.fabric.trim(), color: lay.color?.trim() || null,
+      metres: 0, consumptionPerPiece: null, from: 'LAYS' as const, pieces: 0, panels: new Set<string>(),
+    };
+    e.metres += r.totalLengthM;
+    e.pieces += r.totalPieces;
+    e.panels.add(isWholeGarmentPanel(lay.panel) ? 'ALL' : lay.panel.trim().toUpperCase());
+    out.set(key, e);
+  }
+  for (const s of sheet) {
+    if (!s.fabric?.trim() || s.metres == null || !(s.metres > 0)) continue;
+    const key = layFabricKey(s.fabric, s.color);
+    if (out.has(key)) continue;
+    out.set(key, {
+      fabric: s.fabric.trim(), color: s.color?.trim() || null,
+      metres: s.metres, consumptionPerPiece: null, from: 'SHEET', pieces: 0, panels: new Set(),
+    });
+  }
+  return [...out.values()].map(({ pieces, panels, ...f }) => ({
+    ...f,
+    metres: Math.round(f.metres * 1000) / 1000,
+    consumptionPerPiece: f.from === 'LAYS' && panels.size === 1 && pieces > 0
+      ? Math.round((f.metres / pieces) * 1_000_000) / 1_000_000
+      : null,
+  }));
+}

@@ -15,6 +15,7 @@ import { logActivity } from '../activity-service.js';
 import { ValidationError } from '../../errors.js';
 import { suppressChangeEvents } from '../../request-context.js';
 import { normalisePoNumber } from '../rules.js';
+import { syncLayPlanFabricToBom } from '../lay-plan-bom.js';
 
 export interface CommitOptions {
   actorId: string;
@@ -496,6 +497,9 @@ export async function commitImport(
       });
       markerCount++;
     }
+    // The lay plan's fabric on the bill of materials, as every later change
+    // to the plan keeps it.
+    if (markerCount > 0) await syncLayPlanFabricToBom(tx, order.id);
 
     // ── External operations ───────────────────────────────────────────────
     //

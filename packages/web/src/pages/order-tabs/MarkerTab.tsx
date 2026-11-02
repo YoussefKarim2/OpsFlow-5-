@@ -58,7 +58,7 @@ export function MarkerTab({ order }: { order: OrderDetailDto }) {
     onSuccess: (r) => {
       setConfirmClear(false);
       toast.success(`Lay plan removed: ${r.markers} row${r.markers === 1 ? '' : 's'}.`);
-      for (const k of ['markers', 'order', 'order-steps', 'attachments']) void qc.invalidateQueries({ queryKey: [k, order.id] });
+      for (const k of ['markers', 'order', 'order-steps', 'attachments', 'bom']) void qc.invalidateQueries({ queryKey: [k, order.id] });
     },
     onError: (e) => toast.error(e),
   });

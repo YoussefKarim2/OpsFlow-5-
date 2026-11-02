@@ -10,6 +10,7 @@ import { refreshOrderCache, ORDER_INCLUDE, deriveOrder } from '../services/order
 import { logActivity, logAndNotify } from '../services/activity-service.js';
 import { issueToProduction, returnFromProduction, assertIssueCorrectionsPossible } from '../services/inventory-service.js';
 import { clearLayPlan } from '../services/import/laying-committer.js';
+import { syncLayPlanFabricToBom, describeLayPlanBom } from '../services/lay-plan-bom.js';
 import { inWearingOrder, sizeAliasFor } from '../services/import/po-lines.js';
 import type { AuthUser } from '../middleware/auth.js';
 
@@ -102,6 +103,7 @@ materialsRouter.get('/:orderId/bom', requirePermission('material:read'), asyncHa
           id: sz.id, sizeLabel: sz.sizeLabel, qty: Number(sz.qty.toString()),
         })),
         notes: row.notes,
+        fromLayPlan: row.fromLayPlan,
         issues: row.issues.map((iss) => ({
           id: iss.id, qty: Number(iss.qty.toString()), unit: iss.unit,
           issuedAt: iss.issuedAt.toISOString(),
@@ -112,6 +114,32 @@ materialsRouter.get('/:orderId/bom', requirePermission('material:read'), asyncHa
       };
     }),
   });
+}));
+
+/**
+ * Bring the lay plan's fabric onto the bill of materials now. Every change to
+ * the plan does this by itself; this is for a plan that was there before the
+ * bill followed it, and for a coordinator who wants the figures redone after
+ * editing a fabric line by hand.
+ */
+materialsRouter.post('/:orderId/bom/from-lay-plan', requirePermission('material:edit'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const order = await prisma.order.findFirst({
+    where: { OR: [{ id: req.params.orderId }, { poNumber: req.params.orderId }] }, select: { id: true },
+  });
+  if (!order) throw new NotFoundError('Order');
+  const result = await prisma.$transaction((tx) => syncLayPlanFabricToBom(tx, order.id));
+  const note = describeLayPlanBom(result);
+  if (note || result.kept.length > 0) {
+    await logActivity({
+      orderId: order.id, actorId: actor.id, actorName: actor.name,
+      action: 'BOM_FROM_LAY_PLAN',
+      summary: `brought the lay plan's fabric onto the bill of materials: ${note || 'nothing to change'}`,
+      entityType: 'Order', entityId: order.id, meta: { ...result },
+    });
+    await refreshOrderCache(order.id);
+  }
+  res.json(result);
 }));
 
 /**
@@ -842,14 +870,17 @@ materialsRouter.put('/:orderId/markers', requirePermission('cutting:write'), asy
     }
     const removeIds = input.removeIds.filter((id) => known.has(id));
     const removed = removeIds.length > 0 ? (await tx.marker.deleteMany({ where: { orderId: order.id, id: { in: removeIds } } })).count : 0;
-    return { updated, added, removed };
+    const bom = await syncLayPlanFabricToBom(tx, order.id);
+    return { updated, added, removed, bom };
   });
 
+  const bomNote = describeLayPlanBom(counts.bom);
   await logActivity({
     orderId: order.id, actorId: actor.id, actorName: actor.name,
     action: 'LAY_PLAN_EDITED',
-    summary: `edited the lay plan: ${counts.updated} changed, ${counts.added} added, ${counts.removed} removed`,
-    entityType: 'Order', entityId: order.id, meta: { ...counts },
+    summary: `edited the lay plan: ${counts.updated} changed, ${counts.added} added, ${counts.removed} removed${bomNote ? `; ${bomNote}` : ''}`,
+    entityType: 'Order', entityId: order.id,
+    meta: { updated: counts.updated, added: counts.added, removed: counts.removed, ...(counts.bom.kept.length > 0 ? { bomKept: counts.bom.kept } : {}) },
   });
   await refreshOrderCache(order.id);
   res.json(counts);
@@ -862,8 +893,12 @@ materialsRouter.post('/:orderId/markers', requirePermission('cutting:write'), as
   const order = await prisma.order.findUnique({ where: { id: req.params.orderId } });
   if (!order) throw new NotFoundError('Order');
 
-  const count = await prisma.marker.count({ where: { orderId: order.id } });
-  const marker = await prisma.marker.create({ data: { ...input, orderId: order.id, position: count } });
+  const marker = await prisma.$transaction(async (tx) => {
+    const count = await tx.marker.count({ where: { orderId: order.id } });
+    const created = await tx.marker.create({ data: { ...input, orderId: order.id, position: count } });
+    await syncLayPlanFabricToBom(tx, order.id);
+    return created;
+  });
 
   await logActivity({
     orderId: order.id, actorId: actor.id, actorName: actor.name,
@@ -887,23 +922,30 @@ materialsRouter.delete('/:orderId/markers', requirePermission('cutting:write'), 
     where: { OR: [{ id: req.params.orderId }, { poNumber: req.params.orderId }] }, select: { id: true, poNumber: true },
   });
   if (!order) throw new NotFoundError('Order');
-  const cleared = await prisma.$transaction((tx) => clearLayPlan(tx, order.id));
+  const { bom, ...cleared } = await prisma.$transaction(async (tx) => {
+    const c = await clearLayPlan(tx, order.id);
+    return { ...c, bom: await syncLayPlanFabricToBom(tx, order.id) };
+  });
   await logActivity({
     orderId: order.id, actorId: actor.id, actorName: actor.name,
     action: 'LAY_PLAN_CLEARED',
     summary: `removed the lay plan: ${cleared.markers} row${cleared.markers === 1 ? '' : 's'}`
-      + (cleared.cuttingRecords + cleared.fabricRecords > 0 ? ` and ${cleared.cuttingRecords + cleared.fabricRecords} imported cutting/fabric record${cleared.cuttingRecords + cleared.fabricRecords === 1 ? '' : 's'}` : ''),
-    entityType: 'Order', entityId: order.id, meta: { ...cleared },
+      + (cleared.cuttingRecords + cleared.fabricRecords > 0 ? ` and ${cleared.cuttingRecords + cleared.fabricRecords} imported cutting/fabric record${cleared.cuttingRecords + cleared.fabricRecords === 1 ? '' : 's'}` : '')
+      + (bom.removed > 0 ? `; ${describeLayPlanBom(bom)}` : ''),
+    entityType: 'Order', entityId: order.id, meta: { ...cleared, ...(bom.kept.length > 0 ? { bomKept: bom.kept } : {}) },
   });
   await refreshOrderCache(order.id);
-  res.json(cleared);
+  res.json({ ...cleared, bom });
 }));
 
 materialsRouter.delete('/markers/:id', requirePermission('cutting:write'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   const marker = await prisma.marker.findUnique({ where: { id: req.params.id } });
   if (!marker) throw new NotFoundError('Marker');
-  await prisma.marker.delete({ where: { id: marker.id } });
+  await prisma.$transaction(async (tx) => {
+    await tx.marker.delete({ where: { id: marker.id } });
+    await syncLayPlanFabricToBom(tx, marker.orderId);
+  });
 
   // Removing a lay changes whether the plan covers the cut order, so the
   // cached order figures are refreshed and the removal is on the record like

@@ -433,8 +433,12 @@ export function BomEditor({
                         className="input tnum border-transparent bg-transparent text-right"
                         inputMode="decimal"
                         value={r.requiredQty}
+                        title={r.fromLayPlan ? 'From the lay plan: the next change to the lay plan sets this again' : undefined}
                         onChange={numeric((v) => setRow(i, { requiredQty: v }))}
                       />
+                    )}
+                    {r.fromLayPlan && (
+                      <span className="block px-2 text-right text-2xs text-accent-700">From the lay plan</span>
                     )}
                   </td>
                   {/* Issued — editable here, and at any time. The Materials

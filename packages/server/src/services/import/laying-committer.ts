@@ -19,6 +19,7 @@ import { ValidationError, NotFoundError, ConflictError } from '../../errors.js';
 import { suppressChangeEvents } from '../../request-context.js';
 import { logActivity } from '../../services/activity-service.js';
 import type { LayingRow, LayingExtras } from './laying-extractor.js';
+import { syncLayPlanFabricToBom, describeLayPlanBom, type LayPlanBomResult } from '../lay-plan-bom.js';
 
 export type RowResolution = 'KEEP' | 'REPLACE' | 'ADD_NEW';
 
@@ -64,6 +65,8 @@ export interface CommitLayingImportResult {
   cleared: number;
   cuttingRecordsCreated: number;
   fabricRecordsCreated: number;
+  /** The plan's fabric, written to the bill of materials. */
+  bom: LayPlanBomResult;
 }
 
 /**
@@ -327,10 +330,15 @@ export async function commitLayingImport(
       }
     }
 
-    return { markersCreated, markersUpdated, markersSkipped, panelRows, cleared, cuttingRecordsCreated, fabricRecordsCreated };
+    // The plan's fabric goes on the bill of materials in the same
+    // transaction, so the bill never shows a plan that was not imported.
+    const bom = await syncLayPlanFabricToBom(tx, order.id);
+
+    return { markersCreated, markersUpdated, markersSkipped, panelRows, cleared, cuttingRecordsCreated, fabricRecordsCreated, bom };
   }, { timeout: 60_000 });
 
-  const { markersCreated, markersUpdated, markersSkipped, panelRows, cleared } = counts;
+  const { markersCreated, markersUpdated, markersSkipped, panelRows, cleared, bom } = counts;
+  const bomNote = describeLayPlanBom(bom);
   const laysAdded = Math.max(0, markersCreated - Math.min(panelRows, markersCreated));
   await logActivity({
     orderId: order.id, actorId: input.actorId, actorName: input.actorName,
@@ -339,8 +347,10 @@ export async function commitLayingImport(
       `imported Laying & Marking data — ${cleared > 0 ? `removed the previous plan (${cleared} rows), ` : ''}${laysAdded} lay${laysAdded === 1 ? '' : 's'} added` +
       (panelRows > 0 ? `, ${panelRows} panel row${panelRows === 1 ? '' : 's'} by colour` : '') +
       (markersUpdated > 0 ? `, ${markersUpdated} replaced` : '') +
-      (markersSkipped > 0 ? `, ${markersSkipped} kept as-is` : ''),
+      (markersSkipped > 0 ? `, ${markersSkipped} kept as-is` : '') +
+      (bomNote ? `; ${bomNote}` : ''),
     entityType: 'ImportJob', entityId: input.jobId,
+    ...(bom.kept.length > 0 ? { meta: { bomKept: bom.kept } } : {}),
   });
 
   return counts;

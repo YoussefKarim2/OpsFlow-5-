@@ -365,7 +365,12 @@ export interface BomRowDto {
   supplier: string | null;
   notes: string | null;
   sizes: BomSizeDto[];
+  /** Read only: the line is the lay plan's fabric and follows it. */
+  fromLayPlan?: boolean;
 }
+
+/** What bringing the lay plan's fabric onto the bill of materials changed. */
+export interface LayPlanBomDto { added: number; updated: number; removed: number; kept: string[] }
 
 /** A cost line, and whether a person or the production data produced it. */
 export interface CostLineDto {
@@ -1060,17 +1065,19 @@ export const api = {
       put<{ ok: true; count: number; removed: number }>(`/materials/${orderId}/bom`, { items, removeIds }),
     updateBomItem: (id: string, body: unknown) => patch<unknown>(`/materials/bom/${id}`, body),
     removeBomItem: (id: string) => del(`/materials/bom/${id}`),
+    /** Put the lay plan's fabric on the bill of materials (each change to the plan does this by itself). */
+    bomFromLayPlan: (orderId: string) => post<LayPlanBomDto>(`/materials/${orderId}/bom/from-lay-plan`, {}),
     issue: (bomItemId: string, body: { qty: number; issuedToName?: string; notes?: string }) =>
       post<{ id: string; newIssuedQty: number; stillShort: number }>(`/materials/bom/${bomItemId}/issue`, body),
     markers: (orderId: string) => get<{ plan: unknown; fabrics: unknown[]; cutting: unknown[] }>(`/materials/${orderId}/markers`),
     addMarker: (orderId: string, body: unknown) => post<{ id: string }>(`/materials/${orderId}/markers`, body),
     /** The lay plan as edited on screen: changed rows, new rows, and the ids of removed rows. */
     saveMarkers: (orderId: string, body: { items: LayDraftDto[]; removeIds: string[] }) =>
-      put<{ updated: number; added: number; removed: number }>(`/materials/${orderId}/markers`, body),
+      put<{ updated: number; added: number; removed: number; bom: LayPlanBomDto }>(`/materials/${orderId}/markers`, body),
     removeMarker: (id: string) => del(`/materials/markers/${id}`),
     /** Remove the whole lay plan (and the cutting/fabric records an import wrote). */
     clearMarkers: (orderId: string) =>
-      request<{ markers: number; cuttingRecords: number; fabricRecords: number }>(`/materials/${orderId}/markers`, { method: 'DELETE' }),
+      request<{ markers: number; cuttingRecords: number; fabricRecords: number; bom: LayPlanBomDto }>(`/materials/${orderId}/markers`, { method: 'DELETE' }),
     recordCutting: (orderId: string, body: unknown) => post<{ id: string }>(`/materials/${orderId}/cutting`, body),
   },
 
@@ -1229,6 +1236,8 @@ export const api = {
       post<{
         markersCreated: number; markersUpdated: number; markersSkipped: number; panelRows: number; cleared: number;
         cuttingRecordsCreated: number; fabricRecordsCreated: number;
+        /** The plan's fabric, written to the bill of materials. */
+        bom?: LayPlanBomDto;
       }>(`/orders/${orderId}/laying-import/${jobId}/commit`, { resolutions, replaceAll }),
     history: (orderId: string) => get<{
       data: Array<{

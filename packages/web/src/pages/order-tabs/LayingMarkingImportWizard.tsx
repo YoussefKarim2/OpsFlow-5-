@@ -17,7 +17,7 @@ import {
   Upload, AlertTriangle, Info, ArrowRight, ArrowLeft, Loader2,
 } from 'lucide-react';
 import { CONCEPT_META, ImportConcept, type ColumnAnalysis } from '@opsflow/shared';
-import { api, type LayingImportAnalysisDto, type LayingRowDto } from '../../lib/api';
+import { api, type LayingImportAnalysisDto, type LayingRowDto, type LayPlanBomDto } from '../../lib/api';
 import { Modal, Card, CardHeader, EmptyState, ErrorNote, clsx, useToast } from '../../components/ui';
 import { ComboSelect } from '../../components/ComboSelect';
 
@@ -33,6 +33,17 @@ const LAYING_CONCEPT_KEYS: ImportConcept[] = [
   ImportConcept.RESPONSIBLE_PERSON, ImportConcept.PO_NUMBER, ImportConcept.NOTES, ImportConcept.IGNORE,
 ];
 const CONCEPT_OPTIONS = LAYING_CONCEPT_KEYS.map((k) => ({ value: k, label: CONCEPT_META[k].label }));
+
+/** What the import did to the bill of materials, as a sentence for the toast. */
+function bomNote(bom: LayPlanBomDto | undefined): string {
+  if (!bom) return '';
+  const n = bom.added + bom.updated;
+  const parts: string[] = [];
+  if (n > 0) parts.push(` Fabric for ${n} fabric/colour${n === 1 ? '' : 's'} is on the bill of materials.`);
+  if (bom.removed > 0) parts.push(` ${bom.removed} fabric line${bom.removed === 1 ? '' : 's'} the plan no longer uses removed from it.`);
+  if (bom.kept.length > 0) parts.push(` Not changed on the bill of materials: ${bom.kept.join('; ')}.`);
+  return parts.join('');
+}
 
 export function LayingMarkingImportWizard({
   orderId, orderPoNumber, existingLays = 0, onClose,
@@ -90,10 +101,13 @@ export function LayingMarkingImportWizard({
         (result.cleared > 0 ? 'Previous lay plan removed. ' : '') +
         `Imported: ${lays} lay${lays === 1 ? '' : 's'}` +
         (result.panelRows ? ` and ${result.panelRows} panel row${result.panelRows === 1 ? '' : 's'} by colour` : '') +
-        (result.markersUpdated > 0 ? ` (${result.markersUpdated} replaced)` : '') + '.',
+        (result.markersUpdated > 0 ? ` (${result.markersUpdated} replaced)` : '') + '.' +
+        bomNote(result.bom),
       );
       qc.invalidateQueries({ queryKey: ['markers', orderId] });
       qc.invalidateQueries({ queryKey: ['laying-import-history', orderId] });
+      // The plan's fabric went onto the bill of materials with it.
+      qc.invalidateQueries({ queryKey: ['bom', orderId] });
       // The import moves more than the lay list: the order's marker figures
       // and blockers, the workflow steps that read them, and the laying
       // sheet itself, which is filed as an attachment.

@@ -13,13 +13,13 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { PackagePlus, AlertTriangle } from 'lucide-react';
+import { PackagePlus, AlertTriangle, Layers } from 'lucide-react';
 import { fmtDate, BOM_DEPARTMENTS, bomDepartmentOf, type OrderDetailDto } from '@opsflow/shared';
 import { api, ApiError, type BomRowDto } from '../../lib/api';
 import { BomEditor } from '../../components/BomEditor';
 import { useAuth } from '../../lib/auth';
 import {
-  Card, CardHeader, StatTile, Num, ProgressBar, Modal, Field, Spinner, ErrorNote, clsx,
+  Card, CardHeader, StatTile, Num, ProgressBar, Modal, Field, Spinner, ErrorNote, clsx, useToast,
 } from '../../components/ui';
 import { AttachmentsPanel } from '../../components/Attachments';
 
@@ -31,6 +31,8 @@ interface BomRow {
   status: 'NOT_ISSUED' | 'PARTIAL' | 'COMPLETE' | 'OVER_ISSUED';
   issuedByName: string | null; issuedToName: string | null; issuedAt: string | null;
   sizes: Array<{ id: string; sizeLabel: string; qty: number }>;
+  /** The lay plan's fabric: kept in step with Laying & Marking. */
+  fromLayPlan?: boolean;
   issues: Array<{ id: string; qty: number; unit: string; issuedAt: string; issuedByName: string | null; issuedToName: string | null }>;
 }
 
@@ -48,6 +50,25 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
   const { can } = useAuth();
   const [issuing, setIssuing] = useState<BomRow | null>(null);
   const [editing, setEditing] = useState(false);
+  const toast = useToast();
+
+  // Every change to the lay plan does this by itself; the button is for a
+  // plan entered before the bill followed it.
+  const fromLayPlan = useMutation({
+    mutationFn: () => api.materials.bomFromLayPlan(order.id),
+    onSuccess: (r) => {
+      const n = r.added + r.updated;
+      toast.success((
+        (n + r.removed === 0 && r.kept.length === 0 ? 'Nothing to change: the bill already matches the lay plan.' : '') +
+        (r.added > 0 ? ` ${r.added} fabric line${r.added === 1 ? '' : 's'} added.` : '') +
+        (r.updated > 0 ? ` ${r.updated} fabric line${r.updated === 1 ? '' : 's'} updated.` : '') +
+        (r.removed > 0 ? ` ${r.removed} fabric line${r.removed === 1 ? '' : 's'} the plan no longer uses removed.` : '') +
+        (r.kept.length > 0 ? ` Not changed: ${r.kept.join('; ')}.` : '')
+      ).trim());
+      for (const k of ['bom', 'order', 'costing', 'order-steps']) void qc.invalidateQueries({ queryKey: [k, order.id] });
+    },
+    onError: (e) => toast.error(e),
+  });
 
   // Only for the type suggestions; the screen works without it.
   const { data: lookups, isLoading: lookupsLoading } = useQuery({ queryKey: ['lookups'], queryFn: api.reference.lookups });
@@ -84,6 +105,7 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
       sizes: ((r.sizes as Array<{ sizeLabel: string; qty: number }>) ?? []).map((z) => ({
         sizeLabel: z.sizeLabel, qty: z.qty,
       })),
+      fromLayPlan: r.fromLayPlan === true,
     }));
 
     return (
@@ -134,7 +156,15 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
   return (
     <div className="space-y-4 p-5">
       {can('material:edit') && (
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <button
+            className="btn-secondary btn-sm"
+            disabled={fromLayPlan.isPending}
+            title="Put the fabric Laying & Marking needs, per fabric and colour, on this bill. Changes to the lay plan do this by themselves."
+            onClick={() => fromLayPlan.mutate()}
+          >
+            <Layers className="h-3.5 w-3.5" /> {fromLayPlan.isPending ? 'Bringing fabric…' : 'Fabric from the lay plan'}
+          </button>
           <button className="btn-secondary btn-sm" onClick={() => setEditing(true)}>
             <PackagePlus className="h-3.5 w-3.5" /> Add or edit items
           </button>
@@ -206,6 +236,11 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
                     <tr key={r.id} className={clsx(r.shortQty > 0 && 'bg-amber-50/30')}>
                       <td className="td font-medium text-ink-800">
                         {r.item}
+                        {r.fromLayPlan && (
+                          <span className="ml-1.5 chip bg-accent-50 text-accent-700 ring-accent-600/20" title="Metres from the Laying & Marking plan, kept in step with it">
+                            Lay plan
+                          </span>
+                        )}
                         {r.sizes.length > 0 && (
                           // The per-size breakdown, where there is one: the
                           // required figure above is its total.

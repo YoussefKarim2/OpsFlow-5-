@@ -39,10 +39,15 @@ function recorder() {
     findUnique: async () => null,
     create: async ({ data }: { data: Row }) => { keep(name, data); return { id: `${name}-${++seq}`, ...data }; },
     createMany: async ({ data }: { data: Row[] }) => { keep(name, data); return { count: data.length }; },
+    // The lay plan's fabric is synced onto the bill: it reads the lays just
+    // written and finds no fabric lines or sheet records to merge with.
+    findMany: async () => (name === 'marker' ? created.marker ?? [] : []),
+    aggregate: async () => ({ _max: { position_: null } }),
   });
   const known = [
     'client', 'factory', 'user', 'order', 'refColor', 'refSize', 'orderColor', 'orderSize',
     'stageQuantity', 'stockRecord', 'orderNote', 'bomItem', 'marker', 'costingRecord', 'externalOperation',
+    'fabricRecord',
   ];
   const tx = new Proxy({} as Record<string, unknown>, {
     get(_t, prop: string) {
@@ -147,6 +152,12 @@ describe('what the rest of the workbook carries', () => {
     assert.equal(marker.layers, 12);
     assert.equal(marker.nestPcs, 2);
     assert.equal(marker.totalLengthM, 30.5);
+    // The lay's fabric is on the bill of materials, in metres.
+    const fabric = created.bomItem!.find((b) => b.fromLayPlan === true)!;
+    assert.deepEqual(
+      [fabric.category, fabric.item, fabric.colorText, fabric.unit, fabric.requiredQty],
+      ['FABRIC', 'Rosetta', 'USA', 'm', 30.5],
+    );
   });
 
   test('the external order sheet becomes external operations, one per colour', async () => {

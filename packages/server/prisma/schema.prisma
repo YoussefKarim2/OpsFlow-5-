@@ -531,6 +531,10 @@ model BomItem {
   unitPriceUsd        Decimal?              @db.Decimal(14, 6)
   supplier            String?
   notes               String?
+  /// Written by the lay plan: the fabric Laying & Marking needs for one
+  /// fabric and colour. Kept in step with the plan whenever it changes, and
+  /// removed with it while nothing has been issued against it.
+  fromLayPlan         Boolean               @default(false)
   position_           Int                   @default(0) @map("sort_position")
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
