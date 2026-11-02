@@ -660,6 +660,7 @@ export async function getOrderDetail(orderId: string, today = new Date()): Promi
     externalWorkType: order.externalWorkType,
     fabric2: order.fabric2,
     fabric3: order.fabric3,
+    moreFabrics: order.moreFabrics ?? [],
     fabricDeliveryToSupplier: iso(order.fabricDeliveryToSupplier),
     supplierDeliveryDate: iso(order.supplierDeliveryDate),
     poDate: iso(order.poDate),

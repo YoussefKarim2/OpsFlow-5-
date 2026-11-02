@@ -8,6 +8,7 @@ export * from './change-catalogue.js';
 export * from './excel-date.js';
 export * from './bom-departments.js';
 export * from './line-plan.js';
+export * from './order-fabrics.js';
 export * from './colour-swatch.js';
 
 export * from './calc/num.js';

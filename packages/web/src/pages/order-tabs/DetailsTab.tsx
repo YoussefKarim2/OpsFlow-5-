@@ -6,8 +6,8 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Save, Pencil } from 'lucide-react';
-import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
+import { Save, Pencil, Plus, X } from 'lucide-react';
+import { fmtDate, orderFabrics, fabricFields, type OrderDetailDto } from '@opsflow/shared';
 import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Card, CardHeader, FreeText, ErrorNote, clsx } from '../../components/ui';
@@ -186,8 +186,8 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
               onChange={(v) => setForm({ ...form, cutPercentText: v })}
               display={`${percentText(order.cutPercentage)}%`}
               hint="Type the percentage: 5 means 5%. Drives the cut order." />
-            <Select label="Fabric" editing={editing} value={form.fabric} options={values.FABRIC?.map((v) => v.value) ?? []}
-              onChange={(v) => setForm({ ...form, fabric: v })} display={order.fabric} />
+            <FabricList editing={editing} value={form.fabrics} options={values.FABRIC?.map((v) => v.value) ?? []}
+              onChange={(v) => setForm({ ...form, fabrics: v })} display={orderFabrics(order)} />
             <Select label="Fit" editing={editing} value={form.fit} options={values.FIT?.map((v) => v.value) ?? []}
               onChange={(v) => setForm({ ...form, fit: v })} display={order.fit} />
             <Select label="Block pattern" editing={editing} value={form.blockPattern} options={values.BLOCK_PATTERN?.map((v) => v.value) ?? []}
@@ -264,7 +264,8 @@ function formFrom(order: OrderDetailDto) {
     styleNumber: order.styleNumber ?? '',
     fit: order.fit ?? '',
     blockPattern: order.blockPattern ?? '',
-    fabric: order.fabric ?? '',
+    // Every fabric the order uses; at least one box to type in.
+    fabrics: orderFabrics(order).length > 0 ? orderFabrics(order) : [''],
     shippingMethod: order.shippingMethod ?? '',
     // Blank stays blank. Defaulting to 0 saved a price of $0 on every order
     // whose details were saved before the price was known, and the costing then
@@ -295,7 +296,7 @@ type DetailsForm = ReturnType<typeof formFrom>;
 /** Fields sent under another name or in another form than the form holds them. */
 const CONVERTED = new Set<keyof DetailsForm>([
   'pricePerPieceUsd', 'samMinutes', 'cutPercentText', 'accessoryPercentText',
-  'productionSample', 'productionSampleNote', 'notes',
+  'productionSample', 'productionSampleNote', 'notes', 'fabrics',
 ]);
 const NOTE_KINDS = ['general', 'spread', 'cut', 'packing', 'external'] as const;
 
@@ -315,6 +316,10 @@ function changedFields(
     if (!CONVERTED.has(k) && after[k] !== before[k]) out[k] = after[k];
   }
   const number = (text: string) => (text === '' ? null : Number(text));
+  // The fabric list is stored as Fabric, Fabric 2, Fabric 3 and the rest:
+  // all four go together, so a removed fabric does not linger in a slot.
+  const fabricsKey = (l: readonly string[]) => JSON.stringify(orderFabrics({ moreFabrics: l }));
+  if (fabricsKey(after.fabrics) !== fabricsKey(before.fabrics)) Object.assign(out, fabricFields(after.fabrics));
   if (after.pricePerPieceUsd !== before.pricePerPieceUsd) out.pricePerPieceUsd = number(after.pricePerPieceUsd);
   if (after.samMinutes !== before.samMinutes) out.samMinutes = number(after.samMinutes);
   if (after.cutPercentText !== before.cutPercentText) {
@@ -357,6 +362,62 @@ function Edit({
       ) : (
         <p className="text-sm text-ink-800">{display || '—'}</p>
       )}
+    </div>
+  );
+}
+
+/**
+ * The order's fabrics: as many as it uses, each picked from the list or
+ * typed. The first is the main fabric — the one the lay plan and the header
+ * go by.
+ */
+function FabricList({
+  editing, value, options, onChange, display,
+}: {
+  editing: boolean; value: string[]; options: string[];
+  onChange: (v: string[]) => void; display: string[];
+}) {
+  if (!editing) {
+    return (
+      <div>
+        <p className="label">{display.length > 1 ? `Fabrics (${display.length})` : 'Fabric'}</p>
+        {display.length === 0 ? <p className="text-sm text-ink-800">—</p> : (
+          <ul className="space-y-0.5 text-sm text-ink-800">
+            {display.map((f, i) => (
+              <li key={`${f}-${i}`}>
+                {f}
+                {i === 0 && display.length > 1 && <span className="ml-1.5 text-2xs uppercase tracking-wide text-ink-400">main</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+  const set = (i: number, v: string) => onChange(value.map((f, n) => (n === i ? v : f)));
+  return (
+    <div>
+      <p className="label">Fabrics</p>
+      <div className="space-y-1.5">
+        {value.map((f, i) => (
+          <div key={i} className="flex items-center gap-1.5">
+            <ComboSelect allowCustom aria-label={`Fabric ${i + 1}`} value={f} onChange={(e) => set(i, e.target.value)} className="input flex-1">
+              <option value="">—</option>
+              {options.map((o) => <option key={o} value={o}>{o}</option>)}
+            </ComboSelect>
+            {value.length > 1 && (
+              <button type="button" className="btn-ghost btn-sm shrink-0 text-ink-500 hover:text-red-600" title="Remove this fabric"
+                aria-label={`Remove fabric ${i + 1}`} onClick={() => onChange(value.filter((_, n) => n !== i))}>
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        ))}
+        <button type="button" className="btn-ghost btn-sm text-accent-700" onClick={() => onChange([...value, ''])}>
+          <Plus className="h-3.5 w-3.5" /> Add a fabric
+        </button>
+      </div>
+      <p className="mt-1 text-xs text-ink-500">The first is the main fabric.</p>
     </div>
   );
 }

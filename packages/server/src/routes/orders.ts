@@ -132,6 +132,8 @@ const createSchema = z.object({
   // all five were already columns and none of them were writable.
   fabric2: shortText().nullable(),
   fabric3: shortText().nullable(),
+  /** Fabrics past the third. Order Details sends all four fields together. */
+  moreFabrics: z.array(z.string().trim().min(1).max(200)).max(30).optional(),
   fabricDeliveryToSupplier: z.string().optional().nullable(),
   supplierDeliveryDate: z.string().optional().nullable(),
   shippingMethod: shortText(),

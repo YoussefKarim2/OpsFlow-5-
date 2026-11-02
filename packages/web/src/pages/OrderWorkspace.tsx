@@ -16,7 +16,7 @@ import { useState } from 'react';
 import { useParams, useSearchParams, Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, LayoutGrid, ListOrdered, Trash2 } from 'lucide-react';
-import { fmtDate, type OrderStepState, type OrderTabKey } from '@opsflow/shared';
+import { fmtDate, orderFabrics, type OrderStepState, type OrderTabKey } from '@opsflow/shared';
 import { api, ApiError } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import {
@@ -229,7 +229,7 @@ export function OrderWorkspacePage() {
             <HeaderFact label="Style" value={order.styleNumber} />
             <HeaderFact label="Coordinator" value={order.coordinator?.name} />
             <HeaderFact label="Factory" value={order.externalFactory?.name ?? order.factory?.name} />
-            <HeaderFact label="Fabric" value={order.fabric} />
+            <HeaderFact label={orderFabrics(order).length > 1 ? 'Fabrics' : 'Fabric'} value={orderFabrics(order).join(', ') || null} />
             <HeaderFact
               label="Quantity"
               value={order.stockDeduction.customerOrderQty

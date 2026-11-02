@@ -103,6 +103,8 @@ export interface OrderDetailDto {
   /// External Order_Ex.Op shows three fabric slots and two supplier dates.
   fabric2: string | null;
   fabric3: string | null;
+  /** Fabrics past the third: Order Details takes as many as the order uses. */
+  moreFabrics: string[];
   fabricDeliveryToSupplier: string | null;
   supplierDeliveryDate: string | null;
   poDate: string | null;

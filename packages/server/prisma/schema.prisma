@@ -194,6 +194,9 @@ model Order {
   /// Secondary fabrics, from Order Details D21/D22.
   fabric2                  String?
   fabric3                  String?
+  /// Fabrics past the third, in the order typed on Order Details. With fabric,
+  /// fabric2 and fabric3 they are the order's fabric list.
+  moreFabrics              String[]              @default([])
   fabricDescription        String?
   shippingMethod           String?
   /// Unit selling price in USD. 7.25 for A302059B.
