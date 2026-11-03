@@ -83,6 +83,9 @@ export function PackingSizeGrid({
   const set = (i: number, patch: Partial<GridRow>) =>
     setRows((rs) => rs.map((r, n) => (n === i ? { ...r, ...patch } : r)));
 
+  /** The next number after everything on the list and everything in the grid. */
+  const nextNumber = () => firstNumber(prefix, [...existingNumbers, ...rows.map((r) => r.cartonNumber)]);
+
   const renumber = (p: string) => {
     setPrefix(p);
     const start = firstNumber(p, existingNumbers);
@@ -103,7 +106,9 @@ export function PackingSizeGrid({
           type="button"
           className="btn-ghost btn-sm"
           onClick={() => setRows([...rows, {
-            cartonNumber: numberFor(prefix, firstNumber(prefix, existingNumbers) + rows.length),
+            // After the highest number in the grid, not "first + rows": with a
+            // row removed that repeated the last row's number.
+            cartonNumber: numberFor(prefix, nextNumber()),
             orderColorId: colors[0]?.id ?? '', orderSizeId: sizes[0]?.id ?? '', qty: 0,
           }])}
         >
@@ -143,8 +148,8 @@ export function PackingSizeGrid({
                 </ComboSelect>
               </td>
               <td className="p-1">
-                <input className="input tnum border-transparent bg-transparent text-right" value={r.qty || ''}
-                  onChange={(e) => set(i, { qty: Number(e.target.value) || 0 })} />
+                <input className="input tnum border-transparent bg-transparent text-right" inputMode="numeric" value={r.qty || ''}
+                  onChange={(e) => { if (/^\d*$/.test(e.target.value)) set(i, { qty: Number(e.target.value) || 0 }); }} />
               </td>
               <td className="p-1 text-right">
                 <button type="button" className="btn-ghost btn-sm text-red-600"

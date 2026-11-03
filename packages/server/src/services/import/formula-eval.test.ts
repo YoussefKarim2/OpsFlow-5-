@@ -71,3 +71,22 @@ describe('the functions a packing sheet uses', () => {
     assert.deepEqual(calc2('SUBTOTAL(9,C1:C3)'), { value: 35 });
   });
 });
+
+describe('lookups', () => {
+  test('VLOOKUP, HLOOKUP, INDEX/MATCH, XLOOKUP, text functions, TRUE/FALSE', () => {
+    const wb = new ExcelJS.Workbook();
+    const ref = wb.addWorksheet('Ref');
+    ref.getRow(1).values = ['P', 'PURPLE/WH', 3]; ref.getRow(2).values = ['W', 'WHITE/WHITE', 5];
+    const ws = wb.addWorksheet('P');
+    ws.getCell('A1').value = 'w';
+    const f = (formula: string) => { ws.getCell('Z9').value = { formula } as ExcelJS.CellValue; return evaluateCell(ws, ws.getCell('Z9')); };
+    assert.deepEqual(f('VLOOKUP(A1,Ref!A1:C2,2,FALSE)'), { value: 'WHITE/WHITE' });
+    assert.deepEqual(f('INDEX(Ref!B1:B2,MATCH("P",Ref!A1:A2,0))'), { value: 'PURPLE/WH' });
+    assert.deepEqual(f('XLOOKUP("W",Ref!A1:A2,Ref!C1:C2)'), { value: 5 });
+    assert.deepEqual(f('XLOOKUP("Q",Ref!A1:A2,Ref!C1:C2,"none")'), { value: 'none' });
+    assert.deepEqual(f('UPPER(TRIM("  navy  blue "))'), { value: 'NAVY BLUE' });
+    assert.deepEqual(f('CONCATENATE(Ref!A1,"-",Ref!C1)'), { value: 'P-3' });
+    assert.deepEqual(f('IF(TRUE,1,2)'), { value: 1 });
+    assert.equal(f('VLOOKUP("Z",Ref!A1:C2,2,FALSE)'), undefined);
+  });
+});

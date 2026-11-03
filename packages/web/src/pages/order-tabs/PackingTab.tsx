@@ -22,7 +22,7 @@ interface PackingList {
   approvedByName: string | null; notes: string | null;
   cartons: Array<{
     id: string; cartonNumber: string; cartonSize: string | null; colorName: string | null;
-    lines?: Array<{ id: string; orderSizeId: string | null; sizeName: string | null; qty: number }>;
+    lines?: Array<{ id: string; orderSizeId: string | null; sizeName: string | null; sizeLabel?: string | null; qty: number }>;
     sizeName: string | null; qty: number; grossWeightKg: number | null; netWeightKg: number | null;
     orderSizeId?: string | null;
   }>;
@@ -59,7 +59,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
   const [removingCarton, setRemovingCarton] = useState<string | null>(null);
   const toast = useToast();
   const failed = (fallback: string) => (e: unknown) => toast.error(e instanceof ApiError ? e.message : fallback);
-  const [editingCarton, setEditingCarton] = useState<{ id: string; number: string; lines: Array<{ orderSizeId: string | null; qty: number }> } | null>(null);
+  const [editingCarton, setEditingCarton] = useState<{ id: string; number: string; lines: Array<{ orderSizeId: string | null; sizeLabel?: string | null; qty: number }> } | null>(null);
   const [shipping, setShipping] = useState(false);
   /** The packing file whose layout is open. */
   const [layoutOf, setLayoutOf] = useState<{ id: string; fileName: string } | null>(null);
@@ -82,7 +82,18 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
     onError: (e) => setShipmentError(e instanceof ApiError ? e.message : 'Could not update the shipment.'),
   });
 
-  const createList = useMutation({ mutationFn: () => api.packing.createList(order.id), onSuccess: invalidate });
+  const createList = useMutation({
+    mutationFn: () => api.packing.createList(order.id),
+    onSuccess: invalidate,
+    onError: failed('Could not create the packing list.'),
+  });
+  // An empty list made by mistake: removed, rather than left holding the
+  // order's packing as "not approved".
+  const removeList = useMutation({
+    mutationFn: (id: string) => api.packing.removeList(id),
+    onSuccess: () => { toast.success('Empty packing list removed'); invalidate(); },
+    onError: (e) => { failed('Could not remove the packing list.')(e); invalidate(); },
+  });
   // A refusal — already approved, nothing to approve — is said, not swallowed;
   // either way the list is reloaded, since a 409 means it changed underneath.
   const approve = useMutation({
@@ -93,7 +104,8 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
   const reopen = useMutation({
     mutationFn: (id: string) => api.packing.reopen(id),
     onSuccess: () => { toast.success('Packing list reopened for changes'); invalidate(); },
-    onError: failed('Could not reopen the packing list.'),
+    // A refusal (an issued invoice uses it) may mean it changed: reload it.
+    onError: (e) => { failed('Could not reopen the packing list.')(e); invalidate(); },
   });
   const removeCarton = useMutation({
     mutationFn: (id: string) => api.packing.removeCarton(id),
@@ -129,8 +141,8 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
           subtitle="The coordinator reviews and approves before the shipment can be booked"
           action={
             can('packing:write') && (
-              <button onClick={() => createList.mutate()} className="btn-secondary btn-sm">
-                <Plus className="h-3.5 w-3.5" /> New list
+              <button onClick={() => createList.mutate()} disabled={createList.isPending} className="btn-secondary btn-sm">
+                <Plus className="h-3.5 w-3.5" /> {createList.isPending ? 'Creating…' : 'New list'}
               </button>
             )
           }
@@ -154,7 +166,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
                     <span className="chip bg-amber-50 text-amber-800 ring-amber-600/20">Awaiting review</span>
                   )}
                 </div>
-                <div className="flex items-center gap-4 text-xs text-ink-600">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-ink-600">
                   <span><strong className="tnum">{l.totals.cartonCount}</strong> cartons</span>
                   <span><strong className="tnum">{fmtNumber(l.totals.totalQty)}</strong> pcs</span>
                   <span>GW <strong className="tnum">{l.totals.grossWeightKg.toFixed(1)}</strong> kg</span>
@@ -179,6 +191,16 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
                       {approve.isPending && approve.variables === l.id ? 'Approving…' : 'Approve'}
                     </button>
                   )}
+                  {can('packing:write') && !l.approved && l.cartons.length === 0 && (
+                    <button
+                      onClick={() => removeList.mutate(l.id)}
+                      disabled={removeList.isPending}
+                      className="btn-ghost btn-sm text-red-600"
+                      title="Remove this empty packing list"
+                    >
+                      <Trash2 className="h-3 w-3" /> Remove
+                    </button>
+                  )}
                   {/* Approval locks the cartons; reopening is how a wrong one
                       is put right. Refused while an issued invoice uses it. */}
                   {can('packing:approve') && l.approved && (
@@ -195,7 +217,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
               </div>
 
               {l.cartons.length > 0 && (
-                <table className="w-full">
+                <div className="overflow-x-auto"><table className="w-full">
                   <thead className="border-b border-ink-200">
                     <tr>
                       <th className="th">C/No</th>
@@ -249,7 +271,9 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
                                   // its own size and quantity, not the first size
                                   // at zero, which saved would have unpacked it.
                                   lines: c.lines && c.lines.length > 0
-                                    ? c.lines.map((ln) => ({ orderSizeId: ln.orderSizeId, qty: ln.qty }))
+                                    // A size typed by name (not one of the order's) is kept:
+                                    // dropped here, saving took its pieces off the carton.
+                                    ? c.lines.map((ln) => ({ orderSizeId: ln.orderSizeId, sizeLabel: ln.orderSizeId ? null : (ln.sizeLabel ?? ln.sizeName ?? null), qty: ln.qty }))
                                     : c.orderSizeId ? [{ orderSizeId: c.orderSizeId, qty: c.qty }] : [],
                                 })}
                               >
@@ -268,7 +292,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </table></div>
               )}
             </div>
           ))
@@ -292,7 +316,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
         {shipmentList.length === 0 ? (
           <EmptyState title="Nothing shipped yet" />
         ) : (
-          <table className="w-full">
+          <div className="overflow-x-auto"><table className="w-full">
             <thead className="border-b border-ink-200 bg-ink-50">
               <tr>
                 <th className="th">Status</th>
@@ -338,7 +362,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
                 </tr>
               ))}
             </tbody>
-          </table>
+          </table></div>
         )}
       </Card>
 
@@ -361,6 +385,9 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
         onDone={() => { setAddingCarton(null); invalidate(); }}
       />
       <ShipmentModal
+        // A fresh form each time it opens: kept mounted, it reopened with the
+        // last consignment's figures, one click from recording it twice.
+        key={shipping ? 'open' : 'closed'}
         open={shipping} order={order} producedQty={order.producedQty}
         alreadyShippedQty={shipmentList.reduce((a, s) => a + s.qty, 0)}
         onClose={() => setShipping(false)}
@@ -384,6 +411,8 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
         }}
       />
       <PackingFileLayoutModal
+        // Each file opens on its own Layout view, not on whichever tab the last one was left on.
+        key={layoutOf?.id ?? 'none'}
         orderId={order.id}
         attachmentId={layoutOf?.id ?? null}
         fileName={layoutOf?.fileName}
@@ -541,7 +570,8 @@ function ShipmentModal({
           <button onClick={onClose} className="btn-secondary">Cancel</button>
           <button
             onClick={() => save.mutate()}
-            disabled={save.isPending || (exceedsProduced && (!canOverride || !reason.trim()))}
+            disabled={save.isPending || (exceedsProduced && (!canOverride || !reason.trim())) || (hasLeft && !(Number(form.qty) > 0))}
+            title={hasLeft && !(Number(form.qty) > 0) ? 'A consignment that has gone needs its quantity' : undefined}
             className="btn-primary"
           >
             {save.isPending ? 'Recording…' : 'Record'}
@@ -611,7 +641,7 @@ function SizeGridModal({
   listId: string | null; existingNumbers: readonly string[];
   order: OrderDetailDto; onClose: () => void; onDone: () => void;
 }) {
-  const { data: matrix } = useQuery({
+  const { data: matrix, isLoading: gridLoading } = useQuery({
     queryKey: ['matrix', order.id],
     queryFn: () => api.orders.matrix(order.id),
     enabled: !!listId,
@@ -624,7 +654,9 @@ function SizeGridModal({
 
   return (
     <Modal open onClose={onClose} title="Pack several sizes">
-      {colors.length === 0 || sizes.length === 0 ? (
+      {gridLoading ? (
+        <p className="text-sm text-ink-500">Loading the order's colours and sizes…</p>
+      ) : colors.length === 0 || sizes.length === 0 ? (
         <p className="text-sm text-ink-600">
           This order has no colours or sizes yet, so there is nothing to pack against.
         </p>
@@ -646,10 +678,10 @@ function SizeGridModal({
 function CartonSizesModal({
   carton, order, onClose, onDone,
 }: {
-  carton: { id: string; number: string; lines: Array<{ orderSizeId: string | null; qty: number }> } | null;
+  carton: { id: string; number: string; lines: Array<{ orderSizeId: string | null; sizeLabel?: string | null; qty: number }> } | null;
   order: OrderDetailDto; onClose: () => void; onDone: () => void;
 }) {
-  const { data: matrix } = useQuery({
+  const { data: matrix, isLoading: matrixLoading } = useQuery({
     queryKey: ['matrix', order.id],
     queryFn: () => api.orders.matrix(order.id),
     enabled: !!carton,
@@ -658,7 +690,9 @@ function CartonSizesModal({
   const sizes = ((matrix?.sizes ?? []) as Array<{ id: string; name: string }>);
   return (
     <Modal open onClose={onClose} title={`Sizes in carton ${carton.number}`}>
-      {sizes.length === 0 ? (
+      {matrixLoading ? (
+        <p className="text-sm text-ink-500">Loading the order's sizes…</p>
+      ) : sizes.length === 0 ? (
         <p className="text-sm text-ink-600">This order has no sizes yet.</p>
       ) : (
         <CartonSizes

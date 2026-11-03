@@ -14,7 +14,9 @@
  * optional sheet name, quoted or not, and $ anchors), + - * / ^, unary minus,
  * parentheses, & between values, comparisons (= <> < > <= >=), and SUM,
  * ROUND, ROUNDUP, ROUNDDOWN, MIN, MAX, AVERAGE, ABS, INT, COUNT, IF, IFERROR,
- * SUMIF, COUNTIF and SUBTOTAL — the ones a factory packing sheet uses.
+ * SUMIF, COUNTIF and SUBTOTAL — the ones a factory packing sheet uses — and
+ * the lookups that fill a colour or a size in from another sheet: VLOOKUP,
+ * HLOOKUP, INDEX, MATCH, XLOOKUP, plus CONCAT(ENATE), TRIM, UPPER, LOWER.
  */
 
 import type ExcelJS from 'exceljs';
@@ -231,6 +233,8 @@ class Parser {
       return { ws, r0: Math.min(r0, r1), c0: Math.min(c0, c1), r1: Math.max(r0, r1), c1: Math.max(c0, c1) };
     }
     if (ws !== this.ws) throw new Unsupported('sheet without reference');
+    const bool = /^(TRUE|FALSE)\b(?!\s*\()/i.exec(this.src.slice(this.i));
+    if (bool && ws === this.ws) { this.i += bool[0].length; return /^true$/i.test(bool[1]!) ? 1 : 0; }
     const fn = this.src.slice(this.i).match(/^([A-Za-z][A-Za-z0-9.]*)\s*\(/);
     if (fn && /^IFERROR$/i.test(fn[1]!)) {
       // Lazy: the first argument may be the very error IFERROR exists to catch.
@@ -322,6 +326,53 @@ class Parser {
       case 'ROUNDUP': return roundTo(one(0), args.length > 1 ? one(1) : 0, 'up');
       case 'ROUNDDOWN': return roundTo(one(0), args.length > 1 ? one(1) : 0, 'down');
       case 'ABS': return Math.abs(one(0));
+      case 'VLOOKUP': case 'HLOOKUP': {
+        const key = this.scalar(args[0] ?? null);
+        const table = args[1];
+        if (table == null || typeof table !== 'object') throw new Unsupported(name);
+        const index = Math.trunc(one(2));
+        const exact = args.length > 3 ? !truthy(this.scalar(args[3] ?? null)) : false;
+        const vertical = name === 'VLOOKUP';
+        const keys = vertical
+          ? this.cells({ ...table, c1: table.c0 })
+          : this.cells({ ...table, r1: table.r0 });
+        const at = lookupIndex(keys, key, exact ? 0 : 1);
+        if (at < 0) throw new Unsupported('#N/A');
+        return vertical
+          ? cellValue(table.ws, table.r0 + at, table.c0 + index - 1, this.depth, this.seen)
+          : cellValue(table.ws, table.r0 + index - 1, table.c0 + at, this.depth, this.seen);
+      }
+      case 'MATCH': {
+        const at = lookupIndex(this.cells(args[1] ?? null), this.scalar(args[0] ?? null), args.length > 2 ? one(2) : 1);
+        if (at < 0) throw new Unsupported('#N/A');
+        return at + 1;
+      }
+      case 'INDEX': {
+        const table = args[0];
+        if (table == null || typeof table !== 'object') return this.scalar(table ?? null);
+        const row = Math.trunc(one(1));
+        const col = args.length > 2 ? Math.trunc(one(2)) : 1;
+        // A single row or column is indexed along its length.
+        const single = table.r0 === table.r1 && args.length <= 2;
+        const r = single ? table.r0 : table.r0 + row - 1;
+        const c = single ? table.c0 + row - 1 : table.c0 + col - 1;
+        if (r > table.r1 || c > table.c1 || r < table.r0 || c < table.c0) throw new Unsupported('#REF!');
+        return cellValue(table.ws, r, c, this.depth, this.seen);
+      }
+      case 'XLOOKUP': {
+        const at = lookupIndex(this.cells(args[1] ?? null), this.scalar(args[0] ?? null), 0);
+        if (at < 0) {
+          if (args.length > 3) return this.scalar(args[3] ?? null);
+          throw new Unsupported('#N/A');
+        }
+        const back = this.cells(args[2] ?? null);
+        return back[at] ?? null;
+      }
+      case 'CONCAT': case 'CONCATENATE':
+        return args.map((a) => (a != null && typeof a === 'object' ? this.cells(a).map(toText).join('') : toText(a))).join('');
+      case 'TRIM': return toText(this.scalar(args[0] ?? null)).replace(/\s+/g, ' ').trim();
+      case 'UPPER': return toText(this.scalar(args[0] ?? null)).toUpperCase();
+      case 'LOWER': return toText(this.scalar(args[0] ?? null)).toLowerCase();
       case 'IF': {
         const cond = this.scalar(args[0] ?? null);
         const truthy = typeof cond === 'number' ? cond !== 0 : typeof cond === 'string' ? /^true$/i.test(cond) : false;
@@ -377,4 +428,21 @@ function matcher(criterion: Value): (v: Value) => boolean {
   const raw = m ? m[2]! : text;
   const n = raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : null;
   return (v) => compareValues(v ?? (n != null ? null : ''), n ?? raw, op);
+}
+
+const truthy = (v: Value): boolean => (typeof v === 'number' ? v !== 0 : typeof v === 'string' ? /^true$/i.test(v) : false);
+
+/**
+ * Where `key` sits among `keys`: exact (match type 0), or Excel's approximate
+ * "largest value not greater than" for a sorted list (1). -1 when absent.
+ */
+function lookupIndex(keys: readonly Value[], key: Value, matchType: number): number {
+  const same = (v: Value) => (typeof key === 'number' && typeof v === 'number' ? v === key
+    : toText(v).trim().toLowerCase() === toText(key).trim().toLowerCase());
+  if (matchType === 0) return keys.findIndex(same);
+  const exact = keys.findIndex(same);
+  if (exact >= 0 || typeof key !== 'number') return exact;
+  let best = -1;
+  keys.forEach((v, i) => { if (typeof v === 'number' && v <= key) best = i; });
+  return best;
 }

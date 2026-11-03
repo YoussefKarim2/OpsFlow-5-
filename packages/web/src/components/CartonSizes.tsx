@@ -21,6 +21,8 @@ import { ComboSelect } from './ComboSelect';
 
 export interface CartonLineRow {
   orderSizeId: string | null;
+  /** A size typed by name rather than one of the order's; kept as it is. */
+  sizeLabel?: string | null;
   qty: number;
 }
 
@@ -41,7 +43,9 @@ export function CartonSizes({
   const save = useMutation({
     mutationFn: () => api.packing.saveCartonLines(
       cartonId,
-      rows.filter((r) => r.qty > 0 && r.orderSizeId).map((r) => ({ orderSizeId: r.orderSizeId, qty: r.qty })),
+      rows.filter((r) => r.qty > 0 && (r.orderSizeId || r.sizeLabel)).map((r) => (
+        r.orderSizeId ? { orderSizeId: r.orderSizeId, qty: r.qty } : { sizeLabel: r.sizeLabel, qty: r.qty }
+      )),
     ),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['packing', orderId] });
@@ -55,7 +59,7 @@ export function CartonSizes({
   const set = (i: number, patch: Partial<CartonLineRow>) =>
     setRows((rs) => rs.map((r, n) => (n === i ? { ...r, ...patch } : r)));
 
-  const usable = rows.filter((r) => r.qty > 0 && r.orderSizeId);
+  const usable = rows.filter((r) => r.qty > 0 && (r.orderSizeId || r.sizeLabel));
   const total = usable.reduce((a, r) => a + r.qty, 0);
 
   // The same size twice in one carton is two rows that should be one, and the
@@ -71,6 +75,9 @@ export function CartonSizes({
         {rows.map((r, i) => (
           <div key={i} className="flex items-center gap-2">
             <label className="text-xs text-ink-500 w-10">Size</label>
+            {r.sizeLabel && !r.orderSizeId ? (
+              <span className="input w-40 bg-ink-50 text-ink-700" title="A size typed on the packing list, not one of the order's">{r.sizeLabel}</span>
+            ) : (
             <ComboSelect
               className={clsx('input w-40', r.orderSizeId && duplicated.has(r.orderSizeId) && 'ring-1 ring-amber-400')}
               value={r.orderSizeId ?? ''}
@@ -79,12 +86,15 @@ export function CartonSizes({
               <option value="">—</option>
               {sizes.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
             </ComboSelect>
+            )}
 
             <label className="ml-2 text-xs text-ink-500">Quantity</label>
             <input
               className="input tnum w-28 text-right"
+              inputMode="numeric"
               value={r.qty || ''}
-              onChange={(e) => set(i, { qty: Number(e.target.value) || 0 })}
+              // Whole pieces only: "1.5" was accepted here and refused by the server.
+              onChange={(e) => { if (/^\d*$/.test(e.target.value)) set(i, { qty: Number(e.target.value) || 0 }); }}
             />
 
             <button

@@ -24,7 +24,7 @@ import {
   type TaskDto, type BomItemInput, type CostLineInput, type ProductionEntry, type Alert,
   type RequirementInput, type MaterialPosition, type ConsumptionVariance,
   type Blocker, type GateContext,
-  linePlanOf,
+  linePlanOf, packingListsApproved,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { factoryDefaults } from './factory-defaults.js';
@@ -401,7 +401,6 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
   const openQualityFailure = order.qualityAudits.some(
     (a) => a.result === 'FAIL' && !a.correctiveActionClosed,
   );
-  const latestPackingList = order.packingLists.at(-1) ?? null;
   const shipmentStatus = furthestShipmentStatus(order.shipments);
   // The verdict that stands is the most recent decided inspection.
   const latestDecidedAudit = order.qualityAudits
@@ -424,7 +423,7 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     shippedQty,
     qualityPassedQty: totals[QtyLedger.OUT_LINE] ?? 0,
     qualityAuditPassed: !openQualityFailure && latestDecidedAudit?.result === 'PASS',
-    packingApproved: latestPackingList?.approved ?? false,
+    packingApproved: packingListsApproved(order.packingLists),
     materialsFullyIssued: bom?.fullyIssued ?? false,
     isBehindSchedule: production.isBehindSchedule,
     anyTaskStarted: order.tasks.some((t) => t.status !== 'NOT_STARTED'),
@@ -501,7 +500,7 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     // closed is not a pass, and packing waits for the re-inspection.
     qualityPassed: !openQualityFailure && latestDecidedAudit?.result === 'PASS'
       && ['FINAL_AUDIT', 'BEFORE_PACKING', 'IN_PACKING'].includes(latestDecidedAudit.auditType),
-    packingApproved: latestPackingList?.approved ?? false,
+    packingApproved: packingListsApproved(order.packingLists),
     hasCartons: order.packingLists.some((p) => p.cartons.length > 0),
     completedStages,
   };

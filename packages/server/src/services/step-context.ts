@@ -12,6 +12,7 @@ import type { Prisma } from '@prisma/client';
 import {
   StageKey, StageStatus, STEP_BY_KEY, QtyLedger, sum, daysBetween, resolveShippedQty,
   type StepContext, type Blocker,
+  packingListsApproved,
 } from '@opsflow/shared';
 /** The counts `loadStepExtras` in step-service.ts fetches for the derivation. */
 export interface StepExtras {
@@ -117,7 +118,6 @@ export function buildStepContext(
   );
   const packedQty = sum(order.packingLists.flatMap((p) => p.cartons.map((c) => c.qty)));
   const cartonCount = sum(order.packingLists.map((p) => p.cartons.length));
-  const latestPacking = order.packingLists[order.packingLists.length - 1];
 
   const decided = order.qualityAudits.filter((a) => a.result !== 'PENDING');
   // The verdict that stands is the most recent one. A failed audit followed by
@@ -210,7 +210,7 @@ export function buildStepContext(
 
     cartonCount,
     packedQty,
-    packingApproved: latestPacking?.approved ?? false,
+    packingApproved: packingListsApproved(order.packingLists),
 
     hasCosting: order.costing != null,
     costLineCount: order.costing?.lines.length ?? 0,

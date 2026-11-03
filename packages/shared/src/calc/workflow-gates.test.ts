@@ -120,10 +120,18 @@ describe('other gated stages', () => {
     assert.match(r.blockers[0]!.detail, /corrective action/i);
   });
 
-  test('packing is blocked until an inspection has been recorded', () => {
+  test('packing is warned, not blocked, before the final inspection — the inspection comes after it', () => {
     const r = evaluateStageGates(StageKey.PACKING, healthy({ qualityInspected: false }), 'Packing');
+    assert.equal(r.canStart, true);
+    assert.match(r.warnings[0]!.detail, /no final inspection/i);
+  });
+
+  test('shipping is blocked until a final inspection has passed', () => {
+    const r = evaluateStageGates(StageKey.INVOICE, healthy({ qualityInspected: false }), 'Invoice');
     assert.equal(r.canStart, false);
-    assert.match(r.blockers[0]!.detail, /no final inspection/i);
+    assert.ok(r.blockers.some((b) => /no final inspection/i.test(b.detail)));
+    const failed = evaluateStageGates(StageKey.INVOICE, healthy({ qualityInspected: true, qualityPassed: false }), 'Invoice');
+    assert.equal(failed.canStart, false);
   });
 
   test('shipping is blocked until the packing list is approved', () => {
@@ -178,11 +186,11 @@ describe('whole-order evaluation', () => {
   test('each blocker carries the stage it belongs to, for grouping', () => {
     const r = evaluateAllGates(
       healthy({ hasOpenQualityFailure: true, qualityInspected: false }),
-      { [StageKey.PRODUCTION_FOLLOW_UP]: 'Production', [StageKey.PACKING]: 'Packing' },
+      { [StageKey.PRODUCTION_FOLLOW_UP]: 'Production', [StageKey.INVOICE]: 'Invoice' },
     );
     const stages = new Set(r.blockers.map((b) => b.stageKey));
     assert.ok(stages.has(StageKey.PRODUCTION_FOLLOW_UP));
-    assert.ok(stages.has(StageKey.PACKING));
+    assert.ok(stages.has(StageKey.INVOICE));
     assert.equal(
       r.blockers.find((b) => b.stageKey === StageKey.PRODUCTION_FOLLOW_UP)!.stageLabel,
       'Production',

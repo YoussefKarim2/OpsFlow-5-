@@ -293,3 +293,33 @@ describe('mixed cartons', () => {
     assert.ok(!r.issues.some((i) => i.level === 'WARNING'), JSON.stringify(r.issues));
   });
 });
+
+describe('colours that are formulas', () => {
+  const sheet = (colourFormula: (row: number) => string) => xlsx((wb) => {
+    const ref = wb.addWorksheet('Colours');
+    ref.getRow(1).values = ['P', 'PURPLE/WH']; ref.getRow(2).values = ['W', 'WHITE/WHITE']; ref.getRow(3).values = ['H', 'HUNTER/WHT'];
+    const ws = wb.addWorksheet('Packing_Coordinator');
+    ws.getRow(5).values = [null, null, 'C/No', 'Size', 'Qty', 'Color', 'Code'];
+    const rows: Array<[unknown, string, number, string]> = [
+      [1, 'YXS', 100, 'H'], [null, 'YS', 40, 'P'], [2, 'YM', 30, 'W'], [null, 'YL', 20, 'H'],
+    ];
+    rows.forEach(([no, size, qty, code], i) => {
+      const r = 6 + i;
+      ws.getRow(r).values = [null, null, no, size, qty, { formula: colourFormula(r) }, code] as ExcelJS.CellValue[];
+    });
+  });
+
+  test('a colour looked up from another sheet, never calculated, is worked out', async () => {
+    const r = await readPackingDocument(await sheet((row) => `VLOOKUP(G${row},Colours!A1:B3,2,FALSE)`), 'pl.xlsx');
+    assert.deepEqual(r.totals.byColour, { 'HUNTER/WHT': 120, 'PURPLE/WH': 40, 'WHITE/WHITE': 30 });
+    assert.equal(r.totals.cartons, 2);
+    assert.ok(!r.issues.some((i) => /no saved result/.test(i.message)), JSON.stringify(r.issues));
+  });
+
+  test('a colour formula that cannot be worked out is left without a colour, not given the one above', async () => {
+    const r = await readPackingDocument(await sheet((row) => `INDIRECT("Colours!B"&ROW())&G${row}`), 'pl.xlsx');
+    assert.equal(r.totals.pieces, 190);
+    assert.equal(r.totals.byColour['—'], 190);
+    assert.ok(r.issues.some((i) => /colour is a formula Excel never calculated/.test(i.message)), JSON.stringify(r.issues));
+  });
+});

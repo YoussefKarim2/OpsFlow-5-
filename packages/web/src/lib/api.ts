@@ -1154,6 +1154,8 @@ export const api = {
     approve: (listId: string) => post<{ ok: true }>(`/packing/list/${listId}/approve`),
     /** Clear an approval so the cartons can be corrected. Refused while an issued invoice uses the list. */
     reopen: (listId: string) => post<{ ok: true }>(`/packing/list/${listId}/reopen`),
+    /** Remove a packing list with no cartons on it. */
+    removeList: (listId: string) => del(`/packing/list/${listId}`),
     /** Take a wrong carton out; its pieces come off the PACKED ledger with it. */
     removeCarton: (cartonId: string) => del(`/packing/cartons/${cartonId}`),
     shipments: (orderId: string) => get<{ data: ShipmentDto[] }>(`/packing/${orderId}/shipments`),

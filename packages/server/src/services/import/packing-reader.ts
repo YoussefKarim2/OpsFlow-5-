@@ -125,6 +125,8 @@ interface Grid {
   /** Spans of merged cells, keyed "row:col" (0-based) of the top-left cell. */
   spans: Map<string, number>;
   uncached: number;
+  /** Cells holding a formula that could not be worked out, keyed "row:col" (0-based). */
+  unknown?: Set<string>;
 }
 
 const MAX_ROWS = 2000;
@@ -152,6 +154,7 @@ function excelValue(v: ExcelJS.CellValue): Cell {
 function sheetToGrid(ws: ExcelJS.Worksheet): Grid {
   const rows: Cell[][] = [];
   const spans = new Map<string, number>();
+  const unknown = new Set<string>();
   let uncached = 0;
   const lastRow = Math.min(ws.rowCount, MAX_ROWS);
   const lastCol = Math.min(ws.columnCount, MAX_COLS);
@@ -165,7 +168,7 @@ function sheetToGrid(ws: ExcelJS.Worksheet): Grid {
         // Saved without its result: worked out here when it is plain
         // arithmetic, and only counted as unreadable when it is not.
         const e = evaluateCell(ws, cell);
-        if (!e) { uncached++; out.push(null); continue; }
+        if (!e) { uncached++; unknown.add(`${r - 1}:${c - 1}`); out.push(null); continue; }
         out.push(typeof e.value === 'string' ? (e.value.trim() || null) : e.value);
         continue;
       }
@@ -180,7 +183,7 @@ function sheetToGrid(ws: ExcelJS.Worksheet): Grid {
     const c0 = colIndex(m[1]!); const c1 = colIndex(m[3]!);
     spans.set(`${Number(m[2]) - 1}:${c0 - 1}`, c1 - c0 + 1);
   }
-  return { name: ws.name, rows, spans, uncached };
+  return { name: ws.name, rows, spans, uncached, unknown };
 }
 
 function colIndex(letters: string): number {
@@ -409,6 +412,8 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
   let lastStyle: string | null = null;
   let unreadable = 0;
   const fractional: number[] = [];
+  /** Rows whose colour is a formula that could not be worked out, and their pieces. */
+  const noColour: Array<{ row: number; pieces: number }> = [];
   /** Rows read as a whole run and split per carton — undone below if the TOTAL row says otherwise. */
   const split: Array<{ index: number; count: number }> = [];
 
@@ -459,6 +464,11 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
     if (!Number.isInteger(count)) fractional.push(r + 1);
 
     const colourCell = text(at(cColour)) || null;
+    // A colour that is a formula nobody calculated is unknown — not the colour
+    // of the row above, which is what a blank colour cell means. Inherited,
+    // the PURPLE and WHITE rows of a packing list were counted as HUNTER,
+    // LIME and ORANGE.
+    const colourUnknown = !colourCell && cColour != null && (grid.unknown?.has(`${r}:${cColour}`) ?? false);
     const styleCell = text(at(cStyle)) || null;
 
     // Pieces.
@@ -489,9 +499,10 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
       // Each row of a mixed carton names its own colour. Folded into the
       // carton's first colour, a HUNTER/WHT carton holding LIME/BLACK too
       // counted every piece as HUNTER/WHT.
-      if (colourCell && prev.colour && colourCell.trim().toUpperCase() !== prev.colour.trim().toUpperCase()) {
+      if (colourUnknown || (colourCell && (prev.colour ?? '').trim().toUpperCase() !== colourCell.trim().toUpperCase())) {
+        if (colourUnknown) noColour.push({ row: r + 1, pieces: perCarton * prev.count });
         cartons.push({
-          number: prev.number, count: prev.count, colour: colourCell, style: styleCell ?? prev.style,
+          number: prev.number, count: prev.count, colour: colourUnknown ? null : colourCell, style: styleCell ?? prev.style,
           bySize: { ...bySize }, perCarton, totalPieces: perCarton * prev.count,
           grossKg: null, netKg: null, measurement: null, sheetRow: r + 1, lastRow: r + 1, continues: true,
         });
@@ -516,7 +527,8 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
       issues.push({ level: 'WARNING', message: `Row ${r + 1}: carton ${numberText} has no pieces in it.` });
     }
 
-    const colour = colourCell ?? lastColour;
+    const colour = colourUnknown ? null : colourCell ?? lastColour;
+    if (colourUnknown) noColour.push({ row: r + 1, pieces: perCarton * count });
     const style = styleCell ?? lastStyle;
     if (colourCell) lastColour = colourCell;
     if (styleCell) lastStyle = styleCell;
@@ -554,6 +566,14 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
     if (printedTotal != null && cTotal != null && shape !== 'ROW_PER_SIZE' && Math.abs(printedTotal - perCarton * count) > 0.001 && Math.abs(printedTotal - perCarton) > 0.001) {
       issues.push({ level: 'WARNING', message: `Row ${r + 1}: the row's total says ${printedTotal.toLocaleString('en-US')} pcs, but ${count} carton${count === 1 ? '' : 's'} × ${perCarton.toLocaleString('en-US')} pcs is ${(perCarton * count).toLocaleString('en-US')}.` });
     }
+  }
+  if (noColour.length > 0) {
+    const pcs = noColour.reduce((a, n) => a + n.pieces, 0);
+    issues.push({
+      level: 'WARNING',
+      message: `Row${noColour.length === 1 ? '' : 's'} ${noColour.slice(0, 8).map((n) => n.row).join(', ')}${noColour.length > 8 ? '…' : ''}: the colour is a formula Excel never calculated, `
+        + `so ${pcs.toLocaleString('en-US')} pcs are shown with no colour rather than under the colour above. Open the file in Excel, save it, and attach it again.`,
+    });
   }
   if (fractional.length > 0) {
     issues.push({

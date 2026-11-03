@@ -52,8 +52,13 @@ async function assertCartonNumbersFree(listId: string, incoming: readonly string
   const existing = await prisma.carton.findMany({ where: { packingListId: listId }, select: { cartonNumber: true } });
   const repeated = repeatedCartonNumber(existing.map((c) => c.cartonNumber), incoming);
   if (repeated) {
+    // Said for what it is: a number used twice in this entry is not "already
+    // on this packing list".
+    const onList = existing.some((c) => c.cartonNumber.trim().toUpperCase() === repeated.toUpperCase());
     throw new ConflictError(
-      `Carton ${repeated} is already on this packing list. Give the new carton a different number.`,
+      onList
+        ? `Carton ${repeated} is already on this packing list. Give the new carton a different number.`
+        : `Carton ${repeated} appears twice in this entry. Give each carton its own number.`,
       { cartonNumber: repeated },
     );
   }
@@ -295,6 +300,18 @@ packingRouter.put('/cartons/:cartonId/lines', requirePermission('packing:write')
   }
 
   await prisma.$transaction(async (tx) => {
+    // Two saves of one carton at once each worked out their change from the
+    // same "before" and both added it to the packed ledger. The carton is
+    // locked, and its lines and its list's approval read again under the lock.
+    await tx.$queryRaw`SELECT id FROM cartons WHERE id = ${carton.id} FOR UPDATE`;
+    const fresh = await tx.carton.findUniqueOrThrow({
+      where: { id: carton.id },
+      include: { lines: true, packingList: { select: { approved: true } } },
+    });
+    if (fresh.packingList.approved) {
+      throw new ValidationError('This packing list has been approved. Reopen it before changing a carton.');
+    }
+    const beforeNow = cartonHolding(fresh);
     await tx.cartonLine.deleteMany({ where: { cartonId: carton.id } });
     if (rows.length > 0) {
       await tx.cartonLine.createMany({
@@ -313,7 +330,7 @@ packingRouter.put('/cartons/:cartonId/lines', requirePermission('packing:write')
       // The arithmetic lives in `carton-ledger.ts` and is tested by value there;
       // getting it wrong here means either counting pieces twice or erasing
       // quantities packed into other cartons of the same size.
-      for (const [sizeId, delta] of ledgerDeltas(before, after)) {
+      for (const [sizeId, delta] of ledgerDeltas(beforeNow, after)) {
         await tx.stageQuantity.upsert({
           where: {
             orderId_orderColorId_orderSizeId_ledger: {
@@ -472,13 +489,17 @@ packingRouter.post('/list/:listId/cartons', requirePermission('packing:write'), 
   await assertOwnAxes(list.orderId, [input.orderColorId], [input.orderSizeId]);
   await assertPackedCeiling(list.orderId, input.orderColorId && input.orderSizeId ? input.qty : 0);
 
-  const count = await prisma.carton.count({ where: { packingListId: list.id } });
-  const carton = await prisma.carton.create({ data: { ...input, packingListId: list.id, position: count } });
+  // The carton and its pieces on the ledger in one transaction: written
+  // separately, a failed ledger write left a carton whose later removal took
+  // off pieces that were never added.
+  const carton = await prisma.$transaction(async (tx) => {
+  const count = await tx.carton.count({ where: { packingListId: list.id } });
+  const created = await tx.carton.create({ data: { ...input, packingListId: list.id, position: count } });
 
   // Keep the PACKED ledger in step with the cartons, so the funnel, the
   // dashboard and the packing tab always agree.
   if (input.orderColorId && input.orderSizeId) {
-    await prisma.stageQuantity.upsert({
+    await tx.stageQuantity.upsert({
       where: {
         orderId_orderColorId_orderSizeId_ledger: {
           orderId: list.orderId, orderColorId: input.orderColorId, orderSizeId: input.orderSizeId, ledger: 'PACKED',
@@ -491,6 +512,8 @@ packingRouter.post('/list/:listId/cartons', requirePermission('packing:write'), 
       update: { qty: { increment: input.qty } },
     });
   }
+  return created;
+  });
 
   await logActivity({
     orderId: list.orderId, actorId: actor.id, actorName: actor.name,
@@ -546,6 +569,30 @@ packingRouter.post('/list/:listId/approve', requirePermission('packing:approve')
 
   await refreshOrderCache(list.orderId);
   res.json({ ok: true });
+}));
+
+/**
+ * Remove a packing list that has nothing on it — one made by mistake, or a
+ * second click on "New list". A list with cartons is never removed here: its
+ * cartons are taken off first, so the packed ledger gives each one back.
+ */
+packingRouter.delete('/list/:listId', requirePermission('packing:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const list = await prisma.packingList.findUnique({
+    where: { id: req.params.listId }, select: { id: true, orderId: true, reference: true, _count: { select: { cartons: true } } },
+  });
+  if (!list) throw new NotFoundError('Packing list');
+  const { count } = await prisma.packingList.deleteMany({ where: { id: list.id, cartons: { none: {} } } });
+  if (count === 0 || list._count.cartons > 0) {
+    throw new ValidationError('This packing list has cartons. Remove its cartons first, or keep it.');
+  }
+  await logActivity({
+    orderId: list.orderId, actorId: actor.id, actorName: actor.name,
+    action: 'PACKING_LIST_REMOVED', summary: `removed an empty packing list${list.reference ? ` (${list.reference})` : ''}`,
+    entityType: 'PackingList', entityId: list.id,
+  });
+  await refreshOrderCache(list.orderId);
+  res.status(204).end();
 }));
 
 /**
@@ -649,6 +696,11 @@ const shipmentSchema = z.object({
 packingRouter.post('/:orderId/shipments', requirePermission('shipment:write'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   const input = shipmentSchema.parse(req.body);
+  // A consignment that has gone has pieces in it: a shipment of 0 marked
+  // Shipped made the order Shipped (or Completed) with nothing shipped.
+  if ((input.status === 'SHIPPED' || input.status === 'DELIVERED') && !(input.qty > 0)) {
+    throw new ValidationError('A shipment marked shipped or delivered needs its quantity — how many pieces went.');
+  }
 
   const order = await prisma.order.findUnique({ where: { id: req.params.orderId }, include: ORDER_INCLUDE });
   if (!order) throw new NotFoundError('Order');
@@ -749,6 +801,9 @@ packingRouter.patch('/shipments/:id', requirePermission('shipment:write'), async
 
   const qty = input.qty ?? shipment.qty;
   const status = input.status ?? shipment.status;
+  if ((status === 'SHIPPED' || status === 'DELIVERED') && !(qty > 0)) {
+    throw new ValidationError('A shipment marked shipped or delivered needs its quantity — how many pieces went.');
+  }
   const producedQty = deriveOrder(order).producedQty;
   const reason = getRequestContext()?.reason ?? null;
   const shippedTotal = shipmentTotalAfter(order.shipments, qty, shipment.id);

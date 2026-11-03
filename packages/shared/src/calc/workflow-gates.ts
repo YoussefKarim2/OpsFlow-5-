@@ -185,7 +185,10 @@ export const STAGE_GATES: Partial<Record<StageKey, GateRequirement[]>> = {
     {
       key: 'quality-passed',
       label: 'Final inspection passed',
-      severity: 'BLOCKER',
+      // A warning, not a blocker: the final inspection is the next step of the
+      // routine and is usually done on packed cartons, so packing cannot wait
+      // for it. The shipment does — see the INVOICE gate below.
+      severity: 'WARNING',
       // A pass, not just an inspection: a FAIL whose corrective action was
       // closed is waiting for the re-inspection, not cleared for packing.
       test: (c) => (c.qualityPassed ?? (c.qualityInspected && !c.hasOpenQualityFailure)) && !c.hasOpenQualityFailure,
@@ -210,6 +213,19 @@ export const STAGE_GATES: Partial<Record<StageKey, GateRequirement[]>> = {
           ? 'No cartons have been recorded, so there is no packing list to ship against.'
           : 'The packing list has not been approved by the coordinator.',
       action: () => ({ label: 'Open packing', tab: 'packing' }),
+    },
+    {
+      key: 'quality-passed-before-shipping',
+      label: 'Final inspection passed',
+      severity: 'BLOCKER',
+      test: (c) => (c.qualityPassed ?? (c.qualityInspected && !c.hasOpenQualityFailure)) && !c.hasOpenQualityFailure,
+      explain: (c) =>
+        c.hasOpenQualityFailure
+          ? 'The final inspection failed and the corrective action is still open.'
+          : c.qualityInspected
+            ? 'The latest final inspection has not passed — re-inspect before shipping.'
+            : 'No final inspection has been recorded, and goods ship only after one passes.',
+      action: () => ({ label: 'Record the inspection', tab: 'quality' }),
     },
   ],
 };

@@ -45,6 +45,9 @@ export function PackingFileLayoutModal({
     queryFn: () => api.packing.fileLayout(orderId, attachmentId!),
     enabled: open,
     retry: false,
+    // Read afresh each time it opens: the reading is cheap, and a cached one
+    // kept showing yesterday's numbers after the reader was improved.
+    staleTime: 0,
   });
   const { data: matrix } = useQuery({
     queryKey: ['matrix', orderId],
