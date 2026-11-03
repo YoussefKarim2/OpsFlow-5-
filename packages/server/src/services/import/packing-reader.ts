@@ -322,7 +322,10 @@ function analyseHeader(grid: Grid, r: number, orderSizes: ReadonlySet<string>): 
   if (nonEmpty.length < 2) return null;
   // A header is words: a row that is mostly numbers is data, and so is one
   // that starts with a number — a carton number, the first cell of a row.
-  if (nonEmpty.filter((c) => typeof c === 'number').length > nonEmpty.length / 2) return null;
+  // Sizes headed by numbers — 28 30 32 34 36 38 40 — outnumber the words, so
+  // a row that names at least two columns (Ctn No, Colour, Total) is still a heading.
+  const named = nonEmpty.filter((c) => typeof c === 'string' && roleOf(c) != null).length;
+  if (nonEmpty.filter((c) => typeof c === 'number').length > nonEmpty.length / 2 && named < 2) return null;
   if (typeof nonEmpty[0] === 'number') return null;
 
   const below = grid.rows[r + 1] ?? [];
@@ -399,7 +402,10 @@ export function cartonRange(raw: string): [number, number] | null {
 }
 
 const isTotalRow = (row: Cell[]): boolean =>
-  row.some((c) => typeof c === 'string' && /^(grand\s*)?(total|totals|ttl|sum)\b\s*[:：]?/i.test(c.trim()));
+  row.some((c) => typeof c === 'string' && /^(grand\s*|sub\s*-?\s*)?(total|totals|ttl|sum)\b\s*[:：]?/i.test(c.trim()));
+
+const isGrandTotal = (row: Cell[]): boolean =>
+  row.some((c) => typeof c === 'string' && /^grand\s*total/i.test(c.trim()));
 
 function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
   const col = (role: PackingColumnRole) => header.columns.find((c) => c.role === role)?.index;
@@ -409,69 +415,114 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
   const cGross = col('GROSS'); const cNet = col('NET'); const cGrossT = col('GROSS_TOTAL'); const cNetT = col('NET_TOTAL');
   const cMeas = col('MEASUREMENT'); const cStyle = col('STYLE');
   const sizeCols = header.columns.filter((c) => c.role === 'SIZE_COLUMN');
+  const numbered = cNo != null || cFrom != null;
 
   const shape: NonNullable<PackingLayout['table']>['shape'] = sizeCols.length >= 1 && cSize == null
     ? 'SIZES_ACROSS'
     : cSize != null ? 'ROW_PER_SIZE' : 'ROW_PER_CARTON';
 
+  /** The carton number(s) a row gives, as written and as a range. */
+  const numberOf = (row: Cell[]): { text: string; range: [number, number] | null } => {
+    const at = (i: number | undefined): Cell => (i == null ? null : row[i] ?? null);
+    if (cFrom != null && num(at(cFrom)) != null) {
+      const a = num(at(cFrom))!; const b = num(at(cTo)) ?? a;
+      const range: [number, number] = b >= a ? [a, b] : [a, a];
+      return { text: a === range[1] ? String(a) : `${a}-${range[1]}`, range };
+    }
+    if (cNo != null && at(cNo) != null) {
+      const t = displayValue(at(cNo)).replace(/,/g, '');
+      return { text: t, range: cartonRange(t) };
+    }
+    return { text: '', range: null };
+  };
+  // A second header repeated further down (a page break in a PDF).
+  const isRepeatedHeader = (row: Cell[]): boolean =>
+    header.columns.filter((c) => c.role !== 'OTHER' && typeof row[c.index] === 'string' && roleOf(text(row[c.index] ?? null)) === c.role).length >= 2;
+  const isBlank = (row: Cell[]): boolean => !header.columns.some((c) => (row[c.index] ?? null) != null);
+
   const cartons: PackingCarton[] = [];
   const rowKinds = new Map<number, 'CARTON' | 'TOTAL'>();
-  let printed: PackingLayout['printedTotals'] = null;
   let blankRun = 0;
   let lastColour: string | null = null;
   let lastStyle: string | null = null;
   let unreadable = 0;
+  /** Something other than a carton (a total, an unread row) came since the last carton row. */
+  let gap = false;
   const fractional: number[] = [];
+  /** A carton count written beside a carton range that does not agree with it. */
+  const countDiffers: Array<{ row: number; number: string; count: number }> = [];
   /** Rows whose colour is a formula that could not be worked out, and their pieces. */
   const noColour: Array<{ row: number; pieces: number }> = [];
   /** Rows read as a whole run and split per carton — undone below if the TOTAL row says otherwise. */
   const split: Array<{ index: number; count: number }> = [];
+  /** Rows read as per carton that could be the whole run — divided below if the TOTAL row says so. */
+  const perRun: Array<{ index: number; count: number }> = [];
+  type Printed = NonNullable<PackingLayout['printedTotals']>;
+  /** TOTAL rows with more cartons after them: a sub-total per block. */
+  const subTotals: Printed[] = [];
+  /** The TOTAL rows the table ends on (a "Total" then a "Grand total"). */
+  const endTotals: Array<Printed & { grand: boolean }> = [];
+
+  const readTotal = (row: Cell[], r: number): Printed => {
+    const at = (i: number | undefined): Cell => (i == null ? null : row[i] ?? null);
+    const sumSizes = sizeCols.reduce((a, c) => a + (num(at(c.index)) ?? 0), 0);
+    // A PDF's total line is often too short to sit under the table's
+    // columns; its one number is then the pieces.
+    const loose = row.map(num).filter((n): n is number => n != null);
+    return {
+      pieces: num(at(cTotal)) ?? num(at(cQty)) ?? (sumSizes > 0 ? sumSizes : null) ?? (loose.length === 1 ? loose[0]! : null),
+      cartons: num(at(cCount)) ?? null,
+      grossKg: num(at(cGrossT)) ?? num(at(cGross)),
+      netKg: num(at(cNetT)) ?? num(at(cNet)),
+      sheetRow: r + 1,
+    };
+  };
 
   for (let r = header.row + 1; r < grid.rows.length; r++) {
     const row = grid.rows[r] ?? [];
     const at = (i: number | undefined): Cell => (i == null ? null : row[i] ?? null);
-    const used = header.columns.some((c) => at(c.index) != null);
-    if (!used) {
+    if (isBlank(row)) {
       if (++blankRun >= 3 && cartons.length > 0) break;
       continue;
     }
     blankRun = 0;
 
     if (isTotalRow(row)) {
-      const sumSizes = sizeCols.reduce((a, c) => a + (num(at(c.index)) ?? 0), 0);
-      // A PDF's total line is often too short to sit under the table's
-      // columns; its one number is then the pieces.
-      const loose = row.map(num).filter((n): n is number => n != null);
-      printed = {
-        pieces: num(at(cTotal)) ?? num(at(cQty)) ?? (sumSizes > 0 ? sumSizes : null) ?? (loose.length === 1 ? loose[0]! : null),
-        cartons: num(at(cCount)) ?? null,
-        grossKg: num(at(cGrossT)) ?? num(at(cGross)),
-        netKg: num(at(cNetT)) ?? num(at(cNet)),
-        sheetRow: r + 1,
-      };
+      // A TOTAL row ends the table — unless more numbered cartons follow it:
+      // then it was the total of one block (one colour, one style), and the
+      // reading goes on. Stopped at the first, every block after it was lost.
       rowKinds.set(r, 'TOTAL');
+      gap = true;
+      const t = readTotal(row, r);
+      let k = r + 1;
+      let blanks = 0;
+      const run: Array<Printed & { grand: boolean }> = [{ ...t, grand: isGrandTotal(row) }];
+      for (; k < grid.rows.length; k++) {
+        const next = grid.rows[k] ?? [];
+        if (isBlank(next)) { if (++blanks >= 3) break; continue; }
+        blanks = 0;
+        if (isRepeatedHeader(next)) continue;
+        if (isTotalRow(next)) { run.push({ ...readTotal(next, k), grand: isGrandTotal(next) }); rowKinds.set(k, 'TOTAL'); continue; }
+        break;
+      }
+      const resumes = numbered && k < grid.rows.length && blanks < 3 && numberOf(grid.rows[k] ?? []).range != null;
+      if (resumes) { subTotals.push(...run.map(({ grand: _g, ...p }) => p)); r = k - 1; continue; }
+      endTotals.push(...run);
       break;
     }
-    // A second header repeated further down (a page break in a PDF): skip it.
-    if (header.columns.filter((c) => c.role !== 'OTHER' && typeof at(c.index) === 'string' && roleOf(text(at(c.index))) === c.role).length >= 2) continue;
+    if (isRepeatedHeader(row)) continue;
 
     // The carton number(s).
-    let numberText = '';
-    let range: [number, number] | null = null;
-    if (cFrom != null && num(at(cFrom)) != null) {
-      const a = num(at(cFrom))!; const b = num(at(cTo)) ?? a;
-      range = b >= a ? [a, b] : [a, a];
-      numberText = a === range[1] ? String(a) : `${a}-${range[1]}`;
-    } else if (cNo != null && at(cNo) != null) {
-      numberText = displayValue(at(cNo)).replace(/,/g, '');
-      range = cartonRange(numberText);
-    }
+    const { text: numberText, range } = numberOf(row);
     const countCell = num(at(cCount));
     // A carton count is taken as written. A proforma estimates it — pieces ÷
     // pieces per carton, 9.1 — and rounding each line made the cartons stop
     // adding up to the document's own total.
     const count = countCell != null && countCell > 0 ? Math.round(countCell * 1000) / 1000 : range ? range[1] - range[0] + 1 : 1;
     if (!Number.isInteger(count)) fractional.push(r + 1);
+    if (countCell != null && countCell > 0 && range && Math.abs(countCell - (range[1] - range[0] + 1)) > 0.001 && Number.isInteger(countCell)) {
+      countDiffers.push({ row: r + 1, number: numberText, count: countCell });
+    }
 
     const colourCell = text(at(cColour)) || null;
     // A colour that is a formula nobody calculated is unknown — not the colour
@@ -494,18 +545,38 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
       if (size && n != null && n > 0) bySize[size] = n;
     }
     let perCarton = Object.values(bySize).reduce((a, b) => a + b, 0);
+    /** How the pieces of a row with a carton run were read, to be checked against the TOTAL row. */
+    let runReading: 'split' | 'perRun' | null = null;
     if (shape === 'ROW_PER_CARTON') {
       const per = num(at(cPer));
-      const qty = num(at(cQty)) ?? num(at(cTotal));
+      const qtyCell = num(at(cQty));
+      const qty = qtyCell ?? num(at(cTotal));
+      if (per != null) perCarton = per;
+      else if (qty == null) perCarton = 0;
+      else if (count <= 1) perCarton = qty;
       // A line with no carton number but a carton count — a summary by style,
       // "1,092 pcs in 10 cartons" — gives the pieces of the whole line.
-      perCarton = per ?? (qty != null && cNo == null && cFrom == null && count > 1 ? qty / count : qty ?? 0);
+      else if (!numbered) perCarton = qty / count;
+      // "From 1 To 10 | Total 240": a Total is the whole run, 24 a carton —
+      // read as one carton's, the run showed 2,400 pcs. When it does not
+      // divide evenly it cannot be the run of identical cartons.
+      else if (qtyCell == null && qty % count === 0) { perCarton = qty / count; runReading = 'split'; }
+      // A "Qty" beside a run is usually one carton's; the TOTAL row decides below.
+      else { perCarton = qty; if (qty % count === 0) runReading = 'perRun'; }
     }
 
-    // A row with no carton number continues the carton above: the factory
-    // sheet lists a mixed carton one size per row, numbering only the first.
-    if (!numberText && cartons.length > 0 && perCarton > 0 && shape === 'ROW_PER_SIZE') {
+    const head = [...cartons].reverse().find((c) => !c.continues) ?? null;
+    // More of the carton above: a row with no carton number (the factory
+    // sheet numbers only the first row of a mixed carton, and a merged
+    // number leaves the rows under it blank), or the same number written
+    // again on the very next row (a list that repeats "1-10" on every size).
+    // Counted as new cartons, a 10-carton run became 30 cartons.
+    const continuesAbove = cartons.length > 0 && perCarton > 0 && (
+      (!numberText && (shape === 'ROW_PER_SIZE' || (numbered && countCell == null)))
+      || (!gap && numberText !== '' && head != null && head.number === numberText && (countCell == null || countCell === head.count)));
+    if (continuesAbove) {
       const prev = cartons[cartons.length - 1]!;
+      gap = false;
       // Each row of a mixed carton names its own colour. Folded into the
       // carton's first colour, a HUNTER/WHT carton holding LIME/BLACK too
       // counted every piece as HUNTER/WHT.
@@ -516,6 +587,9 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
           bySize: { ...bySize }, perCarton, totalPieces: perCarton * prev.count,
           grossKg: null, netKg: null, measurement: null, sheetRow: r + 1, lastRow: r + 1, continues: true,
         });
+        // A weight written on a later row is the carton's.
+        if (head && head.grossKg == null) head.grossKg = num(at(cGross));
+        if (head && head.netKg == null) head.netKg = num(at(cNet));
         rowKinds.set(r, 'CARTON');
         continue;
       }
@@ -523,18 +597,14 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
       prev.perCarton += perCarton;
       prev.totalPieces = prev.perCarton * prev.count;
       prev.lastRow = r + 1;
-      if (prev.grossKg == null) prev.grossKg = num(at(cGross));
-      if (prev.netKg == null) prev.netKg = num(at(cNet));
+      if (head && head.grossKg == null) head.grossKg = num(at(cGross));
+      if (head && head.netKg == null) head.netKg = num(at(cNet));
       rowKinds.set(r, 'CARTON');
       continue;
     }
     if (!numberText && perCarton === 0 && countCell == null) {
-      if (cartons.length > 0) unreadable++;
+      if (cartons.length > 0) { unreadable++; gap = true; }
       continue;
-    }
-    if (perCarton === 0 && numberText) {
-      // A numbered carton with no pieces: kept, so the count of boxes is right, and said.
-      issues.push({ level: 'WARNING', message: `Row ${r + 1}: carton ${numberText} has no pieces in it.` });
     }
 
     const colour = colourUnknown ? null : colourCell ?? lastColour;
@@ -550,8 +620,10 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
     if (shape === 'SIZES_ACROSS' && count > 1 && printedTotal != null && perCarton === printedTotal && perCarton % count === 0) {
       for (const k of Object.keys(bySize)) bySize[k] = bySize[k]! / count;
       perCarton = perCarton / count;
-      split.push({ index: cartons.length, count });
+      runReading = 'split';
     }
+    if (runReading === 'split') split.push({ index: cartons.length, count });
+    if (runReading === 'perRun') perRun.push({ index: cartons.length, count });
 
     const gross = num(at(cGross)) ?? (num(at(cGrossT)) != null ? num(at(cGrossT))! / count : null);
     const net = num(at(cNet)) ?? (num(at(cNetT)) != null ? num(at(cNetT))! / count : null);
@@ -572,11 +644,64 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
       lastRow: r + 1,
     });
     rowKinds.set(r, 'CARTON');
+    gap = false;
 
     if (printedTotal != null && cTotal != null && shape !== 'ROW_PER_SIZE' && Math.abs(printedTotal - perCarton * count) > 0.001 && Math.abs(printedTotal - perCarton) > 0.001) {
       issues.push({ level: 'WARNING', message: `Row ${r + 1}: the row's total says ${printedTotal.toLocaleString('en-US')} pcs, but ${count} carton${count === 1 ? '' : 's'} × ${perCarton.toLocaleString('en-US')} pcs is ${(perCarton * count).toLocaleString('en-US')}.` });
     }
   }
+
+  // Which TOTAL row the cartons answer to. Of the rows the table ends on, a
+  // "Grand total" first; with blocks, the sum of the blocks' totals when the
+  // last one is only its block's.
+  const pieces = () => cartons.reduce((a, c) => a + c.totalPieces, 0);
+  let printed: PackingLayout['printedTotals'] = null;
+  if (endTotals.length > 0 || subTotals.length > 0) {
+    const sum = (list: Printed[]): Printed => {
+      const add = (k: 'pieces' | 'cartons' | 'grossKg' | 'netKg') =>
+        list.every((t) => t[k] == null) ? null : list.reduce((a, t) => a + (t[k] ?? 0), 0);
+      return { pieces: add('pieces'), cartons: add('cartons'), grossKg: add('grossKg'), netKg: add('netKg'), sheetRow: list[list.length - 1]!.sheetRow };
+    };
+    const strip = ({ grand: _g, ...p }: Printed & { grand: boolean }): Printed => p;
+    const grand = endTotals.find((t) => t.grand);
+    const last = endTotals[0];
+    const candidates: Printed[] = [];
+    if (grand) candidates.push(strip(grand));
+    if (last) candidates.push(strip(last));
+    // A block's own total, then the next block's: the sum of them.
+    const blocks = [...subTotals, ...(last && !last.grand ? [strip(last)] : [])];
+    if (subTotals.length > 0) candidates.push(sum(blocks));
+    // Undo or apply a run's split first, so the choice sees the final pieces.
+    for (const c of candidates) if (c.pieces != null && settleRuns(c.pieces)) break;
+    const read = pieces();
+    printed = candidates.find((c) => c.pieces != null && Math.abs(c.pieces - read) < 0.5) ?? candidates[0] ?? null;
+  }
+
+  /**
+   * A Total column can be per carton as easily as per run. Where rows with a
+   * carton run could be read either way, the document's own TOTAL row decides.
+   */
+  function settleRuns(target: number): boolean {
+    const asRead = pieces();
+    if (Math.abs(asRead - target) < 0.5) return true;
+    const unsplit = asRead + split.reduce((a, sp) => a + cartons[sp.index]!.totalPieces * (sp.count - 1), 0);
+    if (split.length > 0 && Math.abs(unsplit - target) < 0.5) {
+      for (const sp of split) scale(cartons[sp.index]!, sp.count);
+      return true;
+    }
+    const divided = asRead - perRun.reduce((a, pr) => a + cartons[pr.index]!.totalPieces * (1 - 1 / pr.count), 0);
+    if (perRun.length > 0 && Math.abs(divided - target) < 0.5) {
+      for (const pr of perRun) scale(cartons[pr.index]!, 1 / pr.count);
+      return true;
+    }
+    return false;
+  }
+  function scale(c: PackingCarton, by: number) {
+    for (const k of Object.keys(c.bySize)) c.bySize[k] = c.bySize[k]! * by;
+    c.perCarton *= by;
+    c.totalPieces = c.perCarton * c.count;
+  }
+
   if (noColour.length > 0) {
     const pcs = noColour.reduce((a, n) => a + n.pieces, 0);
     issues.push({
@@ -592,26 +717,45 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
         + 'the document works it out from pieces ÷ pieces per carton. It is shown as written, so the cartons add up to the document\'s own total.',
     });
   }
+  for (const d of countDiffers.slice(0, 5)) {
+    issues.push({ level: 'WARNING', message: `Row ${d.row}: cartons ${d.number} is ${cartonRange(d.number) ? cartonRange(d.number)![1] - cartonRange(d.number)![0] + 1 : '?'} cartons, but the row says ${d.count}. The row's ${d.count} is used.` });
+  }
   if (unreadable > 0) {
     issues.push({ level: 'WARNING', message: `${unreadable} row${unreadable === 1 ? '' : 's'} under the table had neither a carton number nor pieces, and ${unreadable === 1 ? 'was' : 'were'} not read.` });
   }
-  // A Total column can be per carton as easily as per run. Where the rows were
-  // read as runs and split, the document's own TOTAL row decides: if it adds
-  // up only with the rows taken as per carton, they were per carton.
-  if (split.length > 0 && printed?.pieces != null) {
-    const asRead = cartons.reduce((a, c) => a + c.totalPieces, 0);
-    const unsplit = asRead + split.reduce((a, sp) => a + cartons[sp.index]!.totalPieces * (sp.count - 1), 0);
-    if (Math.abs(unsplit - printed.pieces) < 0.5 && Math.abs(asRead - printed.pieces) >= 0.5) {
-      for (const sp of split) {
-        const c = cartons[sp.index]!;
-        for (const k of Object.keys(c.bySize)) c.bySize[k] = c.bySize[k]! * sp.count;
-        c.perCarton *= sp.count;
-        c.totalPieces = c.perCarton * c.count;
-      }
+  // A numbered carton with no pieces in it, all its colours counted: kept, so
+  // the count of boxes is right, and said.
+  cartons.forEach((c, i) => {
+    if (c.continues || !c.number) return;
+    let pcs = c.perCarton;
+    for (let k = i + 1; k < cartons.length && cartons[k]!.continues; k++) pcs += cartons[k]!.perCarton;
+    if (pcs === 0) issues.push({ level: 'WARNING', message: `Row ${c.sheetRow}: carton ${c.number} has no pieces in it.` });
+  });
+  // Carton numbers that overlap — 1-10 then 8-15 — count the same boxes twice.
+  const runs = cartons.filter((c) => !c.continues && c.number).map((c) => ({ c, range: cartonRange(c.number) }))
+    .filter((x): x is { c: PackingCarton; range: [number, number] } => x.range != null)
+    .sort((a, b) => a.range[0] - b.range[0]);
+  const overlaps: string[] = [];
+  for (let i = 1; i < runs.length; i++) {
+    const a = runs[i - 1]!; const b = runs[i]!;
+    if (b.range[0] <= a.range[1] && a.c.number !== b.c.number) overlaps.push(`${a.c.number} and ${b.c.number}`);
+  }
+  if (overlaps.length > 0) {
+    issues.push({ level: 'WARNING', message: `Carton numbers overlap: ${overlaps.slice(0, 4).join('; ')}${overlaps.length > 4 ? '…' : ''}. The same boxes may be counted twice.` });
+  }
+  if (runs.length > 1 && runs.length === cartons.filter((c) => !c.continues).length) {
+    const missing: string[] = [];
+    let expect = runs[0]!.range[0];
+    for (const x of runs) {
+      if (x.range[0] > expect) missing.push(x.range[0] - 1 === expect ? String(expect) : `${expect}-${x.range[0] - 1}`);
+      expect = Math.max(expect, x.range[1] + 1);
+    }
+    if (missing.length > 0) {
+      issues.push({ level: 'INFO', message: `No carton${missing.length === 1 && !missing[0]!.includes('-') ? '' : 's'} ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? '…' : ''} in the list, between ${runs[0]!.range[0]} and ${expect - 1}.` });
     }
   }
   // Pieces per carton from a division carry float noise (120.00000000000001).
-  for (const c of cartons) c.perCarton = Math.round(c.perCarton * 1000) / 1000;
+  for (const c of cartons) { c.perCarton = Math.round(c.perCarton * 1000) / 1000; c.totalPieces = Math.round(c.totalPieces * 1000) / 1000; }
   return { cartons, shape, printed, rowKinds, sizes: shape === 'SIZES_ACROSS' ? sizeCols.map((c) => c.heading) : null };
 }
 

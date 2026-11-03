@@ -105,7 +105,9 @@ describe('the packing list reader', () => {
       const ws = wb.addWorksheet('PL');
       ws.addRow(['Ctn No', 'Colour', 'Size', 'Qty', 'G.W', 'N.W']);
       ws.addRow([1, 'Navy', 'M', 20, 6, 7]);
-      ws.addRow([1, 'Navy', 'L', 20, 6, 5]);
+      ws.addRow([2, 'Navy', 'L', 10, 6, 5]);
+      // Not on the next row: another box given the same number.
+      ws.addRow([1, 'Navy', 'S', 10, 6, 5]);
       ws.addRow(['Total', null, null, 50]);
     });
     const r = await readPackingDocument(buf, 'pl.xlsx');
@@ -336,5 +338,105 @@ describe('colours that are formulas', () => {
     assert.equal(r.totals.pieces, 190);
     assert.equal(r.totals.byColour['—'], 190);
     assert.ok(r.issues.some((i) => /colour is a formula Excel never calculated/.test(i.message)), JSON.stringify(r.issues));
+  });
+});
+
+describe('carton numbers, totals and runs that used to count wrong', () => {
+  const read = async (rows: unknown[][], merge?: (ws: ExcelJS.Worksheet) => void) => readPackingDocument(await xlsx((wb) => {
+    const ws = wb.addWorksheet('PL');
+    for (const r of rows) ws.addRow(r);
+    merge?.(ws);
+  }), 'pl.xlsx');
+  const warnings = (r: Awaited<ReturnType<typeof readPackingDocument>>) => r.issues.filter((i) => i.level === 'WARNING').map((i) => i.message);
+
+  test('a carton range written again on every size row is one run of cartons, not one per row', async () => {
+    const r = await read([
+      ['C/No', 'Size', 'Qty', 'Color', 'Total'],
+      ['1-10', 'S', 6, 'NAVY', 60], ['1-10', 'M', 6, 'NAVY', 60], ['1-10', 'L', 6, 'RED', 60],
+      ['11', 'XL', 12, 'NAVY', 12],
+      ['Total', null, 192],
+    ]);
+    assert.equal(r.totals.cartons, 11);
+    assert.equal(r.totals.pieces, 192);
+    assert.deepEqual(r.totals.byColour, { NAVY: 132, RED: 60 });
+    assert.deepEqual(warnings(r), []);
+  });
+
+  test('a TOTAL per colour block does not end the table; the grand total is the one checked', async () => {
+    const r = await read([
+      ['From', 'To', 'Ctns', 'Colour', 'S', 'M', 'Pcs/Ctn', 'Total'],
+      [1, 5, 5, 'NAVY', 10, 10, 20, 100],
+      ['Sub Total', null, 5, null, null, null, null, 100],
+      [6, 7, 2, 'RED', 5, 5, 10, 20],
+      ['Total RED', null, 2, null, null, null, null, 20],
+      ['Grand Total', null, 7, null, null, null, null, 120],
+    ]);
+    assert.equal(r.totals.cartons, 7);
+    assert.equal(r.totals.pieces, 120);
+    assert.equal(r.printedTotals?.pieces, 120);
+    assert.deepEqual(warnings(r), []);
+  });
+
+  test('blocks with only their own totals are checked against the sum of them', async () => {
+    const r = await read([
+      ['Ctn No', 'Colour', 'Size', 'Qty'],
+      [1, 'NAVY', 'S', 10], [2, 'NAVY', 'M', 10],
+      ['Total', null, null, 20],
+      [3, 'RED', 'S', 7],
+      ['Total', null, null, 7],
+    ]);
+    assert.equal(r.totals.pieces, 27);
+    assert.equal(r.printedTotals?.pieces, 27);
+    assert.deepEqual(warnings(r), []);
+  });
+
+  test('"From 1 To 10 | Total 240" is 24 a carton, not 240', async () => {
+    const r = await read([
+      ['From', 'To', 'Colour', 'Total'],
+      [1, 10, 'NAVY', 240], [11, 11, 'RED', 7],
+    ]);
+    assert.deepEqual(r.cartons.map((c) => [c.number, c.perCarton, c.totalPieces]), [['1-10', 24, 240], ['11', 7, 7]]);
+    assert.equal(r.totals.pieces, 247);
+  });
+
+  test('a Qty beside a carton run is one carton’s, unless the TOTAL row says it was the run', async () => {
+    const perCarton = await read([['Ctn No', 'Colour', 'Qty'], ['1-10', 'NAVY', 24], ['Total', null, 240]]);
+    assert.equal(perCarton.totals.pieces, 240);
+    const perRun = await read([['Ctn No', 'Colour', 'Qty'], ['1-10', 'NAVY', 240], ['Total', null, 240]]);
+    assert.equal(perRun.totals.pieces, 240);
+    assert.equal(perRun.cartons[0]!.perCarton, 24);
+    assert.deepEqual(warnings(perRun), []);
+  });
+
+  test('a carton number merged down over two colours is one mixed run', async () => {
+    const r = await read([
+      ['From', 'To', 'Colour', 'S', 'M', 'Pcs/Ctn'],
+      [1, 4, 'NAVY', 6, 6, 12], [null, null, 'RED', 3, 3, 6], [5, 5, 'RED', 10, 10, 20],
+    ], (ws) => { ws.mergeCells('A2:A3'); ws.mergeCells('B2:B3'); });
+    assert.equal(r.totals.cartons, 5);
+    assert.equal(r.totals.pieces, 4 * 18 + 20);
+    assert.deepEqual(r.totals.byColour, { NAVY: 48, RED: 44 });
+  });
+
+  test('sizes headed by numbers — 28 to 40 — are still a carton table', async () => {
+    const r = await read([
+      ['Ctn No', 'Colour', 28, 30, 32, 34, 36, 38, 40, 'Total'],
+      ['1-2', 'INDIGO', 2, 2, 2, 2, 2, 2, 2, 28],
+    ]);
+    assert.equal(r.table?.shape, 'SIZES_ACROSS');
+    assert.deepEqual(r.table?.sizes, ['28', '30', '32', '34', '36', '38', '40']);
+    assert.equal(r.totals.pieces, 28);
+    assert.equal(r.totals.cartons, 2);
+  });
+
+  test('overlapping carton numbers, a count that disagrees with its range, and a gap are said', async () => {
+    const r = await read([
+      ['Ctn No', 'Ctns', 'Colour', 'Pcs/Ctn'],
+      ['1-10', 10, 'NAVY', 12], ['8-12', 5, 'NAVY', 12], ['13-15', 2, 'RED', 6], ['20', 1, 'RED', 6],
+    ]);
+    const text = r.issues.map((i) => i.message).join('\n');
+    assert.match(text, /Carton numbers overlap: 1-10 and 8-12/);
+    assert.match(text, /cartons 13-15 is 3 cartons, but the row says 2/);
+    assert.match(text, /No cartons 16-19 in the list/);
   });
 });
