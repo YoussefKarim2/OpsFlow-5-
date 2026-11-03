@@ -103,6 +103,79 @@ export function PackingFileLayoutModal({
   );
 }
 
+/** Which attached files the reader can lay out. */
+export const readablePackingFile = (fileName: string): boolean => /\.(xlsx|xlsm|csv|txt|pdf)$/i.test(fileName);
+
+/**
+ * The cartons of the latest packing file, right on the Packing tab — no click
+ * needed. Several readable files: a picker chooses which one is shown. The
+ * Layout button still opens the full reading (table, details, the file itself).
+ */
+export function PackingFileCartonsInline({ orderId }: { orderId: string }) {
+  const { data: attachments } = useQuery({
+    queryKey: ['attachments', orderId],
+    queryFn: () => api.orders.attachments(orderId),
+  });
+  const files = useMemo(
+    () => (attachments?.data ?? [])
+      .filter((a) => a.documentType === 'PACKING_LIST' && a.available && readablePackingFile(a.fileName))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
+    [attachments],
+  );
+  const [chosen, setChosen] = useState<string | null>(null);
+  const current = files.find((f) => f.id === chosen) ?? files[0] ?? null;
+  const { data, error, isLoading, refetch } = useQuery({
+    queryKey: ['packing-file-layout', orderId, current?.id ?? null],
+    queryFn: () => api.packing.fileLayout(orderId, current!.id),
+    enabled: current != null,
+    retry: false,
+    staleTime: 0,
+  });
+  const { data: matrix } = useQuery({
+    queryKey: ['matrix', orderId],
+    queryFn: () => api.orders.matrix(orderId),
+    enabled: current != null,
+  });
+  if (!current) return null;
+
+  return (
+    <section className="space-y-4">
+      <div>
+        <h3 className="text-base font-semibold text-ink-900">Cartons in the packing file</h3>
+        <p className="text-xs text-ink-500">Read from {current.fileName}. Nothing has been changed on the order.</p>
+      </div>
+      <div className="space-y-4">
+        {files.length > 1 && (
+          <div className="flex flex-wrap gap-1 text-sm" role="tablist">
+            {files.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                role="tab"
+                aria-selected={f.id === current.id}
+                onClick={() => setChosen(f.id)}
+                className={clsx('rounded px-3 py-1 font-medium', f.id === current.id ? 'bg-ink-900 text-white' : 'bg-ink-100 text-ink-600 hover:text-ink-900')}
+              >
+                {f.fileName}
+              </button>
+            ))}
+          </div>
+        )}
+        {isLoading ? <Spinner label="Reading the file…" />
+          : error ? <ErrorNote error={error} onRetry={() => void refetch()} />
+          : data ? (
+            <>
+              <Summary data={data} />
+              <Issues data={data} />
+              <CartonCards data={data} />
+              <AgainstOrder data={data} matrix={matrix} />
+            </>
+          ) : null}
+      </div>
+    </section>
+  );
+}
+
 function Summary({ data }: { data: PackingFileLayoutDto }) {
   const { layout } = data;
   const t = layout.totals;

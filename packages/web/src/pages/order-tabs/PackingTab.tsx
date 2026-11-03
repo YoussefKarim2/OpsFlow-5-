@@ -14,7 +14,7 @@ import {
   Card, CardHeader, StatTile, Num, Modal, Field, Spinner, ErrorNote, EmptyState, clsx, useToast,
 } from '../../components/ui';
 import { AttachmentsPanel } from '../../components/Attachments';
-import { PackingFileLayoutModal } from '../../components/PackingFileLayout';
+import { PackingFileCartonsInline, PackingFileLayoutModal, readablePackingFile as readableLayout } from '../../components/PackingFileLayout';
 import { ComboSelect } from '../../components/ComboSelect';
 
 interface PackingList {
@@ -48,7 +48,6 @@ const SHIP_TONE: Record<string, string> = {
 };
 
 /** A packing file the server can read a layout from. */
-const readableLayout = (fileName: string): boolean => /\.(xlsx|xlsm|csv|txt|pdf)$/i.test(fileName);
 
 export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing" | "shipping" }) {
   const qc = useQueryClient();
@@ -398,10 +397,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
         documentType="PACKING_LIST"
         stageKey="PACKING"
         title="Packing files"
-        detail="Packing lists and carton photographs for this order. A packing list attached as Excel, CSV or PDF is read and its layout shown."
-        // A packing list attached here is read straight away and its layout
-        // shown; a photograph is just filed.
-        onUploaded={(d) => { if (readableLayout(d.fileName)) setLayoutOf({ id: d.id, fileName: d.fileName }); }}
+        detail="Packing lists and carton photographs for this order. A packing list attached as Excel, CSV or PDF is read and its cartons shown below."
         rowAction={{
           label: 'Layout',
           title: 'Show what this packing file says',
@@ -418,6 +414,8 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
         fileName={layoutOf?.fileName}
         onClose={() => setLayoutOf(null)}
       />
+      {/* The latest packing list's cartons, read and shown without a click. */}
+      <PackingFileCartonsInline orderId={order.id} />
       {/* Shipping paperwork is filed separately: it belongs to the shipment,
           not the packing, and is what a forwarder asks for by name. */}
       <AttachmentsPanel
