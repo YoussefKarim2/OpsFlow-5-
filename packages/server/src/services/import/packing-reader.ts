@@ -127,6 +127,8 @@ interface Grid {
   uncached: number;
   /** Cells holding a formula that could not be worked out, keyed "row:col" (0-based). */
   unknown?: Set<string>;
+  /** Those cells' addresses and formulas, by the same key — so a warning can name them. */
+  unknownFormulas?: Map<string, string>;
 }
 
 const MAX_ROWS = 2000;
@@ -155,6 +157,7 @@ function sheetToGrid(ws: ExcelJS.Worksheet): Grid {
   const rows: Cell[][] = [];
   const spans = new Map<string, number>();
   const unknown = new Set<string>();
+  const unknownFormulas = new Map<string, string>();
   let uncached = 0;
   const lastRow = Math.min(ws.rowCount, MAX_ROWS);
   const lastCol = Math.min(ws.columnCount, MAX_COLS);
@@ -168,7 +171,14 @@ function sheetToGrid(ws: ExcelJS.Worksheet): Grid {
         // Saved without its result: worked out here when it is plain
         // arithmetic, and only counted as unreadable when it is not.
         const e = evaluateCell(ws, cell);
-        if (!e) { uncached++; unknown.add(`${r - 1}:${c - 1}`); out.push(null); continue; }
+        if (!e) {
+          uncached++;
+          unknown.add(`${r - 1}:${c - 1}`);
+          const f = (cell as unknown as { formula?: string }).formula;
+          unknownFormulas.set(`${r - 1}:${c - 1}`, `${cell.address}${f ? ` =${f.length > 60 ? `${f.slice(0, 57)}…` : f}` : ''}`);
+          out.push(null);
+          continue;
+        }
         out.push(typeof e.value === 'string' ? (e.value.trim() || null) : e.value);
         continue;
       }
@@ -183,7 +193,7 @@ function sheetToGrid(ws: ExcelJS.Worksheet): Grid {
     const c0 = colIndex(m[1]!); const c1 = colIndex(m[3]!);
     spans.set(`${Number(m[2]) - 1}:${c0 - 1}`, c1 - c0 + 1);
   }
-  return { name: ws.name, rows, spans, uncached, unknown };
+  return { name: ws.name, rows, spans, uncached, unknown, unknownFormulas };
 }
 
 function colIndex(letters: string): number {
@@ -740,7 +750,30 @@ export async function readPackingDocument(buffer: Buffer, fileName: string, opti
   for (const c of cartons) if (c.number && !c.continues) numbers.set(c.number.toUpperCase(), (numbers.get(c.number.toUpperCase()) ?? 0) + 1);
   const repeated = [...numbers.entries()].filter(([, n]) => n > 1).map(([k]) => k);
   if (repeated.length > 0) issues.push({ level: 'WARNING', message: `Carton number${repeated.length === 1 ? '' : 's'} ${repeated.slice(0, 5).join(', ')} appear${repeated.length === 1 ? 's' : ''} more than once.` });
-  if (grid.uncached > 0) issues.push({ level: 'WARNING', message: `${grid.uncached} formula cell${grid.uncached === 1 ? ' has' : 's have'} no saved result, so ${grid.uncached === 1 ? 'it reads' : 'they read'} as empty. Open the file in Excel, save it, and attach it again.` });
+  if (grid.uncached > 0) {
+    // Which formulas, and whether they touch the cartons. A formula in the
+    // title block or beside the table (a sheet name, a running total) changes
+    // nothing above, and telling the user to re-save the file for it sent
+    // them back to Excel for no reason.
+    const keys = [...(grid.unknown ?? [])];
+    const inTable = keys.filter((k) => rowKinds.has(Number(k.split(':')[0])));
+    const name = (k: string) => grid.unknownFormulas?.get(k) ?? k;
+    const list = (ks: string[]) => ks.slice(0, 6).map(name).join('; ') + (ks.length > 6 ? `; and ${ks.length - 6} more` : '');
+    if (inTable.length === 0) {
+      issues.push({
+        level: 'INFO',
+        message: `${keys.length} formula${keys.length === 1 ? '' : 's'} in the sheet could not be calculated (${list(keys)}). `
+          + `${keys.length === 1 ? 'It is' : 'They are'} outside the carton table, so the cartons above are read in full.`,
+      });
+    } else {
+      issues.push({
+        level: 'WARNING',
+        message: `${inTable.length} cell${inTable.length === 1 ? '' : 's'} in the carton table ${inTable.length === 1 ? 'is a formula' : 'are formulas'} that could not be calculated, `
+          + `so ${inTable.length === 1 ? 'it reads' : 'they read'} as empty: ${list(inTable)}. The rest of the table is read as it is.`
+          + (keys.length > inTable.length ? ` (${keys.length - inTable.length} more outside the table don't affect it.)` : ''),
+      });
+    }
+  }
   if (header && cartons.length === 0) issues.push({ level: 'WARNING', message: `The carton table on row ${header.row + 1} has no cartons under it yet.` });
   if (grids.length > 1) issues.push({ level: 'INFO', message: `Read the sheet "${grid.name}" — ${grids.length} sheets in the file.` });
 

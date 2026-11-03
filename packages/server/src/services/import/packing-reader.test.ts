@@ -261,7 +261,22 @@ describe('proformas and files saved without results', () => {
       ws.getRow(2).values = [1, 'Navy', { formula: 'VLOOKUP(1,Z1:Z2,1,0)' } as ExcelJS.CellValue];
       ws.getRow(3).values = [2, 'Navy', 20];
     }), 'pl.xlsx');
-    assert.ok(r.issues.some((i) => /1 formula cell has no saved result/.test(i.message)), JSON.stringify(r.issues));
+    assert.ok(r.issues.some((i) => i.level === 'WARNING' && /in the carton table.*C2 =VLOOKUP/.test(i.message)), JSON.stringify(r.issues));
+  });
+
+  test('a formula outside the carton table is named, and not a reason to re-attach the file', async () => {
+    const r = await readPackingDocument(await xlsx((wb) => {
+      const ws = wb.addWorksheet('PL');
+      ws.getCell('A1').value = { formula: 'INDIRECT("X1")' } as ExcelJS.CellValue;
+      ws.getRow(3).values = ['C/No', 'Colour', 'Qty'];
+      ws.getRow(4).values = [1, 'Navy', 10];
+      ws.getRow(5).values = [2, 'Navy', 20];
+    }), 'pl.xlsx');
+    const note = r.issues.find((i) => /could not be calculated/.test(i.message));
+    assert.equal(note?.level, 'INFO', JSON.stringify(r.issues));
+    assert.match(note!.message, /A1 =INDIRECT/);
+    assert.match(note!.message, /read in full/);
+    assert.ok(!r.issues.some((i) => /attach it again/.test(i.message)));
   });
 });
 
