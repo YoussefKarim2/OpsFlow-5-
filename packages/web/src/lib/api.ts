@@ -55,6 +55,8 @@ export interface PackingFileLayoutDto {
       bySize: Record<string, number>; perCarton: number; totalPieces: number;
       grossKg: number | null; netKg: number | null; measurement: string | null;
       sheetRow: number; lastRow: number;
+      /** More of the carton above, in another colour: pieces, not another carton. */
+      continues?: boolean;
     }>;
     totals: { cartons: number; pieces: number; grossKg: number | null; netKg: number | null; bySize: Record<string, number>; byColour: Record<string, number> };
     printedTotals: { pieces: number | null; cartons: number | null; grossKg: number | null; netKg: number | null; sheetRow: number } | null;

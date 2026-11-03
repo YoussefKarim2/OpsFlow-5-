@@ -205,9 +205,13 @@ function Cartons({ data }: { data: PackingFileLayoutDto }) {
             </thead>
             <tbody className="divide-y divide-ink-100">
               {layout.cartons.map((c, i) => (
-                <tr key={i} title={`Row ${c.sheetRow}${c.lastRow !== c.sheetRow ? `–${c.lastRow}` : ''} of the document`}>
-                  <td className="td whitespace-nowrap text-sm font-medium">{c.number || "—"}</td>
-                  <td className="td text-right tnum text-sm">{fmt(c.count, 2)}</td>
+                <tr key={i} className={clsx(c.continues && 'bg-ink-50/40')} title={`Row ${c.sheetRow}${c.lastRow !== c.sheetRow ? `–${c.lastRow}` : ''} of the document`}>
+                  <td className="td whitespace-nowrap text-sm font-medium">
+                    {c.continues
+                      ? <span className="pl-3 text-xs font-normal text-ink-500" title="The same carton, another colour">↳ carton {c.number}</span>
+                      : (c.number || '—')}
+                  </td>
+                  <td className="td text-right tnum text-sm">{c.continues ? <span className="text-ink-300">·</span> : fmt(c.count, 2)}</td>
                   {anyStyle && <td className="td text-sm">{c.style ?? '—'}</td>}
                   {anyColour && (
                     <td className="td text-sm">

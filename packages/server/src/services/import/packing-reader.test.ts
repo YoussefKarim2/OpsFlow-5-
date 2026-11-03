@@ -264,3 +264,32 @@ describe('proformas and files saved without results', () => {
     assert.ok(r.issues.some((i) => /1 formula cell has no saved result/.test(i.message)), JSON.stringify(r.issues));
   });
 });
+
+describe('mixed cartons', () => {
+  test('each row of a mixed carton keeps its own colour; the carton is counted once', async () => {
+    const buf = await xlsx((wb) => {
+      const ws = wb.addWorksheet('Packing_Coordinator');
+      ws.getRow(5).values = [null, null, 'C/No', 'Size', 'Qty', 'Color', 'Total', 'Gw', 'Nw'];
+      const rows: Array<Array<unknown>> = [
+        [1, 'YXS', 144, 'COLUMBIA/WH', 168, 9, 8], [null, 'YL', 24, 'COLUMBIA/WH'],
+        [2, 'YXS', 120, 'HUNTER/WHT', 174, 9, 8], [null, 'YS', 54, 'HUNTER/WHT'],
+        [3, 'YS', 90, 'HUNTER/WHT', 166, 9, 8], [null, 'YXS', 24, 'LIME/BLACK'], [null, 'YS', 52, 'LIME/BLACK'],
+      ];
+      rows.forEach((r, i) => { ws.getRow(6 + i).values = [null, null, ...r]; });
+      ws.getRow(13).values = [null, null, 'Total', null, { formula: 'SUM(E6:E12)' } as ExcelJS.CellValue];
+    });
+    const r = await readPackingDocument(buf, 'pl.xlsx');
+    assert.equal(r.totals.cartons, 3);
+    assert.equal(r.totals.pieces, 508);
+    assert.deepEqual(r.totals.byColour, { 'COLUMBIA/WH': 168, 'HUNTER/WHT': 264, 'LIME/BLACK': 76 });
+    assert.deepEqual(r.table?.sizes, ['YXS', 'YS', 'YL']);
+    assert.ok(!r.issues.some((i) => i.level === 'WARNING'), JSON.stringify(r.issues));
+  });
+
+  test("a TOTAL row of 0 beside full cartons is a total not filled in, not a disagreement", async () => {
+    const csv = 'C/No,Size,Qty,Color\n1,S,10,Navy\n2,M,20,Navy\nTotal,,0,\n';
+    const r = await readPackingDocument(Buffer.from(csv), 'pl.csv');
+    assert.equal(r.totals.pieces, 30);
+    assert.ok(!r.issues.some((i) => i.level === 'WARNING'), JSON.stringify(r.issues));
+  });
+});

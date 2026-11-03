@@ -29,6 +29,7 @@ import { isUncachedFormula } from './extractor.js';
 import { evaluateCell } from './formula-eval.js';
 import { readPdf, groupIntoRows, rowToPositionedCells, findTableBands, type PdfPage } from './pdf-extractor.js';
 import { BadRequestError } from '../../errors.js';
+import { orderSizes as wearingOrder } from './po-lines.js';
 
 // ── Output ──────────────────────────────────────────────────────────────────
 
@@ -58,6 +59,12 @@ export interface PackingCarton {
   /** The document's own row (1-based), and the last one when a mixed carton runs over several. */
   sheetRow: number;
   lastRow: number;
+  /**
+   * More of the carton above, in another colour. A mixed carton on the
+   * factory sheet runs over several rows, each naming its own colour; it is
+   * one carton, so this part adds pieces but not a carton.
+   */
+  continues?: boolean;
 }
 
 export interface PackingTotals {
@@ -479,6 +486,18 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
     // sheet lists a mixed carton one size per row, numbering only the first.
     if (!numberText && cartons.length > 0 && perCarton > 0 && shape === 'ROW_PER_SIZE') {
       const prev = cartons[cartons.length - 1]!;
+      // Each row of a mixed carton names its own colour. Folded into the
+      // carton's first colour, a HUNTER/WHT carton holding LIME/BLACK too
+      // counted every piece as HUNTER/WHT.
+      if (colourCell && prev.colour && colourCell.trim().toUpperCase() !== prev.colour.trim().toUpperCase()) {
+        cartons.push({
+          number: prev.number, count: prev.count, colour: colourCell, style: styleCell ?? prev.style,
+          bySize: { ...bySize }, perCarton, totalPieces: perCarton * prev.count,
+          grossKg: null, netKg: null, measurement: null, sheetRow: r + 1, lastRow: r + 1, continues: true,
+        });
+        rowKinds.set(r, 'CARTON');
+        continue;
+      }
       for (const [s, n] of Object.entries(bySize)) prev.bySize[s] = (prev.bySize[s] ?? 0) + n;
       prev.perCarton += perCarton;
       prev.totalPieces = prev.perCarton * prev.count;
@@ -658,7 +677,9 @@ export async function readPackingDocument(buffer: Buffer, fileName: string, opti
     cartons = read.cartons; printed = read.printed; rowKinds = read.rowKinds;
     const sizesSeen: string[] = read.sizes ?? [];
     if (!read.sizes) for (const c of cartons) for (const s of Object.keys(c.bySize)) if (!sizesSeen.includes(s)) sizesSeen.push(s);
-    table = { headerRow: header.row + 1, shape: read.shape, columns: header.columns, sizes: sizesSeen };
+    // Sizes as they are worn — YXS, YS, YM, YL, S, M, L — not in the order the
+    // rows first happened to mention them (YXS, YL, YS, YM).
+    table = { headerRow: header.row + 1, shape: read.shape, columns: header.columns, sizes: read.sizes ? sizesSeen : wearingOrder(sizesSeen) };
   } else {
     issues.push({ level: 'WARNING', message: 'No carton table was found: no row has a carton column (C/No, Ctn No, From/To or No. of cartons) next to pieces or sizes. The document is shown as it is.' });
   }
@@ -668,7 +689,8 @@ export async function readPackingDocument(buffer: Buffer, fileName: string, opti
   // Totals.
   const totals: PackingTotals = { cartons: 0, pieces: 0, grossKg: null, netKg: null, bySize: {}, byColour: {} };
   for (const c of cartons) {
-    totals.cartons += c.count;
+    // A colour continuing a mixed carton is more pieces, not another carton.
+    if (!c.continues) totals.cartons += c.count;
     totals.pieces += c.totalPieces;
     if (c.grossKg != null) totals.grossKg = (totals.grossKg ?? 0) + c.grossKg * c.count;
     if (c.netKg != null) totals.netKg = (totals.netKg ?? 0) + c.netKg * c.count;
@@ -681,7 +703,13 @@ export async function readPackingDocument(buffer: Buffer, fileName: string, opti
 
   if (printed) {
     const differs = (a: number | null, b: number | null, tol: number) => a != null && b != null && Math.abs(a - b) > tol;
-    if (differs(printed.pieces, totals.pieces, 0.5)) issues.push({ level: 'WARNING', message: `The document's TOTAL row says ${printed.pieces!.toLocaleString('en-US')} pcs, but its cartons add up to ${totals.pieces.toLocaleString('en-US')}.` });
+    // A TOTAL row of nothing beside cartons that hold pieces is a total the
+    // sheet never filled in (or a formula never calculated) — said as that,
+    // not as a disagreement.
+    if (printed.pieces === 0 && totals.pieces > 0) {
+      issues.push({ level: 'INFO', message: `The document's TOTAL row is empty or 0 — its total was not filled in or not calculated. The cartons add up to ${totals.pieces.toLocaleString('en-US')} pcs.` });
+      printed.pieces = null;
+    } else if (differs(printed.pieces, totals.pieces, 0.5)) issues.push({ level: 'WARNING', message: `The document's TOTAL row says ${printed.pieces!.toLocaleString('en-US')} pcs, but its cartons add up to ${totals.pieces.toLocaleString('en-US')}.` });
     if (differs(printed.cartons, totals.cartons, 0.5)) issues.push({ level: 'WARNING', message: `The document's TOTAL row says ${printed.cartons} cartons, but ${totals.cartons} were read.` });
     if (differs(printed.grossKg, totals.grossKg, 0.6)) issues.push({ level: 'WARNING', message: `The document's TOTAL row says ${printed.grossKg} kg gross, but the cartons add up to ${totals.grossKg} kg.` });
     if (differs(printed.netKg, totals.netKg, 0.6)) issues.push({ level: 'WARNING', message: `The document's TOTAL row says ${printed.netKg} kg net, but the cartons add up to ${totals.netKg} kg.` });
@@ -689,7 +717,7 @@ export async function readPackingDocument(buffer: Buffer, fileName: string, opti
   const heavy = cartons.filter((c) => c.grossKg != null && c.netKg != null && c.netKg > c.grossKg);
   if (heavy.length > 0) issues.push({ level: 'WARNING', message: `Net weight is more than gross weight on carton${heavy.length === 1 ? '' : 's'} ${heavy.slice(0, 5).map((c) => c.number).join(', ')}.` });
   const numbers = new Map<string, number>();
-  for (const c of cartons) if (c.number) numbers.set(c.number.toUpperCase(), (numbers.get(c.number.toUpperCase()) ?? 0) + 1);
+  for (const c of cartons) if (c.number && !c.continues) numbers.set(c.number.toUpperCase(), (numbers.get(c.number.toUpperCase()) ?? 0) + 1);
   const repeated = [...numbers.entries()].filter(([, n]) => n > 1).map(([k]) => k);
   if (repeated.length > 0) issues.push({ level: 'WARNING', message: `Carton number${repeated.length === 1 ? '' : 's'} ${repeated.slice(0, 5).join(', ')} appear${repeated.length === 1 ? 's' : ''} more than once.` });
   if (grid.uncached > 0) issues.push({ level: 'WARNING', message: `${grid.uncached} formula cell${grid.uncached === 1 ? ' has' : 's have'} no saved result, so ${grid.uncached === 1 ? 'it reads' : 'they read'} as empty. Open the file in Excel, save it, and attach it again.` });

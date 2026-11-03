@@ -12,8 +12,9 @@
  *
  * Supported: numbers, "text" literals, cell and range references (with an
  * optional sheet name, quoted or not, and $ anchors), + - * / ^, unary minus,
- * parentheses, & between values, and SUM, ROUND, ROUNDUP, ROUNDDOWN, MIN,
- * MAX, AVERAGE, ABS, INT, COUNT.
+ * parentheses, & between values, comparisons (= <> < > <= >=), and SUM,
+ * ROUND, ROUNDUP, ROUNDDOWN, MIN, MAX, AVERAGE, ABS, INT, COUNT, IF, IFERROR,
+ * SUMIF, COUNTIF and SUBTOTAL — the ones a factory packing sheet uses.
  */
 
 import type ExcelJS from 'exceljs';
@@ -107,7 +108,7 @@ class Parser {
   constructor(private readonly src: string, private readonly ws: ExcelJS.Worksheet, private readonly depth: number, private readonly seen: Set<string>) {}
 
   run(): Value {
-    const v = this.concat();
+    const v = this.compare();
     this.space();
     if (this.i < this.src.length) throw new Unsupported(`trailing ${this.src.slice(this.i)}`);
     return this.scalar(v);
@@ -122,6 +123,17 @@ class Parser {
       throw new Unsupported('range as value');
     }
     return a;
+  }
+
+  /** `a = b`, `a <> b`, `a < b` … — 1 for true, 0 for false, as Excel's TRUE/FALSE add up. */
+  private compare(): Arg {
+    const left = this.concat();
+    this.space();
+    const op = /^(<>|<=|>=|=|<|>)/.exec(this.src.slice(this.i))?.[1];
+    if (!op) return left;
+    this.i += op.length;
+    const a = this.scalar(left), b = this.scalar(this.concat());
+    return compareValues(a, b, op) ? 1 : 0;
   }
 
   private concat(): Arg {
@@ -177,7 +189,7 @@ class Parser {
     const c = this.peek();
     if (c === '(') {
       this.i++;
-      const v = this.concat();
+      const v = this.compare();
       if (this.peek() !== ')') throw new Unsupported('paren');
       this.i++;
       return v;
@@ -220,12 +232,28 @@ class Parser {
     }
     if (ws !== this.ws) throw new Unsupported('sheet without reference');
     const fn = this.src.slice(this.i).match(/^([A-Za-z][A-Za-z0-9.]*)\s*\(/);
+    if (fn && /^IFERROR$/i.test(fn[1]!)) {
+      // Lazy: the first argument may be the very error IFERROR exists to catch.
+      this.i += fn[0].length;
+      const start = this.i;
+      let first: Arg;
+      try { first = this.compare(); } catch (e) {
+        if (!(e instanceof Unsupported) || !/DIV\/0|error/.test(e.message)) throw e;
+        this.i = start; this.skipArgument(); first = '#ERR';
+      }
+      if (this.peek() !== ',') throw new Unsupported('iferror');
+      this.i++;
+      const fallback = this.compare();
+      if (this.peek() !== ')') throw new Unsupported('call');
+      this.i++;
+      return first === '#ERR' ? fallback : first;
+    }
     if (fn) {
       this.i += fn[0].length;
       const args: Arg[] = [];
       if (this.peek() !== ')') {
         for (;;) {
-          args.push(this.concat());
+          args.push(this.compare());
           if (this.peek() === ',') { this.i++; continue; }
           break;
         }
@@ -235,6 +263,28 @@ class Parser {
       return this.call(fn[1]!.toUpperCase(), args);
     }
     throw new Unsupported(`token ${rest.slice(0, 10)}`);
+  }
+
+  /** Move past one argument, parentheses and quotes respected. */
+  private skipArgument() {
+    let depth = 0, quoted = false;
+    for (; this.i < this.src.length; this.i++) {
+      const ch = this.src[this.i]!;
+      if (ch === '"') quoted = !quoted;
+      if (quoted) continue;
+      if (ch === '(') depth++;
+      else if (ch === ')') { if (depth === 0) return; depth--; }
+      else if (ch === ',' && depth === 0) return;
+    }
+  }
+
+  /** Every cell of a range, in order, as values. */
+  private cells(a: Arg): Value[] {
+    if (a == null || typeof a !== 'object') return [a];
+    if ((a.r1 - a.r0 + 1) * (a.c1 - a.c0 + 1) > MAX_RANGE_CELLS) throw new Unsupported('range too large');
+    const out: Value[] = [];
+    for (let r = a.r0; r <= a.r1; r++) for (let c = a.c0; c <= a.c1; c++) out.push(cellValue(a.ws, r, c, this.depth, this.seen));
+    return out;
   }
 
   /** Every number an argument holds: a range's numeric cells (text and blanks skipped, as Excel's SUM does). */
@@ -272,8 +322,59 @@ class Parser {
       case 'ROUNDUP': return roundTo(one(0), args.length > 1 ? one(1) : 0, 'up');
       case 'ROUNDDOWN': return roundTo(one(0), args.length > 1 ? one(1) : 0, 'down');
       case 'ABS': return Math.abs(one(0));
+      case 'IF': {
+        const cond = this.scalar(args[0] ?? null);
+        const truthy = typeof cond === 'number' ? cond !== 0 : typeof cond === 'string' ? /^true$/i.test(cond) : false;
+        return this.scalar((truthy ? args[1] : args[2]) ?? (truthy ? 1 : 0));
+      }
+      case 'SUMIF': case 'COUNTIF': {
+        const test = matcher(this.scalar(args[1] ?? null));
+        const keys = this.cells(args[0] ?? null);
+        if (name === 'COUNTIF') return keys.filter(test).length;
+        const sums = args[2] != null ? this.cells(args[2]) : keys;
+        let total = 0;
+        keys.forEach((k, i) => { if (test(k) && typeof sums[i] === 'number') total += sums[i] as number; });
+        return total;
+      }
+      case 'SUBTOTAL': {
+        const kind = one(0) % 100;
+        const n = this.numbers(args.slice(1));
+        if (kind === 9) return n.reduce((a, b) => a + b, 0);
+        if (kind === 1) { if (!n.length) throw new Unsupported('#DIV/0!'); return n.reduce((a, b) => a + b, 0) / n.length; }
+        if (kind === 2 || kind === 3) return n.length;
+        if (kind === 4) return n.length ? Math.max(...n) : 0;
+        if (kind === 5) return n.length ? Math.min(...n) : 0;
+        throw new Unsupported('SUBTOTAL ' + kind);
+      }
       case 'INT': return Math.floor(one(0));
       default: throw new Unsupported(name);
     }
   }
+}
+
+/** Excel's comparison: numbers as numbers, text without regard to case. */
+function compareValues(a: Value, b: Value, op: string): boolean {
+  const an = typeof a === 'number' ? a : a == null || a === '' ? (typeof b === 'number' ? 0 : '') : a;
+  const bn = typeof b === 'number' ? b : b == null || b === '' ? (typeof a === 'number' ? 0 : '') : b;
+  const x = typeof an === 'string' ? an.toLowerCase() : an;
+  const y = typeof bn === 'string' ? bn.toLowerCase() : bn;
+  switch (op) {
+    case '=': return x === y;
+    case '<>': return x !== y;
+    case '<': return x < y;
+    case '>': return x > y;
+    case '<=': return x <= y;
+    default: return x >= y;
+  }
+}
+
+/** A SUMIF / COUNTIF criterion: 5, "Navy", ">0", "<>x". */
+function matcher(criterion: Value): (v: Value) => boolean {
+  if (typeof criterion === 'number') return (v) => typeof v === 'number' && v === criterion;
+  const text = String(criterion ?? '');
+  const m = /^(<>|<=|>=|=|<|>)(.*)$/.exec(text);
+  const op = m ? m[1]! : '=';
+  const raw = m ? m[2]! : text;
+  const n = raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : null;
+  return (v) => compareValues(v ?? (n != null ? null : ''), n ?? raw, op);
 }

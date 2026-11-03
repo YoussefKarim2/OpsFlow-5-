@@ -53,3 +53,21 @@ describe('the formula calculator', () => {
     assert.equal(calc(ws, 'C1'), undefined);
   });
 });
+
+describe('the functions a packing sheet uses', () => {
+  test('IF, comparisons, IFERROR, SUMIF, COUNTIF, SUBTOTAL', () => {
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('P');
+    ws.getRow(1).values = ['1', 'S', 10, 'Navy'];
+    ws.getRow(2).values = [null, 'M', 20, 'Red'];
+    ws.getRow(3).values = ['2', 'S', 5, 'Navy'];
+    const calc2 = (formula: string) => { ws.getCell('Z50').value = { formula } as ExcelJS.CellValue; return evaluateCell(ws, ws.getCell('Z50')); };
+    assert.deepEqual(calc2('IF(C1>5,"big","small")'), { value: 'big' });
+    assert.deepEqual(calc2('C1=10'), { value: 1 });
+    assert.deepEqual(calc2('IFERROR(C1/0,0)'), { value: 0 });
+    assert.deepEqual(calc2('SUMIF(D1:D3,"Navy",C1:C3)'), { value: 15 });
+    assert.deepEqual(calc2('SUMIF(C1:C3,">8")'), { value: 30 });
+    assert.deepEqual(calc2('COUNTIF(D1:D3,"navy")'), { value: 2 });
+    assert.deepEqual(calc2('SUBTOTAL(9,C1:C3)'), { value: 35 });
+  });
+});
