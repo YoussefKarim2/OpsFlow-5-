@@ -121,6 +121,8 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
 
   return (
     <div className="space-y-4 p-5">
+      {/* The latest packing list's cartons first, read and shown without a click. */}
+      <PackingFileCartonsInline orderId={order.id} />
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         {/* The same produced figure the server checks shipments against: the
             in-line ledger or sewing, whichever is further along. */}
@@ -397,7 +399,7 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
         documentType="PACKING_LIST"
         stageKey="PACKING"
         title="Packing files"
-        detail="Packing lists and carton photographs for this order. A packing list attached as Excel, CSV or PDF is read and its cartons shown below."
+        detail="Packing lists and carton photographs for this order. A packing list attached as Excel, CSV or PDF is read and its cartons shown at the top of this tab."
         rowAction={{
           label: 'Layout',
           title: 'Show what this packing file says',
@@ -414,8 +416,6 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
         fileName={layoutOf?.fileName}
         onClose={() => setLayoutOf(null)}
       />
-      {/* The latest packing list's cartons, read and shown without a click. */}
-      <PackingFileCartonsInline orderId={order.id} />
       {/* Shipping paperwork is filed separately: it belongs to the shipment,
           not the packing, and is what a forwarder asks for by name. */}
       <AttachmentsPanel
