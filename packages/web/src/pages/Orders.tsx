@@ -74,7 +74,8 @@ export function OrdersPage() {
         <div className="flex flex-wrap items-center gap-2 border-b border-ink-200 p-3">
           <input
             value={search} onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search PO, order name, style, client, coordinator or external reference…"
+            placeholder="Search PO, order, style, client, coordinator…"
+            title="Search by PO, order name, style, client, coordinator or external reference"
             className="input max-w-md flex-1"
           />
           <button

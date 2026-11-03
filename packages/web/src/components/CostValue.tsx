@@ -86,7 +86,9 @@ export function CostField({
                 tone !== 'input' && !overridden && 'border-dashed border-ink-200 bg-ink-50/60',
                 overridden && 'border-violet-400 bg-violet-50 pr-8 text-violet-900')}
               value={value !== '' ? value : editableText(calculated, kind, places)}
-              placeholder={unknown ? waiting ?? NOT_CALCULATED : ''}
+              // What it waits for is written under the box; inside it, cut to
+              // "Waiting for the shipped qu", it said nothing.
+              placeholder={unknown ? NOT_CALCULATED : ''}
               onChange={(e) => {
                 const next = e.target.value;
                 if (kind !== 'text' && !isTypeableNumber(next)) return;

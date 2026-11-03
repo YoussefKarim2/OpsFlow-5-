@@ -149,7 +149,7 @@ export function MaterialsPage() {
                 <option value="OVER_RESERVED">Over-reserved</option>
               </ComboSelect>
               <input
-                className="input w-52"
+                className="input w-60"
                 placeholder="Search name, code, supplier…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}

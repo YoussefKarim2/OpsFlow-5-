@@ -556,7 +556,7 @@ function CompanyPanel() {
         <Field label="Email"><input className="input" type="email" value={val('email')} onChange={(e) => set('email', e.target.value)} /></Field>
         <Field label="Website"><input className="input" value={val('website')} onChange={(e) => set('website', e.target.value)} /></Field>
         <Field label="Phone"><input className="input" value={val('phone')} onChange={(e) => set('phone', e.target.value)} /></Field>
-        <Field label="Default payment terms" hint="Copied onto each new document; editable there."><input className="input" value={val('paymentTerms')} onChange={(e) => set('paymentTerms', e.target.value)} placeholder="COD · 50% in advance, balance before shipping" /></Field>
+        <Field label="Default payment terms" hint="Copied onto each new document; editable there."><input className="input" value={val('paymentTerms')} onChange={(e) => set('paymentTerms', e.target.value)} placeholder="e.g. 50% advance, rest on shipping" /></Field>
         <Field label="QIZ Ref. No." hint="In the exporter block of every document."><input className="input" value={val('qizRef')} onChange={(e) => set('qizRef', e.target.value)} placeholder="259" /></Field>
         <Field label="Signed by" hint="Printed under “For and in behalf of …”."><input className="input" value={val('signatory')} onChange={(e) => set('signatory', e.target.value)} placeholder="Dr. Amr Sheha" /></Field>
         <Field label="Company stamp" hint="PNG or JPEG; printed by the signature.">
