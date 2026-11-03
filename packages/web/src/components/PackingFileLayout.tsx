@@ -54,7 +54,9 @@ export function PackingFileLayoutModal({
     queryFn: () => api.orders.matrix(orderId),
     enabled: open,
   });
-  const [view, setView] = useState<'layout' | 'document'>('layout');
+  // Each carton and what is in it, first: that is what an imported packing
+  // list is for. The table, the details and the file as it is follow.
+  const [view, setView] = useState<'cartons' | 'layout' | 'document'>('cartons');
 
   return (
     <Modal
@@ -70,7 +72,7 @@ export function PackingFileLayoutModal({
           <div className="space-y-4">
             <Summary data={data} />
             <div className="flex gap-1 rounded-md bg-ink-100 p-0.5 text-sm" role="tablist">
-              {([['layout', 'Layout'], ['document', 'As in the file']] as const).map(([k, label]) => (
+              {([['cartons', 'Cartons'], ['layout', 'Table and details'], ['document', 'As in the file']] as const).map(([k, label]) => (
                 <button
                   key={k}
                   type="button"
@@ -83,12 +85,16 @@ export function PackingFileLayoutModal({
                 </button>
               ))}
             </div>
-            {view === 'layout' ? (
+            <Issues data={data} />
+            {view === 'cartons' ? (
               <>
-                <Issues data={data} />
+                <CartonCards data={data} />
+                <AgainstOrder data={data} matrix={matrix} />
+              </>
+            ) : view === 'layout' ? (
+              <>
                 <Details data={data} />
                 <Cartons data={data} />
-                <AgainstOrder data={data} matrix={matrix} />
               </>
             ) : <DocumentPreview data={data} />}
           </div>
@@ -131,10 +137,24 @@ function Summary({ data }: { data: PackingFileLayoutDto }) {
   );
 }
 
+/**
+ * What needs attention, and nothing else in the way. Warnings — figures that
+ * do not add up, cells that read as empty — are shown; notes about how the
+ * file was read sit behind one quiet link.
+ */
 function Issues({ data }: { data: PackingFileLayoutDto }) {
-  const issues = data.layout.issues;
-  if (issues.length === 0) return null;
+  const [showNotes, setShowNotes] = useState(false);
+  const warnings = data.layout.issues.filter((i) => i.level === 'WARNING');
+  const notes = data.layout.issues.filter((i) => i.level !== 'WARNING');
+  if (warnings.length === 0 && notes.length === 0) return null;
+  const issues = [...warnings, ...(showNotes ? notes : [])];
   return (
+    <div className="space-y-1">
+    {notes.length > 0 && (
+      <button type="button" className="text-xs text-ink-500 underline-offset-2 hover:text-ink-800 hover:underline" onClick={() => setShowNotes(!showNotes)}>
+        {showNotes ? 'Hide reading notes' : `Reading notes (${notes.length})`}
+      </button>
+    )}
     <ul className="space-y-1">
       {issues.map((i, n) => (
         <li
@@ -147,6 +167,90 @@ function Issues({ data }: { data: PackingFileLayoutDto }) {
         </li>
       ))}
     </ul>
+    </div>
+  );
+}
+
+/**
+ * One card per carton: its number, and every colour in it with its sizes and
+ * pieces. A mixed carton — several colours on the rows under one number — is
+ * one card, as it is one box.
+ */
+function CartonCards({ data }: { data: PackingFileLayoutDto }) {
+  const { layout, match } = data;
+  const sizes = layout.table?.sizes ?? [];
+  type Part = (typeof layout.cartons)[number] & { index: number };
+  const boxes: Array<{ head: Part; parts: Part[] }> = [];
+  layout.cartons.forEach((c, index) => {
+    const part = { ...c, index };
+    if (c.continues && boxes.length > 0) boxes[boxes.length - 1]!.parts.push(part);
+    else boxes.push({ head: part, parts: [part] });
+  });
+  if (boxes.length === 0) {
+    return <EmptyState title="No cartons were found in this file" detail="Open “As in the file” to see what it holds." />;
+  }
+  const sizeName = (s: string) => (match.sizes[s] && match.sizes[s] !== s ? match.sizes[s]! : s);
+  const order = (bySize: Record<string, number>) => [
+    ...sizes.filter((s) => bySize[s]),
+    ...Object.keys(bySize).filter((s) => !sizes.includes(s) && bySize[s]),
+  ];
+  return (
+    <Card>
+      <CardHeader
+        title="Cartons"
+        subtitle={`${fmt(layout.totals.cartons, 2)} carton${layout.totals.cartons === 1 ? '' : 's'} · ${fmt(layout.totals.pieces)} pcs`
+          + (boxes.some((b) => b.parts.length > 1) ? ' · mixed cartons hold several colours' : '')}
+      />
+      <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
+        {boxes.map(({ head, parts }) => {
+          const pieces = parts.reduce((a, p) => a + p.totalPieces, 0);
+          const perBox = parts.reduce((a, p) => a + p.perCarton, 0);
+          return (
+            <div key={head.index} className="rounded-md border border-ink-200 bg-white">
+              <div className="flex items-baseline justify-between gap-2 border-b border-ink-100 bg-ink-50 px-3 py-2">
+                <span className="text-sm font-semibold text-ink-900">
+                  {head.number ? `Carton ${head.number}` : (head.style ?? 'Cartons')}
+                  {head.count > 1 && <span className="ml-1.5 text-xs font-normal text-ink-500">× {fmt(head.count, 2)} cartons</span>}
+                </span>
+                <span className="tnum text-sm font-semibold text-ink-900">
+                  {fmt(head.count > 1 ? perBox : pieces, 2)} pcs{head.count > 1 && <span className="font-normal text-ink-500"> each</span>}
+                </span>
+              </div>
+              <ul className="divide-y divide-ink-100">
+                {parts.map((p) => (
+                  <li key={p.index} className="px-3 py-2">
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span className={clsx('text-sm font-medium', p.colour ? 'text-ink-800' : 'text-amber-700')}>
+                        {p.colour ?? 'Colour not stated'}
+                      </span>
+                      <span className="tnum text-xs text-ink-500">{fmt(p.perCarton, 2)} pcs</span>
+                    </div>
+                    {p.colour && match.cartonColours[p.index] && match.cartonColours[p.index] !== p.colour && (
+                      <div className="text-2xs text-ink-500">{match.cartonColours[p.index]}</div>
+                    )}
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {order(p.bySize).map((s) => (
+                        <span key={s} className="rounded bg-ink-100 px-1.5 py-0.5 text-xs text-ink-700">
+                          {sizeName(s)} <strong className="tnum text-ink-900">{fmt(p.bySize[s], 2)}</strong>
+                        </span>
+                      ))}
+                      {Object.keys(p.bySize).length === 0 && <span className="text-xs text-ink-400">No sizes given</span>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              {(head.grossKg != null || head.netKg != null || head.measurement) && (
+                <div className="flex flex-wrap gap-x-3 border-t border-ink-100 px-3 py-1.5 text-2xs text-ink-500">
+                  {head.grossKg != null && <span>G.W. {fmt(head.grossKg, 2)} kg</span>}
+                  {head.netKg != null && <span>N.W. {fmt(head.netKg, 2)} kg</span>}
+                  {head.measurement && <span>{head.measurement}</span>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }
 
