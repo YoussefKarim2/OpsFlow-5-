@@ -860,20 +860,7 @@ export async function readPackingDocument(buffer: Buffer, fileName: string, opti
 
   const { details, titles, detailRows } = readDetails(grid, header ? header.row - (header.twoRow ? 1 : 0) : Math.min(grid.rows.length, 40));
 
-  // Totals.
-  const totals: PackingTotals = { cartons: 0, pieces: 0, grossKg: null, netKg: null, bySize: {}, byColour: {} };
-  for (const c of cartons) {
-    // A colour continuing a mixed carton is more pieces, not another carton.
-    if (!c.continues) totals.cartons += c.count;
-    totals.pieces += c.totalPieces;
-    if (c.grossKg != null) totals.grossKg = (totals.grossKg ?? 0) + c.grossKg * c.count;
-    if (c.netKg != null) totals.netKg = (totals.netKg ?? 0) + c.netKg * c.count;
-    for (const [s, n] of Object.entries(c.bySize)) totals.bySize[s] = (totals.bySize[s] ?? 0) + n * c.count;
-    const k = c.colour ?? '—';
-    totals.byColour[k] = (totals.byColour[k] ?? 0) + c.totalPieces;
-  }
-  const round = (n: number | null) => (n == null ? null : Math.round(n * 1000) / 1000);
-  totals.grossKg = round(totals.grossKg); totals.netKg = round(totals.netKg);
+  const totals = totalsOf(cartons);
 
   if (printed) {
     const differs = (a: number | null, b: number | null, tol: number) => a != null && b != null && Math.abs(a - b) > tol;
@@ -929,6 +916,24 @@ export async function readPackingDocument(buffer: Buffer, fileName: string, opti
     preview: buildPreview(grid, header?.row ?? null, header?.twoRow ? header.row - 1 : null, rowKinds, detailRows),
     issues,
   };
+}
+
+/** What the cartons add up to: a colour continuing a mixed carton is more pieces, not another carton. */
+export function totalsOf(cartons: readonly PackingCarton[]): PackingTotals {
+  const totals: PackingTotals = { cartons: 0, pieces: 0, grossKg: null, netKg: null, bySize: {}, byColour: {} };
+  for (const c of cartons) {
+    if (!c.continues) totals.cartons += c.count;
+    totals.pieces += c.totalPieces;
+    if (c.grossKg != null) totals.grossKg = (totals.grossKg ?? 0) + c.grossKg * c.count;
+    if (c.netKg != null) totals.netKg = (totals.netKg ?? 0) + c.netKg * c.count;
+    for (const [s, n] of Object.entries(c.bySize)) totals.bySize[s] = (totals.bySize[s] ?? 0) + n * c.count;
+    const k = c.colour ?? '—';
+    totals.byColour[k] = (totals.byColour[k] ?? 0) + c.totalPieces;
+  }
+  const round = (n: number | null) => (n == null ? null : Math.round(n * 1000) / 1000);
+  totals.grossKg = round(totals.grossKg); totals.netKg = round(totals.netKg);
+  totals.pieces = Math.round(totals.pieces * 1000) / 1000;
+  return totals;
 }
 
 // ── The preview ─────────────────────────────────────────────────────────────

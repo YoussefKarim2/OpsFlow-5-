@@ -1505,6 +1505,9 @@ model Attachment {
   checksum            String?
   uploadedById        String
   createdAt           DateTime           @default(now())
+  /// A packing file's cartons as corrected by hand: { cartons, editedAt, editedBy }.
+  /// Null when the cartons are what the file says.
+  packingEdit         Json?
   approval            Approval?          @relation(fields: [approvalId], references: [id], onDelete: Cascade)
   customInstruction   CustomInstruction? @relation(fields: [customInstructionId], references: [id], onDelete: Cascade)
   externalOperation   ExternalOperation? @relation(fields: [externalOperationId], references: [id], onDelete: Cascade)

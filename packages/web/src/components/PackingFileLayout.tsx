@@ -11,10 +11,12 @@
  */
 
 import { Fragment, useMemo, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { AlertTriangle, Info } from 'lucide-react';
-import { api, type PackingFileLayoutDto } from '../lib/api';
-import { Modal, Card, CardHeader, EmptyState, ErrorNote, Spinner, clsx } from './ui';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { AlertTriangle, Info, Pencil, RotateCcw } from 'lucide-react';
+import { api, ApiError, type PackingFileLayoutDto } from '../lib/api';
+import { useAuth } from '../lib/auth';
+import { PackingCartonEditor } from './PackingCartonEditor';
+import { Modal, Card, CardHeader, EmptyState, ErrorNote, Spinner, clsx, useToast } from './ui';
 
 const SHAPE_LABEL: Record<NonNullable<PackingFileLayoutDto['layout']['table']>['shape'], string> = {
   ROW_PER_SIZE: 'one row per size, a mixed carton continuing on the rows below it',
@@ -88,7 +90,7 @@ export function PackingFileLayoutModal({
             <Issues data={data} />
             {view === 'cartons' ? (
               <>
-                <CartonCards data={data} />
+                <CartonCards data={data} orderId={orderId} attachmentId={attachmentId!} />
                 <AgainstOrder data={data} matrix={matrix} />
               </>
             ) : view === 'layout' ? (
@@ -167,7 +169,7 @@ export function PackingFileCartonsInline({ orderId }: { orderId: string }) {
             <>
               <Summary data={data} />
               <Issues data={data} />
-              <CartonCards data={data} />
+              <CartonCards data={data} orderId={orderId} attachmentId={current.id} />
               <AgainstOrder data={data} matrix={matrix} />
             </>
           ) : null}
@@ -249,8 +251,17 @@ function Issues({ data }: { data: PackingFileLayoutDto }) {
  * pieces. A mixed carton — several colours on the rows under one number — is
  * one card, as it is one box.
  */
-function CartonCards({ data }: { data: PackingFileLayoutDto }) {
+function CartonCards({ data, orderId, attachmentId }: { data: PackingFileLayoutDto; orderId: string; attachmentId: string }) {
   const { layout, match } = data;
+  const { can } = useAuth();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [editing, setEditing] = useState(false);
+  const reset = useMutation({
+    mutationFn: () => api.packing.resetFileCartons(orderId, attachmentId),
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: ['packing-file-layout', orderId, attachmentId] }); toast.success('Back to what the file says'); },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : 'Could not go back to the file'),
+  });
   const sizes = layout.table?.sizes ?? [];
   type Part = (typeof layout.cartons)[number] & { index: number };
   const boxes: Array<{ head: Part; parts: Part[] }> = [];
@@ -259,10 +270,42 @@ function CartonCards({ data }: { data: PackingFileLayoutDto }) {
     if (c.continues && boxes.length > 0) boxes[boxes.length - 1]!.parts.push(part);
     else boxes.push({ head: part, parts: [part] });
   });
-  if (boxes.length === 0) {
-    return <EmptyState title="No cartons were found in this file" detail="Open “As in the file” to see what it holds." />;
-  }
   const sizeName = (s: string) => (match.sizes[s] && match.sizes[s] !== s ? match.sizes[s]! : s);
+  const canEdit = can('packing:write');
+  const actions = canEdit && !editing && (
+    <div className="flex shrink-0 gap-1.5">
+      {data.edited && (
+        <button
+          type="button"
+          className="btn-ghost btn-sm"
+          title="Drop the changes and show what the file says"
+          disabled={reset.isPending}
+          onClick={() => { if (window.confirm('Drop the changes made to these cartons and show what the file says?')) reset.mutate(); }}
+        >
+          <RotateCcw className="mr-1 h-3.5 w-3.5" /> Back to the file
+        </button>
+      )}
+      <button type="button" className="btn-secondary btn-sm" onClick={() => setEditing(true)}>
+        <Pencil className="mr-1 h-3.5 w-3.5" /> Edit cartons
+      </button>
+    </div>
+  );
+  if (editing) {
+    return (
+      <Card>
+        <CardHeader title="Editing the cartons" subtitle="The file itself is not changed; these corrections are kept beside it." />
+        <PackingCartonEditor orderId={orderId} attachmentId={attachmentId} data={data} sizeName={sizeName} onDone={() => setEditing(false)} />
+      </Card>
+    );
+  }
+  if (boxes.length === 0) {
+    return (
+      <Card>
+        <CardHeader title="Cartons" action={actions} />
+        <EmptyState title="No cartons were found in this file" detail={canEdit ? 'Press “Edit cartons” to type them in, or open “As in the file” to see what it holds.' : 'Open “As in the file” to see what it holds.'} />
+      </Card>
+    );
+  }
   const order = (bySize: Record<string, number>) => [
     ...sizes.filter((s) => bySize[s]),
     ...Object.keys(bySize).filter((s) => !sizes.includes(s) && bySize[s]),
@@ -272,7 +315,9 @@ function CartonCards({ data }: { data: PackingFileLayoutDto }) {
       <CardHeader
         title="Cartons"
         subtitle={`${fmt(layout.totals.cartons, 2)} carton${layout.totals.cartons === 1 ? '' : 's'} · ${fmt(layout.totals.pieces)} pcs`
-          + (boxes.some((b) => b.parts.length > 1) ? ' · mixed cartons hold several colours' : '')}
+          + (boxes.some((b) => b.parts.length > 1) ? ' · mixed cartons hold several colours' : '')
+          + (data.edited ? ` · edited by ${data.edited.by}` : '')}
+        action={actions}
       />
       <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
         {boxes.map(({ head, parts }) => {

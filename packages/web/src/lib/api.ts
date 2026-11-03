@@ -67,6 +67,15 @@ export interface PackingFileLayoutDto {
     };
     issues: Array<{ level: 'INFO' | 'WARNING'; message: string }>;
   };
+  /** Set when the cartons were corrected by hand; they are shown in place of the file's reading. */
+  edited: { at: string; by: string } | null;
+}
+
+/** One line of a hand-corrected packing file: a carton, or (`continues`) another colour in the carton above. */
+export interface EditedPackingCarton {
+  number: string; count: number; colour: string | null; style?: string | null;
+  bySize: Record<string, number>; grossKg: number | null; netKg: number | null; measurement: string | null;
+  continues?: boolean;
 }
 
 export class ApiError extends Error {
@@ -1143,6 +1152,11 @@ export const api = {
     /** What a packing file attached to the order says, read back as a layout. Writes nothing. */
     fileLayout: (orderId: string, attachmentId: string) =>
       get<PackingFileLayoutDto>(`/packing/${orderId}/files/${attachmentId}/layout`),
+    /** Keep hand corrections to a packing file's cartons. `base` is the edit they started from (null: the file's reading). */
+    saveFileCartons: (orderId: string, attachmentId: string, cartons: EditedPackingCarton[], base: string | null) =>
+      put<{ editedAt: string }>(`/packing/${orderId}/files/${attachmentId}/cartons`, { cartons, base }),
+    /** Drop the corrections: the cartons are what the file says again. */
+    resetFileCartons: (orderId: string, attachmentId: string) => del(`/packing/${orderId}/files/${attachmentId}/cartons`),
     createList: (orderId: string, body?: unknown) => post<{ id: string }>(`/packing/${orderId}`, body ?? {}),
     addCarton: (listId: string, body: unknown) => post<{ id: string }>(`/packing/list/${listId}/cartons`, body),
     /** A whole size grid in one save, rather than one request per size. */

@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { QtyLedger } from '@opsflow/shared';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
@@ -15,7 +15,7 @@ import { shipmentDates } from '../services/shipment-dates.js';
 import { dateInput } from '../util/date-input.js';
 import { cairoDay } from '../util/cairo-day.js';
 import { storage } from '../services/storage/index.js';
-import { readPackingDocument, matchPackingToOrder } from '../services/import/packing-reader.js';
+import { readPackingDocument, matchPackingToOrder, totalsOf, type PackingCarton, type PackingLayout } from '../services/import/packing-reader.js';
 import { sizeAliasFor, inWearingOrder } from '../services/import/po-lines.js';
 import { optionalDate } from '../util/form-input.js';
 
@@ -149,18 +149,54 @@ packingRouter.post('/:orderId', requirePermission('packing:write'), asyncHandler
   res.status(201).json({ id: list.id });
 }));
 
+/** A packing file's hand-corrected cartons, as kept on the attachment. */
+interface PackingEdit { cartons: PackingCarton[]; editedAt: string; editedBy: string }
+
+const packingEditOf = (v: Prisma.JsonValue | null): PackingEdit | null =>
+  v && typeof v === 'object' && !Array.isArray(v) && Array.isArray((v as Record<string, unknown>).cartons) ? (v as unknown as PackingEdit) : null;
+
+/**
+ * The cartons as corrected by hand, in place of the file's reading: the
+ * totals are worked out again, and the notes about how the file was read give
+ * way to one saying it was edited — they were about rows no longer shown.
+ */
+function withEdit(layout: PackingLayout, edit: PackingEdit): PackingLayout {
+  const cartons = edit.cartons;
+  const totals = totalsOf(cartons);
+  const sizes = [...(layout.table?.sizes ?? [])];
+  for (const c of cartons) for (const s of Object.keys(c.bySize)) if (!sizes.includes(s)) sizes.push(s);
+  const issues: PackingLayout['issues'] = [{
+    level: 'INFO',
+    message: `These cartons were edited by ${edit.editedBy} on ${edit.editedAt.slice(0, 10)}; they replace what the file says. "Back to the file" shows the file's own reading again.`,
+  }];
+  const p = layout.printedTotals;
+  if (p?.pieces != null && p.pieces > 0 && Math.abs(p.pieces - totals.pieces) > 0.5) {
+    issues.push({ level: 'WARNING', message: `The file's TOTAL row says ${p.pieces.toLocaleString('en-US')} pcs; the edited cartons add up to ${totals.pieces.toLocaleString('en-US')}.` });
+  }
+  return {
+    ...layout,
+    table: layout.table ? { ...layout.table, sizes } : { headerRow: 0, shape: 'ROW_PER_CARTON', columns: [], sizes },
+    cartons, totals, issues,
+  };
+}
+
+async function packingAttachment(orderId: string, attachmentId: string) {
+  const attachment = await prisma.attachment.findFirst({
+    where: { id: attachmentId, orderId },
+    select: { id: true, fileName: true, storageKey: true, packingEdit: true },
+  });
+  if (!attachment) throw new NotFoundError('File');
+  return attachment;
+}
+
 /**
  * The layout of a packing file attached to the order: its details, its carton
  * table as read, the totals, and the document itself as it looks — so the
  * person who attached it sees what it says before anything is typed from it.
- * Reads only; nothing is written.
+ * Cartons corrected by hand are shown in place of the reading.
  */
 packingRouter.get('/:orderId/files/:attachmentId/layout', requirePermission('packing:read'), asyncHandler(async (req, res) => {
-  const attachment = await prisma.attachment.findFirst({
-    where: { id: req.params.attachmentId, orderId: req.params.orderId },
-    select: { id: true, fileName: true, storageKey: true },
-  });
-  if (!attachment) throw new NotFoundError('File');
+  const attachment = await packingAttachment(req.params.orderId, req.params.attachmentId);
   if (!(await storage.exists(attachment.storageKey))) {
     throw new ValidationError(`The contents of "${attachment.fileName}" are no longer stored. Attach it again to read it.`);
   }
@@ -180,9 +216,98 @@ packingRouter.get('/:orderId/files/:attachmentId/layout', requirePermission('pac
   const colourNames = colours.map((c) => c.color.name);
 
   const buffer = await storage.get(attachment.storageKey);
-  const layout = await readPackingDocument(buffer, attachment.fileName, { orderSizes: sizeNames });
+  const read = await readPackingDocument(buffer, attachment.fileName, { orderSizes: sizeNames });
+  const edit = packingEditOf(attachment.packingEdit);
+  const layout = edit ? withEdit(read, edit) : read;
   const match = matchPackingToOrder(layout, { colours: colourNames, sizes: sizeNames }, sizeAliasFor);
-  res.json({ fileName: attachment.fileName, layout, match, order: { colours: colourNames, sizes: sizeNames } });
+  res.json({
+    fileName: attachment.fileName, layout, match, order: { colours: colourNames, sizes: sizeNames },
+    edited: edit ? { at: edit.editedAt, by: edit.editedBy } : null,
+  });
+}));
+
+const editedCartonSchema = z.object({
+  number: z.string().trim().max(40),
+  count: z.number().positive().max(100_000),
+  colour: z.string().trim().max(120).nullable(),
+  style: z.string().trim().max(120).nullable().optional(),
+  bySize: z.record(z.string().trim().min(1).max(40), z.number().nonnegative().max(1_000_000)),
+  grossKg: z.number().nonnegative().max(100_000).nullable(),
+  netKg: z.number().nonnegative().max(100_000).nullable(),
+  measurement: z.string().trim().max(80).nullable(),
+  continues: z.boolean().optional(),
+});
+
+/**
+ * Correct a packing file's cartons by hand. The whole list is sent and kept;
+ * the file itself is never changed. `base` is the edit the person started
+ * from (null for the file's reading), so two people correcting the same file
+ * do not silently overwrite each other.
+ */
+packingRouter.put('/:orderId/files/:attachmentId/cartons', requirePermission('packing:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const input = z.object({
+    cartons: z.array(editedCartonSchema).max(5000),
+    base: z.string().nullable(),
+  }).parse(req.body ?? {});
+  const attachment = await packingAttachment(req.params.orderId, req.params.attachmentId);
+  const current = packingEditOf(attachment.packingEdit);
+  if ((current?.editedAt ?? null) !== input.base) {
+    throw new ConflictError(current
+      ? `${current.editedBy} changed these cartons while you were editing. Your changes were not saved — look again and redo them.`
+      : 'These cartons went back to the file\'s reading while you were editing. Your changes were not saved — look again and redo them.');
+  }
+  if (input.cartons.length > 0 && input.cartons[0]!.continues) throw new ValidationError('The first line must be a carton, not more of one above it.');
+
+  const cartons: PackingCarton[] = [];
+  let head: PackingCarton | null = null;
+  input.cartons.forEach((c, i) => {
+    const bySize = Object.fromEntries(Object.entries(c.bySize).filter(([, n]) => n > 0));
+    const perCarton = Math.round(Object.values(bySize).reduce((a, b) => a + b, 0) * 1000) / 1000;
+    // A colour continuing a mixed carton has the carton's number and count.
+    const count = c.continues && head ? head.count : c.count;
+    const carton: PackingCarton = {
+      number: c.continues && head ? head.number : c.number,
+      count,
+      colour: c.colour || null,
+      style: c.style || null,
+      bySize,
+      perCarton,
+      totalPieces: Math.round(perCarton * count * 1000) / 1000,
+      grossKg: c.continues ? null : c.grossKg,
+      netKg: c.continues ? null : c.netKg,
+      measurement: c.continues ? null : c.measurement || null,
+      sheetRow: i + 1,
+      lastRow: i + 1,
+      ...(c.continues ? { continues: true } : {}),
+    };
+    if (!c.continues) head = carton;
+    cartons.push(carton);
+  });
+  const edit: PackingEdit = { cartons, editedAt: new Date().toISOString(), editedBy: actor.name };
+  await prisma.attachment.update({ where: { id: attachment.id }, data: { packingEdit: edit as unknown as Prisma.InputJsonValue } });
+  const totals = totalsOf(cartons);
+  await logActivity({
+    orderId: req.params.orderId, actorId: actor.id, actorName: actor.name,
+    action: 'PACKING_FILE_EDITED',
+    summary: `edited the cartons of ${attachment.fileName}: ${totals.cartons.toLocaleString('en-US')} cartons, ${totals.pieces.toLocaleString('en-US')} pcs`,
+    entityType: 'Attachment', entityId: attachment.id,
+  });
+  res.json({ editedAt: edit.editedAt });
+}));
+
+/** Drop the hand corrections: the cartons are what the file says again. */
+packingRouter.delete('/:orderId/files/:attachmentId/cartons', requirePermission('packing:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const attachment = await packingAttachment(req.params.orderId, req.params.attachmentId);
+  if (!attachment.packingEdit) { res.json({ ok: true }); return; }
+  await prisma.attachment.update({ where: { id: attachment.id }, data: { packingEdit: Prisma.DbNull } });
+  await logActivity({
+    orderId: req.params.orderId, actorId: actor.id, actorName: actor.name,
+    action: 'PACKING_FILE_EDIT_CLEARED', summary: `put the cartons of ${attachment.fileName} back to what the file says`,
+    entityType: 'Attachment', entityId: attachment.id,
+  });
+  res.json({ ok: true });
 }));
 
 const cartonSchema = z.object({
