@@ -823,7 +823,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
                   other row in this table does. */}
               <tr className="bg-ink-50">
                 <td className="td font-semibold text-ink-900">C.M</td>
-                <td className="td text-ink-600">Production — daily cost ÷ productivity rate, per piece passed</td>
+                <td className="td min-w-[12rem] whitespace-normal text-ink-600">Production — daily cost ÷ productivity rate, per piece passed</td>
                 <td className="td" />
                 <td className="td tnum text-right">
                   {live.firstDegreeQty == null ? '—' : fmtNumber(live.firstDegreeQty)}
@@ -838,14 +838,16 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
                     kind="money" onChange={setOverride('cmCostUsd')} onRevert={revert('cmCostUsd')}
                   />
                 </td>
-                <td className="td tnum text-right">{fmtPct(pctOf(live.cmCostUsd, total), 2)}</td>
+                <td className="td tnum text-right">{pctCell(pctOf(live.cmCostUsd, total))}</td>
                 {editing && <td className="td" />}
               </tr>
               {/* The same C.M at the Production step's target, for comparison:
                   what the pieces would have cost had the line made its target. */}
               <tr className="bg-white">
                 <td className="td" />
-                <td className="td text-xs text-ink-500">
+                {/* These two descriptions wrap: kept on one line, they set the
+                    Item column's width and pushed Cost and % off the card. */}
+                <td className="td min-w-[12rem] whitespace-normal text-xs text-ink-500">
                   At the target{live.targetPerDay != null ? ` of ${fmtNumber(live.targetPerDay)} pcs/day` : ''} — for comparison, not in the total
                   {live.targetCmCostUsd == null && live.waiting.targetCmCostUsd && (
                     <span className="block text-2xs text-amber-700">{live.waiting.targetCmCostUsd}</span>
@@ -1075,6 +1077,17 @@ function RowBlock({
   );
 }
 
+/**
+ * A row's share of the total, or a dash when there is none to work out. Every
+ * empty row reading "Not calculated" in this narrow column made the table too
+ * wide for the card and pushed Cost and % off its edge.
+ */
+function pctCell(pct: number | null | undefined) {
+  return pct == null || !Number.isFinite(pct)
+    ? <span className="text-ink-400" title={NOT_CALCULATED}>—</span>
+    : fmtPct(pct, 2);
+}
+
 function EditableRow({
   caption, row, total, editing, onEdit, onEditNumber, onDelete, cost, countedIn,
 }: {
@@ -1138,7 +1151,7 @@ function EditableRow({
       <td className="td tnum text-right">
         {countedIn
           ? <span className="text-2xs text-ink-400" title={`Counted in the ${countedIn} row`}>in {countedIn}</span>
-          : fmtPct(pctOf(cost, total), 2)}
+          : pctCell(pctOf(cost, total))}
       </td>
       {editing && (
         <td className="td text-right">
@@ -1193,7 +1206,7 @@ function SubtotalRow({
           className="font-semibold" onChange={onChange} onRevert={onRevert}
         />
       </td>
-      <td className="td tnum text-right font-semibold">{fmtPct(pctOf(cost, total), 2)}</td>
+      <td className="td tnum text-right font-semibold">{pctCell(pctOf(cost, total))}</td>
       {editing && <td className="td" />}
     </tr>
   );
@@ -1231,7 +1244,7 @@ function OutsideRow({
           onChange={onChange}
         />
       </td>
-      <td className="td tnum text-right">{fmtPct(pctOf(cost, total), 2)}</td>
+      <td className="td tnum text-right">{pctCell(pctOf(cost, total))}</td>
       {editing && <td className="td" />}
     </tr>
   );

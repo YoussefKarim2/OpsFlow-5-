@@ -197,7 +197,9 @@ export function ExternalTab({ order, onJump }: {
 
         {headErr && <div className="px-4 pt-3"><p className="text-sm text-red-700">{headErr}</p></div>}
 
-        <div className="grid gap-4 p-4 lg:grid-cols-2">
+        {/* Two columns only where each still leaves its fields room beside a
+            label: side by side on a laptop, a fabric name was cut to "Tranmm". */}
+        <div className="grid gap-4 p-4 xl:grid-cols-2">
           <dl className="space-y-1.5">
             <SheetField label="PO no." editing={headEditing} value={head.poNumber} display={order.poNumber} mono
               onChange={(v) => setHead({ ...head, poNumber: v })} />
@@ -410,7 +412,7 @@ function SheetRow({
       'flex items-baseline gap-3 border-b border-ink-100 py-1 last:border-0',
       highlight && 'rounded bg-amber-50 px-1.5',
     )}>
-      <dt className="w-52 shrink-0 text-xs font-medium text-ink-500">{label}</dt>
+      <dt className="w-40 shrink-0 text-xs font-medium text-ink-500 2xl:w-52">{label}</dt>
       <dd className={clsx('min-w-0 flex-1 text-sm text-ink-900', mono && 'font-mono')}>
         {value || <span className="text-ink-400">—</span>}
       </dd>
@@ -447,7 +449,7 @@ function SheetField({
       'flex items-baseline gap-3 border-b border-ink-100 py-1 last:border-0',
       highlight && 'rounded bg-amber-50 px-1.5',
     )}>
-      <dt className="w-52 shrink-0 text-xs font-medium text-ink-500">{label}</dt>
+      <dt className="w-40 shrink-0 text-xs font-medium text-ink-500 2xl:w-52">{label}</dt>
       <dd className="min-w-0 flex-1">
         {!editing ? (
           <span className={clsx('text-sm text-ink-900', mono && 'font-mono')}>

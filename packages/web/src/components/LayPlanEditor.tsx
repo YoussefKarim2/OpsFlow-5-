@@ -13,6 +13,7 @@
  * count, with the same parser the plan uses.
  */
 
+import { fitWidth } from '../lib/fit-width';
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Save } from 'lucide-react';
@@ -126,17 +127,17 @@ export function LayPlanEditor({ orderId, lays, defaultFabric, onSaved, onCancel 
             {rows.map((r, i) => (
               <tr key={r.id ?? `new-${i}`}>
                 <td className="td tnum text-ink-400">{i + 1}</td>
-                <td className="p-1"><input aria-label={`Lay ${i + 1} fabric`} className={clsx(cell, !r.fabric.trim() && 'ring-1 ring-red-400')} value={r.fabric} onChange={(e) => set(i, { fabric: e.target.value })} /></td>
-                <td className="p-1"><input aria-label={`Lay ${i + 1} colour`} className={cell} value={r.color} onChange={(e) => set(i, { color: e.target.value })} /></td>
-                <td className="p-1"><input aria-label={`Lay ${i + 1} panel`} className={cell} value={r.panel} onChange={(e) => set(i, { panel: e.target.value })} /></td>
-                <td className="p-1"><input aria-label={`Lay ${i + 1} ratio`} className={clsx(cell, 'font-mono text-2xs', !r.ratio.trim() && 'ring-1 ring-red-400')} placeholder="(YS2), (YM2), (YL1)" value={r.ratio} onChange={(e) => set(i, { ratio: e.target.value })} /></td>
-                <td className="p-1"><input aria-label={`Lay ${i + 1} layers`} inputMode="numeric" className={clsx(cell, 'tnum text-right')} value={r.layers} onChange={numeric((v) => set(i, { layers: v }))} /></td>
+                <td className="p-1"><input aria-label={`Lay ${i + 1} fabric`} className={clsx(cell, !r.fabric.trim() && 'ring-1 ring-red-400')} value={r.fabric} style={fitWidth(r.fabric, 3)} onChange={(e) => set(i, { fabric: e.target.value })} /></td>
+                <td className="p-1"><input aria-label={`Lay ${i + 1} colour`} className={cell} value={r.color} style={fitWidth(r.color, 3)} onChange={(e) => set(i, { color: e.target.value })} /></td>
+                <td className="p-1"><input aria-label={`Lay ${i + 1} panel`} className={cell} value={r.panel} style={fitWidth(r.panel, 3)} onChange={(e) => set(i, { panel: e.target.value })} /></td>
+                <td className="p-1"><input aria-label={`Lay ${i + 1} ratio`} className={clsx(cell, 'font-mono text-2xs', !r.ratio.trim() && 'ring-1 ring-red-400')} placeholder="(YS2), (YM2), (YL1)" value={r.ratio} style={{ minWidth: `calc(${Math.max(18, (r.ratio || "(YS2), (YM2), (YL1)").length) + 1}ch + 1.25rem)` }} onChange={(e) => set(i, { ratio: e.target.value })} /></td>
+                <td className="p-1"><input aria-label={`Lay ${i + 1} layers`} inputMode="numeric" className={clsx(cell, 'tnum text-right')} value={r.layers} style={fitWidth(r.layers, 3)} onChange={numeric((v) => set(i, { layers: v }))} /></td>
                 <td className="td tnum text-right font-semibold">{pieces(r).toLocaleString()}</td>
-                <td className="p-1"><input aria-label={`Lay ${i + 1} marker length`} inputMode="decimal" className={clsx(cell, 'tnum text-right')} value={r.markerLengthM} onChange={numeric((v) => set(i, { markerLengthM: v }))} /></td>
-                <td className="p-1"><input aria-label={`Lay ${i + 1} total length`} inputMode="decimal" className={clsx(cell, 'tnum text-right')} placeholder={num(r.layers) != null && num(r.markerLengthM) != null ? String(Math.round((num(r.layers)! * num(r.markerLengthM)!) * 100) / 100) : '—'} title="Blank: layers × marker length" value={r.totalLengthM} onChange={numeric((v) => set(i, { totalLengthM: v }))} /></td>
-                <td className="p-1"><input aria-label={`Lay ${i + 1} nest`} inputMode="decimal" className={clsx(cell, 'tnum text-right')} placeholder="—" value={r.nestPcs} onChange={numeric((v) => set(i, { nestPcs: v }))} /></td>
-                <td className="p-1"><input aria-label={`Lay ${i + 1} efficiency`} inputMode="decimal" className={clsx(cell, 'tnum text-right')} placeholder="—" value={r.efficiencyPct} onChange={numeric((v) => set(i, { efficiencyPct: v }))} /></td>
-                <td className="p-1"><input aria-label={`Lay ${i + 1} max layer`} inputMode="numeric" className={clsx(cell, 'tnum text-right')} placeholder="—" value={r.maxLayer} onChange={numeric((v) => set(i, { maxLayer: v }))} /></td>
+                <td className="p-1"><input aria-label={`Lay ${i + 1} marker length`} inputMode="decimal" className={clsx(cell, 'tnum text-right')} value={r.markerLengthM} style={fitWidth(r.markerLengthM, 3)} onChange={numeric((v) => set(i, { markerLengthM: v }))} /></td>
+                <td className="p-1"><input aria-label={`Lay ${i + 1} total length`} inputMode="decimal" className={clsx(cell, 'tnum text-right')} placeholder={num(r.layers) != null && num(r.markerLengthM) != null ? String(Math.round((num(r.layers)! * num(r.markerLengthM)!) * 100) / 100) : '—'} title="Blank: layers × marker length" value={r.totalLengthM} style={fitWidth(r.totalLengthM, 3)} onChange={numeric((v) => set(i, { totalLengthM: v }))} /></td>
+                <td className="p-1"><input aria-label={`Lay ${i + 1} nest`} inputMode="decimal" className={clsx(cell, 'tnum text-right')} placeholder="—" value={r.nestPcs} style={fitWidth(r.nestPcs || "—", 3)} onChange={numeric((v) => set(i, { nestPcs: v }))} /></td>
+                <td className="p-1"><input aria-label={`Lay ${i + 1} efficiency`} inputMode="decimal" className={clsx(cell, 'tnum text-right')} placeholder="—" value={r.efficiencyPct} style={fitWidth(r.efficiencyPct || "—", 3)} onChange={numeric((v) => set(i, { efficiencyPct: v }))} /></td>
+                <td className="p-1"><input aria-label={`Lay ${i + 1} max layer`} inputMode="numeric" className={clsx(cell, 'tnum text-right')} placeholder="—" value={r.maxLayer} style={fitWidth(r.maxLayer || "—", 3)} onChange={numeric((v) => set(i, { maxLayer: v }))} /></td>
                 <td className="p-1 text-right">
                   <button type="button" className="btn-ghost btn-sm text-red-600" title="Remove this lay" onClick={() => remove(i)}><Trash2 className="h-3.5 w-3.5" /></button>
                 </td>

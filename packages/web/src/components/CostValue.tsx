@@ -18,6 +18,7 @@
  */
 
 import { RotateCcw } from 'lucide-react';
+import { fitWidth } from '../lib/fit-width';
 import { editableText, formatCell, isTypeableNumber, NOT_CALCULATED, type CellKind } from '@opsflow/shared';
 import { clsx } from './ui';
 
@@ -217,7 +218,10 @@ export function CostCell({
           // Room for the revert arrow only when there is one to make room for.
           overridden && 'border-violet-400 bg-violet-50 pr-6 text-violet-900', className)}
         value={value !== '' ? value : editableText(calculated, kind, places)}
-        placeholder={shown === NOT_CALCULATED ? NOT_CALCULATED : ''}
+        style={fitWidth(value !== '' ? value : editableText(calculated, kind, places), 6, overridden ? '2.75rem' : '1rem')}
+        // A dash, with the words on hover: "Not calculated" does not fit a figure's box.
+        placeholder={shown === NOT_CALCULATED ? '—' : ''}
+        title={shown === NOT_CALCULATED ? NOT_CALCULATED : undefined}
         onChange={(e) => { if (isTypeableNumber(e.target.value)) onChange(e.target.value); }}
       />
       {overridden && (
@@ -252,6 +256,7 @@ export function TextCell({
   return (
     <input
       className={clsx('input px-1.5 py-1 text-xs', align === 'center' && 'text-center')}
+      style={fitWidth(value || placeholder || '', 3)}
       value={value}
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
@@ -292,6 +297,7 @@ export function NumberCell({
       // A figure the row worked out is shown to two decimals, like everything
       // else on the sheet; a figure the person typed is shown as they typed it.
       value={derived && value !== '' ? editableText(value, 'number', 2) : value}
+      style={fitWidth(derived && value !== '' ? editableText(value, 'number', 2) : value || placeholder || '')}
       placeholder={placeholder}
       title={derived ? 'Calculated from the other two figures on this row — type here to set it yourself' : undefined}
       onChange={(e) => { if (isTypeableNumber(e.target.value)) onChange(e.target.value); }}

@@ -14,6 +14,7 @@
  * classifies, it does not restrict.
  */
 
+import { textWidth } from '../lib/fit-width';
 import { Fragment, useLayoutEffect, useMemo, useRef, useState, type TextareaHTMLAttributes } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Rows3, Scissors } from 'lucide-react';
@@ -42,20 +43,13 @@ const COLUMNS = 12;
  * and narrow letters narrower, so "LIME/BLACK" is not cut off.
  */
 const WIDTH = {
-  department: [7, 11], item: [11, 15], position: [7, 9], description: [9, 10], colour: [6, 13],
+  department: [7, 11], item: [11, 15], position: [7, 9], description: [9, 10], colour: [6, 18],
   cons: [4, 8], qty: [4, 9], issued: [3, 8], unit: [4, 8], price: [4, 8], supplier: [7, 9],
 } as const satisfies Record<string, readonly [number, number]>;
 type WidthKey = keyof typeof WIDTH;
 /** A dropdown's arrow takes room a plain box does not. */
-const ARROW: Partial<Record<WidthKey, true>> = { department: true, item: true, unit: true };
-
-/** How wide a text is, in `ch`. */
-function textWidth(t: string | null | undefined): number {
-  let w = 0;
-  for (const ch of t ?? '') w += /[A-Z@%&#]/.test(ch) ? (/[MW]/.test(ch) ? 1.7 : /[I]/.test(ch) ? 0.7 : 1.4) : /[iljtf.,:;'|!() /]/.test(ch) ? 0.6 : /[mw]/.test(ch) ? 1.4 : 1;
-  // A "0" is wider than the average letter of this typeface.
-  return w * 0.85;
-}
+// The colour box suggests the order's colours, and the browser draws an arrow for that list too.
+const ARROW: Partial<Record<WidthKey, true>> = { department: true, item: true, unit: true, colour: true };
 
 function columnWidths(rows: readonly RowDraft[]): Record<WidthKey, string> {
   const longest = (pick: (r: RowDraft) => string | null | undefined) => Math.max(0, ...rows.map((r) => textWidth(pick(r))));
@@ -76,7 +70,7 @@ function columnWidths(rows: readonly RowDraft[]): Record<WidthKey, string> {
   for (const k of Object.keys(WIDTH) as WidthKey[]) {
     const [min, max] = WIDTH[k];
     const ch = Math.min(max, Math.max(min, Math.ceil(len[k]) + 1));
-    width[k] = `calc(${ch}ch + ${ARROW[k] ? '1.6rem' : k === 'colour' ? '1.2rem' : '0.8rem'})`;
+    width[k] = `calc(${ch}ch + ${ARROW[k] ? '1.6rem' : '0.8rem'})`;
   }
   return width;
 }
