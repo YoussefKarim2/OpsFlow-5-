@@ -275,7 +275,7 @@ describe('mixed cartons', () => {
         [2, 'YXS', 120, 'HUNTER/WHT', 174, 9, 8], [null, 'YS', 54, 'HUNTER/WHT'],
         [3, 'YS', 90, 'HUNTER/WHT', 166, 9, 8], [null, 'YXS', 24, 'LIME/BLACK'], [null, 'YS', 52, 'LIME/BLACK'],
       ];
-      rows.forEach((r, i) => { ws.getRow(6 + i).values = [null, null, ...r]; });
+      rows.forEach((r, i) => { ws.getRow(6 + i).values = [null, null, ...r] as ExcelJS.CellValue[]; });
       ws.getRow(13).values = [null, null, 'Total', null, { formula: 'SUM(E6:E12)' } as ExcelJS.CellValue];
     });
     const r = await readPackingDocument(buf, 'pl.xlsx');
