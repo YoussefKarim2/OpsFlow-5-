@@ -12,7 +12,7 @@
 
 import { Fragment, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, Info, Pencil, RotateCcw } from 'lucide-react';
+import { AlertTriangle, Info, Pencil, PackagePlus, RotateCcw } from 'lucide-react';
 import { api, ApiError, type PackingFileLayoutDto } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { PackingCartonEditor } from './PackingCartonEditor';
@@ -257,6 +257,14 @@ function CartonCards({ data, orderId, attachmentId }: { data: PackingFileLayoutD
   const qc = useQueryClient();
   const toast = useToast();
   const [editing, setEditing] = useState(false);
+  const create = useMutation({
+    mutationFn: () => api.packing.createCartonsFromFile(orderId, attachmentId),
+    onSuccess: (r) => {
+      for (const k of ['packing', 'order', 'order-steps', 'matrix', 'tasks']) void qc.invalidateQueries({ queryKey: [k, orderId] });
+      toast.success(`Packing list made: ${r.cartons} carton${r.cartons === 1 ? '' : 's'}, ${r.pieces.toLocaleString('en-US')} pcs`);
+    },
+    onError: (e) => toast.error(e instanceof ApiError ? e.message : 'The cartons could not be made'),
+  });
   const reset = useMutation({
     mutationFn: () => api.packing.resetFileCartons(orderId, attachmentId),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ['packing-file-layout', orderId, attachmentId] }); toast.success('Back to what the file says'); },
@@ -287,6 +295,17 @@ function CartonCards({ data, orderId, attachmentId }: { data: PackingFileLayoutD
       )}
       <button type="button" className="btn-secondary btn-sm" onClick={() => setEditing(true)}>
         <Pencil className="mr-1 h-3.5 w-3.5" /> Edit cartons
+      </button>
+      <button
+        type="button"
+        className="btn-primary btn-sm"
+        disabled={data.createCartons.length > 0 || create.isPending}
+        title={data.createCartons.length > 0
+          ? `Not yet: ${data.createCartons.join(' ')} Correct the file, or edit the cartons here, first.`
+          : 'Make the packing list from these cartons, as they are shown'}
+        onClick={() => { if (window.confirm('Make a packing list with these cartons, as shown?')) create.mutate(); }}
+      >
+        <PackagePlus className="mr-1 h-3.5 w-3.5" /> {create.isPending ? 'Making…' : 'Make the packing list'}
       </button>
     </div>
   );

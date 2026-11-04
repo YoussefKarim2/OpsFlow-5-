@@ -154,10 +154,17 @@ layingImportRouter.post('/upload', requirePermission('import:laying'), upload.si
     fileName: req.file.originalname, mimeType: req.file.mimetype, prefix: 'laying-imports',
   });
 
+  const checksum = createHash('sha256').update(req.file.buffer).digest('hex');
+  // The same sheet brought in again: said before it is committed, because a
+  // "Replace" re-import is the usual way duplicate records came about.
+  const before = await prisma.importJob.findFirst({
+    where: { targetOrderId: order.id, target: 'LAYING_MARKING', status: 'COMMITTED', checksum },
+    orderBy: { createdAt: 'desc' }, select: { createdAt: true },
+  });
   const job = await prisma.importJob.create({
     data: {
       fileName: req.file.originalname, storageKey: key, uploadedById: actor.id, status: 'UPLOADED',
-      target: 'LAYING_MARKING', targetOrderId: order.id,
+      target: 'LAYING_MARKING', targetOrderId: order.id, checksum,
     },
   });
 
@@ -179,6 +186,12 @@ layingImportRouter.post('/upload', requirePermission('import:laying'), upload.si
     });
   }
 
+  if (before) {
+    finalExtraction.issues.unshift({
+      level: 'WARNING', field: null, sheet: null, cell: null,
+      message: `This exact laying sheet was already imported into this order on ${before.createdAt.toISOString().slice(0, 10)}. Importing it again changes nothing unless the lays were edited since — check the plan first.`,
+    });
+  }
   await persistJob(job.id, finalExtraction, {
     savedMapping: savedMapping ? savedMapping.mapping as Record<string, ImportConcept> : undefined,
   });

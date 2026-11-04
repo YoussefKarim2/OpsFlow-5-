@@ -188,10 +188,10 @@ export function StylesEditor({ draft, onChange, rows, rates, onRate }: {
                     onChange={(e) => onRate(r, e.target.value)} />
                 </label>
                 {input('perCarton', 'Pcs / carton', String(r.perCarton), true)}
-                {input('cartons', 'Cartons', `${r.cartons}`, true)}
+                {input('cartons', r.fromPacking.cartons ? 'Cartons · from the packing list' : 'Cartons', `${r.cartons}`, true)}
                 {input('unit', 'Unit', r.unit)}
-                {input('gw', 'G.W', '', true)}
-                {input('nw', 'N.W', '', true)}
+                {input('gw', r.fromPacking.gw ? 'G.W · from the packing list' : 'G.W', r.gw == null ? '' : String(r.gw), true)}
+                {input('nw', r.fromPacking.nw ? 'N.W · from the packing list' : 'N.W', r.nw == null ? '' : String(r.nw), true)}
               </div>
             </div>
           );

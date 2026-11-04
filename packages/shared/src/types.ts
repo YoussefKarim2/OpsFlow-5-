@@ -727,6 +727,8 @@ export interface InvoiceOrderRefDto {
   clientName: string;
   packingListId: string | null;
   shipmentId: string | null;
+  /** The document's packing list by style: the sheet's weights and carton counts when nothing was typed. */
+  packedByStyle?: Record<string, { cartons: number; grossKg: number | null; netKg: number | null }> | null;
 }
 
 export interface InvoiceDto {

@@ -102,8 +102,17 @@ export function sheetRowKey(name: string, po: string | null, manyOrders: boolean
   return `${name.replace(/\s+/g, ' ').trim().toUpperCase()}${manyOrders && po ? `|${po}` : ''}`;
 }
 
+/** A style's cartons as the packing list records them. */
+export interface PackedStyle {
+  cartons: number;
+  grossKg: number | null;
+  netKg: number | null;
+}
+
 export interface SheetRow {
   key: string;
+  /** Where the weights and carton count came from, so the screen can say. */
+  fromPacking: { gw: boolean; nw: boolean; cartons: boolean };
   /** The style as the goods lines name it. */
   style: string;
   description: string;
@@ -157,7 +166,16 @@ export function isCalendarDay(s: string): boolean {
 /** The table of the factory's proforma: one row per style, worked out as its Excel sheet does. */
 export function buildSheet(
   lines: ReadonlyArray<InvoiceLineInput>,
-  orders: ReadonlyArray<{ poNumber: string; orderName: string; styleNumber?: string | null }>,
+  orders: ReadonlyArray<{
+    poNumber: string; orderName: string; styleNumber?: string | null;
+    /**
+     * What the document's packing list holds, per style (key as `sheetRowKey`
+     * names the style, without the PO): the figures a row takes when nothing
+     * was typed for it, so weights and carton counts are not retyped from
+     * the packing list they already sit on.
+     */
+    packedByStyle?: Record<string, PackedStyle> | null;
+  }>,
   settings: ProformaSheetSettings | null | undefined,
 ): { rows: SheetRow[]; totals: SheetTotals } {
   const typed = settings?.rows ?? {};
@@ -174,8 +192,15 @@ export function buildSheet(
     // when the order is that one style and the row is named after the order.
     const label = g.style ?? g.name;
     const perCarton = t.perCarton && t.perCarton > 0 ? t.perCarton : guessPerCarton(label);
-    const cartonsTyped = t.cartons != null && t.cartons >= 0;
-    const cartons = cartonsTyped ? t.cartons! : qty > 0 ? Math.ceil(qty / perCarton) : 0;
+    const packed = o.packedByStyle?.[sheetRowKey(g.name, null, false)] ?? null;
+    // Typed figures first; then the packing list's own; then the division.
+    const cartonsTyped = (t.cartons != null && t.cartons >= 0) || (packed != null && packed.cartons > 0);
+    const cartons = t.cartons != null && t.cartons >= 0 ? t.cartons : packed != null && packed.cartons > 0 ? packed.cartons : qty > 0 ? Math.ceil(qty / perCarton) : 0;
+    const fromPacking = {
+      gw: t.gw == null && packed?.grossKg != null,
+      nw: t.nw == null && packed?.netKg != null,
+      cartons: !(t.cartons != null && t.cartons >= 0) && packed != null && packed.cartons > 0,
+    };
     return {
       key,
       style: g.name,
@@ -183,8 +208,9 @@ export function buildSheet(
       po: t.po?.trim() || o.poNumber,
       partNo: t.partNo?.trim() || (g.wholeOrder && o.styleNumber ? o.styleNumber : ''),
       hts: t.hts?.trim() || guessHts(label),
-      gw: t.gw ?? null,
-      nw: t.nw ?? null,
+      gw: t.gw ?? packed?.grossKg ?? null,
+      nw: t.nw ?? packed?.netKg ?? null,
+      fromPacking,
       unit: t.unit?.trim() || SHEET_DEFAULTS.unit,
       perCarton,
       cartons,

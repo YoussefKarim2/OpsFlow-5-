@@ -12,6 +12,7 @@ import {
   type StageKey, type Department,
 } from '@opsflow/shared';
 import { assertTaskCompletable } from './rules.js';
+import { prisma } from '../db.js';
 import { logActivity, notify, recipientsFor } from './activity-service.js';
 import { ConflictError, NotFoundError } from '../errors.js';
 
@@ -476,4 +477,44 @@ export async function createCorrectiveActionTask(
   }, db);
 
   return task;
+}
+
+/**
+ * The tasks whose "done" the system can see for itself: sizes entered, the
+ * lay plan covering the cut, the bill filled, materials issued, the packing
+ * list built. `assertTaskCompletable` already checks that data; when it
+ * passes, the task is completed as System rather than waiting for a click.
+ * "Review…" and sign-off tasks stay with people.
+ */
+const SELF_COMPLETING = new Set([
+  'FM_MAIN_ORDER', 'CM_CUT_RATIOS', 'CM_REAL_MARKERS', 'CM_BOM_FABRIC', 'CO_BOM_ACCESSORIES', 'WH_ISSUE_MATERIALS', 'PK_BUILD_LIST',
+]);
+
+export async function autoCompleteTasks(orderId: string): Promise<number> {
+  const open = await prisma.task.findMany({
+    where: { orderId, status: { not: 'COMPLETED' }, templateKey: { in: [...SELF_COMPLETING] } },
+    select: { id: true, orderId: true, templateKey: true, title: true, blockedByTaskId: true, sequence: true },
+    orderBy: { sequence: 'asc' },
+  });
+  let done = 0;
+  for (const task of open) {
+    try {
+      await assertTaskCompletable(prisma, task);
+    } catch {
+      continue; // its data is not in yet, or an earlier group is still open
+    }
+    const hit = await prisma.task.updateMany({
+      where: { id: task.id, status: { not: 'COMPLETED' } },
+      data: { status: 'COMPLETED', completedAt: new Date(), completedById: null },
+    });
+    if (hit.count === 0) continue;
+    done++;
+    await logActivity({
+      orderId, actorId: null, actorName: 'System',
+      action: 'TASK_COMPLETED', summary: `completed "${task.title}" — its data is in`,
+      entityType: 'Task', entityId: task.id,
+    });
+    await unblockDependents(prisma, orderId, task.sequence);
+  }
+  return done;
 }

@@ -1711,6 +1711,8 @@ model EmailDelivery {
 
 /// Excel import job — the five-step pipeline in ARCHITECTURE.md §7.
 model ImportJob {
+  /// SHA-256 of the uploaded file, so the same sheet imported twice is noticed.
+  checksum          String?
   id                String       @id @default(cuid())
   fileName          String
   storageKey        String

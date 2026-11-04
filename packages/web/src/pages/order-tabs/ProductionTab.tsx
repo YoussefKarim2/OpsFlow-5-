@@ -263,7 +263,7 @@ export function ProductionTab({ order }: { order: OrderDetailDto }) {
       </Card>
 
       <RecordModal
-        open={adding} orderId={order.id}
+        open={adding} orderId={order.id} defaultLine={data.linePlan.lineName ?? ''}
         onClose={() => setAdding(false)}
         onDone={() => { setAdding(false); refresh(); }}
       />
@@ -272,12 +272,15 @@ export function ProductionTab({ order }: { order: OrderDetailDto }) {
 }
 
 function RecordModal({
-  open, orderId, onClose, onDone,
+  open, orderId, defaultLine, onClose, onDone,
 }: {
-  open: boolean; orderId: string; onClose: () => void; onDone: () => void;
+  open: boolean; orderId: string;
+  /** The production line named on the line plan, so it is not typed on every entry. */
+  defaultLine: string;
+  onClose: () => void; onDone: () => void;
 }) {
   // The local calendar day: the UTC one is still yesterday in Cairo after midnight.
-  const [form, setForm] = useState({ date: localToday(), operation: 'SEWING', qty: '', line: '', team: '', notes: '' });
+  const [form, setForm] = useState({ date: localToday(), operation: 'SEWING', qty: '', line: defaultLine, team: '', notes: '' });
   const [error, setError] = useState<string | null>(null);
 
   const save = useMutation({

@@ -26,7 +26,7 @@ import {
   amountInWords, computeInvoiceTotals, formatInvoiceNumber, issueBlockers, lineTotal,
   reconcileShippedAgainstOrdered, summariseSizes,
   type CompanyProfileDto, type InvoiceCartonDto, type InvoiceDto, type InvoiceLineDto,
-  type InvoiceListRowDto, type InvoiceOrderRefDto, type InvoiceReconciliationGroupDto, type ProformaSheetSettings,
+  type InvoiceListRowDto, type InvoiceOrderRefDto, type InvoiceReconciliationGroupDto, type ProformaSheetSettings, sheetRowKey, type PackedStyle,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { inWearingOrder } from './import/po-lines.js';
@@ -661,13 +661,33 @@ export async function withAllocatedNumber<T>(
 
 // ── Reading back ─────────────────────────────────────────────────────────────
 
+/** The cartons of a document's packing list, enough to weigh and count them by style. */
+const PACKED_CARTONS = {
+  select: {
+    cartons: {
+      select: {
+        cartonNumber: true, qty: true, grossWeightKg: true, netWeightKg: true,
+        orderColor: { select: { color: { select: { name: true } } } },
+      },
+    },
+  },
+} as const;
+
 export const INVOICE_INCLUDE = {
   lines: { orderBy: { position: 'asc' as const } },
   orders: {
     orderBy: { position: 'asc' as const },
     include: { order: { select: { id: true, poNumber: true, orderName: true, styleNumber: true, client: { select: { name: true } } } } },
   },
-  order: { select: { id: true, poNumber: true, orderName: true, styleNumber: true, client: { select: { name: true } } } },
+  order: {
+    select: {
+      id: true, poNumber: true, orderName: true, styleNumber: true, client: { select: { name: true } },
+      // A proforma is not linked to a packing list; its sheet takes the
+      // order's own lists when the order has been packed.
+      packingLists: { select: { cartons: PACKED_CARTONS.select.cartons }, orderBy: { createdAt: 'asc' as const } },
+    },
+  },
+  packingList: PACKED_CARTONS,
   preparedBy: { select: { name: true } },
   issuedBy: { select: { name: true } },
 } satisfies Prisma.InvoiceInclude;
@@ -814,7 +834,18 @@ export function invoiceToDto(raw: LoadedInvoice, stale = false, live?: CompanyPr
     dueDate: iso(inv.dueDate),
     paymentTerms: inv.paymentTerms,
     order: { ...ref, id: inv.order.id },
-    orders: orderRefsOf(inv, ref),
+    // Each order's packing list by style, for the sheet's weights and carton
+    // counts. The document's own list; on a document of several orders, only
+    // the order whose list that is (the join rows carry ids alone).
+    orders: orderRefsOf(inv, ref).map((o) => ({
+      ...o,
+      packedByStyle: packedByStyle(
+        o.packingListId != null
+          ? [o.packingListId === inv.packingListId ? inv.packingList : null]
+          : o.id === inv.order.id ? inv.order.packingLists : [],
+        o.orderName,
+      ),
+    })),
     shipmentId: inv.shipmentId,
     packingListId: inv.packingListId,
     billTo: inv.billTo,
@@ -851,6 +882,36 @@ export function invoiceToDto(raw: LoadedInvoice, stale = false, live?: CompanyPr
 }
 
 /** Every order on a document from its snapshots, falling back to the live order where a row has none. */
+/**
+ * A packing list's cartons by style — the figures the proforma sheet shows
+ * for weights and carton counts when nobody typed them. A colour named
+ * "STYLE — COLOUR" belongs to that style; a plain colour to the order's name.
+ * A mixed carton (one number, several rows) is one carton.
+ */
+type PackedList = { cartons: Array<{ cartonNumber: string; qty: number; grossWeightKg: Prisma.Decimal | null; netWeightKg: Prisma.Decimal | null; orderColor: { color: { name: string } } | null }> };
+function packedByStyle(lists: ReadonlyArray<PackedList | null | undefined>, orderName: string): Record<string, PackedStyle> | null {
+  const present = lists.filter((l): l is PackedList => l != null && l.cartons.length > 0);
+  if (present.length === 0) return null;
+  const out: Record<string, PackedStyle & { numbers: Set<string> }> = {};
+  present.forEach((list, li) => for_(list, li));
+  function for_(list: PackedList, li: number) {
+  for (const c of list.cartons) {
+    const colour = c.orderColor?.color.name ?? '';
+    const style = /\s[—–-]\s/.test(colour) ? colour.split(/\s+[—–-]\s+/)[0]! : orderName;
+    const key = sheetRowKey(style, null, false);
+    const e = out[key] ?? (out[key] = { cartons: 0, grossKg: null, netKg: null, numbers: new Set() });
+    // One carton per number within a list; lists number from 1 each.
+    if (!e.numbers.has(`${li}:${c.cartonNumber.trim().toUpperCase()}`)) {
+      e.numbers.add(`${li}:${c.cartonNumber.trim().toUpperCase()}`);
+      e.cartons += 1;
+      if (c.grossWeightKg != null) e.grossKg = Math.round(((e.grossKg ?? 0) + Number(c.grossWeightKg.toString())) * 1000) / 1000;
+      if (c.netWeightKg != null) e.netKg = Math.round(((e.netKg ?? 0) + Number(c.netWeightKg.toString())) * 1000) / 1000;
+    }
+  }
+  }
+  return Object.fromEntries(Object.entries(out).map(([k, { numbers: _n, ...v }]) => [k, v]));
+}
+
 function orderRefsOf(inv: Pick<LoadedInvoice, 'orders' | 'order' | 'packingListId' | 'shipmentId'>, first: OrderRef): InvoiceOrderRefDto[] {
   if (inv.orders.length === 0) {
     return [{ ...first, id: inv.order.id, packingListId: inv.packingListId, shipmentId: inv.shipmentId }];

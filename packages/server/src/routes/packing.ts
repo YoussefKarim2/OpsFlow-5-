@@ -15,7 +15,7 @@ import { shipmentDates } from '../services/shipment-dates.js';
 import { dateInput } from '../util/date-input.js';
 import { cairoDay } from '../util/cairo-day.js';
 import { storage } from '../services/storage/index.js';
-import { readPackingDocument, matchPackingToOrder, totalsOf, type PackingCarton, type PackingLayout } from '../services/import/packing-reader.js';
+import { readPackingDocument, matchPackingToOrder, totalsOf, cartonRange, type PackingCarton, type PackingLayout } from '../services/import/packing-reader.js';
 import { sizeAliasFor, inWearingOrder } from '../services/import/po-lines.js';
 import { optionalDate } from '../util/form-input.js';
 
@@ -66,9 +66,15 @@ async function assertListNotInvoiced(listId: string): Promise<void> {
  * list is a manifest the forwarder cannot reconcile; it happened every time the
  * size grid was used twice, because it numbered from CTN-001 each time.
  */
-async function assertCartonNumbersFree(listId: string, incoming: readonly string[]): Promise<void> {
-  const existing = await prisma.carton.findMany({ where: { packingListId: listId }, select: { cartonNumber: true } });
-  const repeated = repeatedCartonNumber(existing.map((c) => c.cartonNumber), incoming);
+async function assertCartonNumbersFree(listId: string, incoming: readonly string[], colours: readonly (string | null | undefined)[] = []): Promise<void> {
+  const existing = await prisma.carton.findMany({ where: { packingListId: listId }, select: { cartonNumber: true, orderColorId: true } });
+  // A mixed carton is one box holding several colours, one row per colour
+  // with the same number; a number repeated for the same colour is a typo.
+  const tag = (n: string, colour: string | null | undefined) => `${n.trim().toUpperCase()}\u0000${colour ?? ''}`;
+  const repeated = repeatedCartonNumber(
+    existing.map((c) => tag(c.cartonNumber, c.orderColorId)),
+    incoming.map((n, i) => tag(n, colours[i])),
+  )?.split('\u0000')[0] ?? null;
   if (repeated) {
     // Said for what it is: a number used twice in this entry is not "already
     // on this packing list".
@@ -238,10 +244,144 @@ packingRouter.get('/:orderId/files/:attachmentId/layout', requirePermission('pac
   const edit = packingEditOf(attachment.packingEdit);
   const layout = edit ? withEdit(read, edit) : read;
   const match = matchPackingToOrder(layout, { colours: colourNames, sizes: sizeNames }, sizeAliasFor);
+  const order = await prisma.order.findUniqueOrThrow({ where: { id: req.params.orderId }, select: { poNumber: true } });
+  warnIfOtherPo(layout, order.poNumber);
   res.json({
     fileName: attachment.fileName, layout, match, order: { colours: colourNames, sizes: sizeNames },
     edited: edit ? { at: edit.editedAt, by: edit.editedBy } : null,
+    createCartons: cartonsFromFile(layout, match).blockers,
   });
+}));
+
+/** A packing file for another order, attached here by mistake: said, not silently read. */
+function warnIfOtherPo(layout: PackingLayout, poNumber: string): void {
+  const po = layout.details.find((d) => /^po\b|purchase order|order (no|number)/i.test(d.label))?.value?.trim();
+  if (!po) return;
+  const norm = (s: string) => s.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (norm(po) && norm(po) !== norm(poNumber) && !norm(po).includes(norm(poNumber)) && !norm(poNumber).includes(norm(po))) {
+    layout.issues.unshift({ level: 'WARNING', message: `The file says PO ${po}; this order is PO ${poNumber}. Check that the right file is attached.` });
+  }
+}
+
+/**
+ * The cartons a packing file would become, or why it cannot yet.
+ *
+ * Only a file that read cleanly becomes cartons: no warnings, its own TOTAL
+ * row agreeing with its cartons, and every colour and size matched to the
+ * order's. Anything less is typed by hand, where a person looks at it.
+ */
+function cartonsFromFile(layout: PackingLayout, match: ReturnType<typeof matchPackingToOrder>) {
+  const blockers: string[] = [];
+  const warnings = layout.issues.filter((i) => i.level === 'WARNING');
+  if (warnings.length > 0) blockers.push(`${warnings.length} warning${warnings.length === 1 ? '' : 's'} on the reading: see above.`);
+  if (layout.cartons.length === 0) blockers.push('No cartons were read.');
+  if (layout.printedTotals?.pieces != null && Math.abs(layout.printedTotals.pieces - layout.totals.pieces) > 0.5) blockers.push('The file\'s TOTAL row does not agree with its cartons.');
+  const noNumber = layout.cartons.filter((c) => !c.continues && !c.number);
+  if (noNumber.length > 0) blockers.push(`${noNumber.length} line${noNumber.length === 1 ? ' has' : 's have'} no carton number.`);
+  const fractional = layout.cartons.filter((c) => !Number.isInteger(c.count));
+  if (fractional.length > 0) blockers.push('A carton count is not a whole number.');
+  const unmatchedColours = [...new Set(layout.cartons.map((c, i) => (c.colour && !match.cartonColours[i] ? c.colour : null)).filter((x): x is string => !!x))];
+  if (unmatchedColours.length > 0) blockers.push(`Colour${unmatchedColours.length === 1 ? '' : 's'} not on this order: ${unmatchedColours.slice(0, 4).join(', ')}.`);
+  const noColour = layout.cartons.filter((c) => !c.colour);
+  if (noColour.length > 0 && Object.keys(match.colours).length + 1 > 1) blockers.push(`${noColour.length} carton line${noColour.length === 1 ? '' : 's'} with no colour.`);
+  const sizes = [...new Set(layout.cartons.flatMap((c) => Object.keys(c.bySize)))];
+  const unmatchedSizes = sizes.filter((s) => !match.sizes[s]);
+  if (unmatchedSizes.length > 0) blockers.push(`Size${unmatchedSizes.length === 1 ? '' : 's'} not on this order: ${unmatchedSizes.slice(0, 6).join(', ')}.`);
+  const noSizes = layout.cartons.filter((c) => Object.keys(c.bySize).length === 0 && c.perCarton > 0);
+  if (noSizes.length > 0) blockers.push(`${noSizes.length} carton line${noSizes.length === 1 ? '' : 's'} with pieces but no sizes.`);
+  return { blockers };
+}
+
+/**
+ * Make the packing list's cartons from the attached file, in one step: one
+ * list for the file, one carton per box it lists (a run "1-10" is ten), a
+ * row per colour for a mixed box, and the sizes as the file gives them.
+ * Refused unless the file read cleanly (`cartonsFromFile`).
+ */
+packingRouter.post('/:orderId/files/:attachmentId/create-cartons', requirePermission('packing:write'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const attachment = await packingAttachment(req.params.orderId, req.params.attachmentId);
+  const [colours, sizes, order] = await Promise.all([
+    prisma.orderColor.findMany({ where: { orderId: req.params.orderId }, include: { color: true }, orderBy: { position: 'asc' } }),
+    prisma.orderSize.findMany({ where: { orderId: req.params.orderId }, include: { size: true } }),
+    prisma.order.findUniqueOrThrow({ where: { id: req.params.orderId }, select: { id: true, poNumber: true } }),
+  ]);
+  const sizeNames = inWearingOrder(sizes.map((s) => ({ name: s.size.name, position: s.position }))).map((s) => s.name);
+  const colourNames = colours.map((c) => c.color.name);
+  const buffer = await storage.get(attachment.storageKey);
+  const read = await readPackingDocument(buffer, attachment.fileName, { orderSizes: sizeNames });
+  const edit = packingEditOf(attachment.packingEdit);
+  const layout = edit ? withEdit(read, edit) : read;
+  const match = matchPackingToOrder(layout, { colours: colourNames, sizes: sizeNames }, sizeAliasFor);
+  warnIfOtherPo(layout, order.poNumber);
+  const { blockers } = cartonsFromFile(layout, match);
+  if (blockers.length > 0) throw new ValidationError(`The file cannot become cartons yet: ${blockers.join(' ')}`);
+
+  const colourId = new Map(colours.map((c) => [c.color.name, c.id]));
+  const sizeId = new Map(sizes.map((s) => [s.size.name, s.id]));
+  const sole = colours.length === 1 ? colours[0]!.id : null;
+  // Each box the file lists: its number(s), and its colour rows.
+  type Row = { cartonNumber: string; orderColorId: string; qty: number; grossWeightKg: number | null; netWeightKg: number | null; lines: Array<{ orderSizeId: string; qty: number }> };
+  const rows: Row[] = [];
+  let head: PackingCarton | null = null;
+  layout.cartons.forEach((c, i) => {
+    if (!c.continues) head = c;
+    const h = head!;
+    const range = cartonRange(h.number);
+    const numbers = range && range[1] - range[0] + 1 === h.count
+      ? Array.from({ length: h.count }, (_, k) => String(range[0] + k))
+      : h.count === 1 ? [h.number] : Array.from({ length: h.count }, (_, k) => `${h.number}-${k + 1}`);
+    const colour = c.colour ? colourId.get(match.cartonColours[i] ?? '') ?? null : sole;
+    if (!colour) throw new ValidationError(`Carton ${h.number}: the colour "${c.colour ?? ''}" is not on this order.`);
+    const lines = Object.entries(c.bySize).map(([label, qty]) => {
+      const id = sizeId.get(match.sizes[label] ?? '');
+      if (!id) throw new ValidationError(`Carton ${h.number}: the size "${label}" is not on this order.`);
+      return { orderSizeId: id, qty: Math.round(qty) };
+    }).filter((l) => l.qty > 0);
+    for (const n of numbers) {
+      rows.push({
+        cartonNumber: n, orderColorId: colour, qty: lines.reduce((a, l) => a + l.qty, 0),
+        grossWeightKg: c.continues ? null : h.grossKg, netWeightKg: c.continues ? null : h.netKg, lines,
+      });
+    }
+  });
+  if (rows.length === 0) throw new ValidationError('The file has no cartons with pieces in them.');
+  await assertPackedCeiling(order.id, rows.reduce((a, r) => a + r.qty, 0));
+
+  const list = await prisma.$transaction(async (tx) => {
+    const created = await tx.packingList.create({ data: { orderId: order.id, reference: attachment.fileName.replace(/\.[^.]+$/, '') } });
+    let position = 0;
+    for (const r of rows) {
+      const carton = await tx.carton.create({
+        data: {
+          packingListId: created.id, cartonNumber: r.cartonNumber, orderColorId: r.orderColorId,
+          // One size on the carton itself only when it holds one; the lines carry the split.
+          orderSizeId: r.lines.length === 1 ? r.lines[0]!.orderSizeId : null,
+          qty: r.qty, grossWeightKg: r.grossWeightKg, netWeightKg: r.netWeightKg, position: position++,
+        },
+      });
+      if (r.lines.length > 1) {
+        await tx.cartonLine.createMany({ data: r.lines.map((l, k) => ({ cartonId: carton.id, orderSizeId: l.orderSizeId, qty: l.qty, position: k })) });
+      }
+      for (const l of r.lines) {
+        await tx.stageQuantity.upsert({
+          where: { orderId_orderColorId_orderSizeId_ledger: { orderId: order.id, orderColorId: r.orderColorId, orderSizeId: l.orderSizeId, ledger: 'PACKED' } },
+          create: { orderId: order.id, orderColorId: r.orderColorId, orderSizeId: l.orderSizeId, ledger: 'PACKED', qty: l.qty },
+          update: { qty: { increment: l.qty } },
+        });
+      }
+    }
+    return created;
+  });
+  const pieces = rows.reduce((a, r) => a + r.qty, 0);
+  await logActivity({
+    orderId: order.id, actorId: actor.id, actorName: actor.name,
+    action: 'PACKING_LIST_FROM_FILE',
+    summary: `made a packing list of ${rows.length} carton${rows.length === 1 ? '' : 's'} (${pieces.toLocaleString('en-US')} pcs) from ${attachment.fileName}`,
+    entityType: 'PackingList', entityId: list.id,
+  });
+  await refreshOrderCache(order.id);
+  res.status(201).json({ id: list.id, cartons: rows.length, pieces });
 }));
 
 const editedCartonSchema = z.object({
@@ -590,7 +730,7 @@ packingRouter.post('/list/:listId/cartons/bulk', requirePermission('packing:writ
       throw new ValidationError(`Carton ${r.cartonNumber}: net weight cannot exceed gross weight.`);
     }
   }
-  await assertCartonNumbersFree(list.id, rows.map((r) => r.cartonNumber));
+  await assertCartonNumbersFree(list.id, rows.map((r) => r.cartonNumber), rows.map((r) => r.orderColorId));
   await assertOwnAxes(list.orderId, rows.map((r) => r.orderColorId), rows.map((r) => r.orderSizeId));
   await assertPackedCeiling(
     list.orderId,
@@ -645,7 +785,7 @@ packingRouter.post('/list/:listId/cartons', requirePermission('packing:write'), 
   if (input.netWeightKg != null && input.grossWeightKg != null && input.netWeightKg > input.grossWeightKg) {
     throw new ValidationError('Net weight cannot exceed gross weight.');
   }
-  await assertCartonNumbersFree(list.id, [input.cartonNumber]);
+  await assertCartonNumbersFree(list.id, [input.cartonNumber], [input.orderColorId]);
   await assertOwnAxes(list.orderId, [input.orderColorId], [input.orderSizeId]);
   await assertPackedCeiling(list.orderId, input.orderColorId && input.orderSizeId ? input.qty : 0);
 

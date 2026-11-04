@@ -11,6 +11,7 @@
  */
 
 import { Router } from 'express';
+import type { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import {
   MaterialType, MovementType, StockStatus, UnitOfMeasure,
@@ -480,7 +481,15 @@ inventoryRouter.post('/bom/:bomItemId/link', requirePermission('material:edit'),
     }
   }
 
-  await prisma.bomItem.update({ where: { id: bom.id }, data: { materialId } });
+  // The material already carries its last cost and its supplier; a line
+  // with neither takes them, and says so in the log. Figures typed on the
+  // line are the person's and are kept.
+  const material = materialId ? await prisma.material.findUnique({ where: { id: materialId }, select: { unitCostUsd: true, supplierName: true } }) : null;
+  const filled: string[] = [];
+  const data: { materialId: string | null; unitPriceUsd?: Prisma.Decimal; supplier?: string } = { materialId };
+  if (material?.unitCostUsd != null && bom.unitPriceUsd == null) { data.unitPriceUsd = material.unitCostUsd; filled.push('unit price'); }
+  if (material?.supplierName && !bom.supplier) { data.supplier = material.supplierName; filled.push('supplier'); }
+  await prisma.bomItem.update({ where: { id: bom.id }, data });
   await logActivity({
     orderId: bom.orderId,
     actorId: actor.id, actorName: actor.name,

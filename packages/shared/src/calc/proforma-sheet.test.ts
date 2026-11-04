@@ -96,3 +96,20 @@ describe('review fixes', () => {
     assert.equal(zero.totals.containerShare, null);
   });
 });
+
+describe('figures from the packing list', () => {
+  test('weights and carton counts come from the packing list when nothing was typed, and typed figures win', () => {
+    const lines = [{ kind: 'ITEM' as const, description: 'Polo', size: null, quantity: 100, unitPrice: 5, amount: 500, orderIndex: 0 }] as unknown as Parameters<typeof buildSheet>[0];
+    const orders = [{ poNumber: 'PO-1', orderName: 'Polo', packedByStyle: { POLO: { cartons: 4, grossKg: 48.5, netKg: 44 } } }];
+    const auto = buildSheet(lines, orders, null).rows[0]!;
+    assert.equal(auto.cartons, 4);
+    assert.equal(auto.gw, 48.5);
+    assert.equal(auto.nw, 44);
+    assert.deepEqual(auto.fromPacking, { gw: true, nw: true, cartons: true });
+    const typed = buildSheet(lines, orders, { rows: { POLO: { gw: 50, cartons: 5 } } }).rows[0]!;
+    assert.equal(typed.cartons, 5);
+    assert.equal(typed.gw, 50);
+    assert.equal(typed.nw, 44);
+    assert.deepEqual(typed.fromPacking, { gw: false, nw: true, cartons: false });
+  });
+});
