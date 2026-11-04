@@ -22,7 +22,7 @@
 import { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Check, ChevronRight, CircleDashed, Clock, Minus, AlertTriangle, Loader2, RotateCcw,
+  Check, ChevronRight, CircleDashed, Clock, Minus, AlertTriangle, Loader2, RotateCcw, Info,
 } from 'lucide-react';
 import {
   StageStatus, StepState, DEPARTMENT_LABEL,
@@ -105,7 +105,7 @@ export function StepRail({
   onJump: (step: OrderStepState) => void;
 }) {
   return (
-    <nav aria-label="Order steps" className="flex h-full w-48 shrink-0 flex-col border-r border-ink-200 bg-white">
+    <nav aria-label="Order steps" className="flex h-full w-52 shrink-0 flex-col border-r border-ink-200 bg-white">
       <div className="border-b border-ink-200 px-3 py-2.5">
         <div className="flex items-baseline justify-between">
           <span className="text-2xs font-semibold uppercase tracking-wider text-ink-500">
@@ -148,7 +148,7 @@ export function StepRail({
                     {s.label}
                   </span>
                   {s.isCurrent ? (
-                    <span className="mt-0.5 inline-flex items-center gap-1 rounded bg-accent-600 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-white">
+                    <span className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-accent-700">
                       You are here
                     </span>
                   ) : s.state === 'NOT_REQUIRED' && s.notRequiredReason ? (
@@ -192,6 +192,7 @@ export function StepHeader({
   const mayOverride = can(stepOverridePermission(step.key));
   const [dialog, setDialog] = useState<null | 'not-required' | 'waiting'>(null);
   const [reason, setReason] = useState('');
+  const [about, setAbout] = useState(false);
 
   const mutate = useMutation({
     mutationFn: (body: { status: StageStatus | null; reason?: string }) =>
@@ -218,133 +219,93 @@ export function StepHeader({
 
   return (
     <>
+      {/* One strip: which step, its state, what it still needs, and the one
+          button that moves it on. The explanation (purpose, who does it,
+          what is entered) opens on request, so the screen itself is what
+          fills the page. */}
       <Card>
-        <div className="flex flex-wrap items-start justify-between gap-4 px-4 py-3.5">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <StepDot state={step.state} number={step.order} />
-              <h2 className="text-base font-semibold text-ink-900">
-                Step {step.order} of {steps.steps.length} — {step.label}
-              </h2>
-              <span className={clsx(
-                'chip',
-                shown === 'COMPLETED' ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20'
-                : shown === 'WAITING' ? 'bg-amber-50 text-amber-800 ring-amber-600/20'
-                : shown === 'NOT_REQUIRED' ? 'bg-ink-100 text-ink-500 ring-ink-400/20'
-                : shown === 'IN_PROGRESS' ? 'bg-accent-50 text-accent-700 ring-accent-600/20'
-                : 'bg-ink-50 text-ink-500 ring-ink-300/40',
-              )}>
-                {look.label}
-              </span>
-            </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5">
+          <StepDot state={step.state} number={step.order} />
+          <h2 className="text-sm font-semibold text-ink-900">
+            {step.label}
+            <span className="ml-1.5 font-normal text-ink-400">step {step.order} of {steps.steps.length}</span>
+          </h2>
+          <span className={clsx(
+            'chip',
+            shown === 'COMPLETED' ? 'bg-emerald-50 text-emerald-700 ring-emerald-600/20'
+            : shown === 'WAITING' ? 'bg-amber-50 text-amber-800 ring-amber-600/20'
+            : shown === 'NOT_REQUIRED' ? 'bg-ink-100 text-ink-500 ring-ink-400/20'
+            : shown === 'IN_PROGRESS' ? 'bg-accent-50 text-accent-700 ring-accent-600/20'
+            : 'bg-ink-50 text-ink-500 ring-ink-300/40',
+          )}>
+            {look.label}
+          </span>
+          {step.state === 'NOT_REQUIRED' ? (
+            <span className="text-xs text-ink-500">Not required: {step.notRequiredReason ?? 'no reason recorded'}</span>
+          ) : step.missing && step.state !== 'COMPLETED' ? (
+            <span className="text-xs text-amber-800"><span className="font-semibold">Still needed:</span> {step.missing}</span>
+          ) : null}
+          {step.taskTotal > 0 && step.state !== 'NOT_REQUIRED' && (
+            <span className="text-2xs text-ink-400">{step.taskCompleted}/{step.taskTotal} tasks</span>
+          )}
 
-            <p className="mt-1.5 text-sm text-ink-700">{step.purpose}</p>
-
-            <p className="mt-1 text-xs text-ink-500">
-              Usually done by <span className="font-medium text-ink-700">
-                {DEPARTMENT_LABEL[step.department]?.en ?? step.department}
-              </span>
-              {' · '}
-              from the workbook sheet <span className="font-mono">{step.sheetName}</span>
-            </p>
-
-            {step.state === 'NOT_REQUIRED' ? (
-              <p className="mt-2.5 rounded border border-dashed border-ink-300 bg-ink-50 px-3 py-2 text-xs text-ink-600">
-                <span className="font-semibold">Not required for this order.</span>{' '}
-                {step.notRequiredReason ?? 'No reason was recorded.'}
-              </p>
-            ) : (
-              <>
-                <div className="mt-2.5">
-                  <p className="text-2xs font-semibold uppercase tracking-wider text-ink-500">
-                    What you enter here
-                  </p>
-                  <ul className="mt-1 space-y-0.5">
-                    {step.whatYouEnter.map((w) => (
-                      <li key={w} className="flex items-start gap-1.5 text-xs text-ink-700">
-                        <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-ink-400" />
-                        {w}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                {/* The gate is still evaluated and the step is still
-                    incomplete; it is simply not announced in red. What the
-                    step still needs is said below, in the step's own words. */}
-                {step.missing && step.state !== 'COMPLETED' && (
-                  <p className="mt-2.5 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                    <span className="font-semibold">Still needed:</span> {step.missing}
-                  </p>
-                )}
-
-                {step.taskTotal > 0 && (
-                  <p className="mt-2 text-xs text-ink-500">
-                    {step.taskCompleted} of {step.taskTotal} workflow tasks complete on this step.
-                  </p>
-                )}
-              </>
-            )}
-          </div>
-
-          <div className="flex w-full shrink-0 flex-col gap-1.5 sm:w-52">
-            {!mayOverride ? (
-              <p className="text-2xs text-ink-400">Marked done, or not required, by the department responsible for it.</p>
-            ) : step.state === 'COMPLETED' ? (
-              <button
-                className="btn-ghost btn-sm justify-center"
-                disabled={busy}
-                onClick={() => mutate.mutate({ status: null })}
-              >
-                <RotateCcw className="h-3.5 w-3.5" /> Reopen this step
+          <div className="ml-auto flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              className={clsx('btn-ghost btn-sm', about && 'bg-ink-100 text-ink-900')}
+              onClick={() => setAbout((v) => !v)}
+              title="What this step is for, who does it, and what is entered here"
+            >
+              <Info className="h-3.5 w-3.5" /> About
+            </button>
+            {!mayOverride ? null : step.state === 'COMPLETED' ? (
+              <button className="btn-ghost btn-sm" disabled={busy} onClick={() => mutate.mutate({ status: null })}>
+                <RotateCcw className="h-3.5 w-3.5" /> Reopen
               </button>
             ) : step.state === 'NOT_REQUIRED' ? (
-              <button
-                className="btn-ghost btn-sm justify-center"
-                disabled={busy}
-                onClick={() => mutate.mutate({ status: null })}
-              >
+              <button className="btn-ghost btn-sm" disabled={busy} onClick={() => mutate.mutate({ status: null })}>
                 <RotateCcw className="h-3.5 w-3.5" /> This order does need it
               </button>
             ) : (
               <>
-                <button
-                  className="btn-primary btn-sm justify-center"
-                  disabled={busy}
-                  onClick={() => mutate.mutate({ status: StageStatus.COMPLETED })}
-                >
-                  <Check className="h-3.5 w-3.5" /> Mark this step done
+                <button className="btn-ghost btn-sm" disabled={busy} onClick={() => setDialog('waiting')} title="Somebody outside the system owes you something">
+                  <Clock className="h-3.5 w-3.5" /> Waiting
                 </button>
-                <button
-                  className="btn-ghost btn-sm justify-center"
-                  disabled={busy}
-                  onClick={() => setDialog('waiting')}
-                >
-                  <Clock className="h-3.5 w-3.5" /> Waiting on someone
-                </button>
-                <button
-                  className="btn-ghost btn-sm justify-center"
-                  disabled={busy}
-                  onClick={() => setDialog('not-required')}
-                >
+                <button className="btn-ghost btn-sm" disabled={busy} onClick={() => setDialog('not-required')}>
                   <Minus className="h-3.5 w-3.5" /> Not required
                 </button>
+                <button className="btn-primary btn-sm" disabled={busy} onClick={() => mutate.mutate({ status: StageStatus.COMPLETED })}>
+                  <Check className="h-3.5 w-3.5" /> Mark done
+                </button>
               </>
-            )}
-
-            {steps.next && step.isCurrent && (
-              <p className="mt-1 text-2xs text-ink-500">
-                Next after this: <span className="font-medium text-ink-700">{steps.next.label}</span>
-              </p>
             )}
           </div>
         </div>
 
-        {step.state !== 'COMPLETED' && step.state !== 'NOT_REQUIRED' && (
-          <p className="border-t border-ink-100 bg-ink-50 px-4 py-2 text-2xs text-ink-500">
-            Marking a step done records <em>your</em> decision. It does not claim anything was
-            produced, issued or approved — those are recorded on the screen below.
-          </p>
+        {about && (
+          <div className="grid gap-x-6 gap-y-2 border-t border-ink-100 bg-ink-50/60 px-4 py-3 text-xs sm:grid-cols-[1fr_auto]">
+            <div className="space-y-1.5">
+              <p className="text-sm text-ink-800">{step.purpose}</p>
+              <p className="text-ink-500">
+                Usually done by <span className="font-medium text-ink-700">{DEPARTMENT_LABEL[step.department]?.en ?? step.department}</span>
+                {' · '}from the workbook sheet <span className="font-mono">{step.sheetName}</span>
+              </p>
+              <ul className="mt-1 space-y-0.5">
+                {step.whatYouEnter.map((w) => (
+                  <li key={w} className="flex items-start gap-1.5 text-ink-700">
+                    <ChevronRight className="mt-0.5 h-3 w-3 shrink-0 text-ink-400" />{w}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="space-y-1 text-ink-500 sm:max-w-[16rem]">
+              {!mayOverride && <p>Marked done, or not required, by the department responsible for it.</p>}
+              {steps.next && step.isCurrent && (
+                <p>Next after this: <span className="font-medium text-ink-700">{steps.next.label}</span></p>
+              )}
+              <p>Marking a step done records <em>your</em> decision; what was produced, issued or approved is recorded on the screen below.</p>
+            </div>
+          </div>
         )}
       </Card>
 

@@ -86,7 +86,7 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
     <div className="space-y-4 p-5">
       {error && <ErrorNote error={new Error(error)} />}
 
-      <div className="flex justify-end gap-2">
+      <div className="toolbar">
         {editable && !editing && (
           <button onClick={startEditing} className="btn-secondary btn-sm">
             <Pencil className="h-3.5 w-3.5" /> Edit details

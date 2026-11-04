@@ -157,7 +157,7 @@ export function BomTab({ order }: { order: OrderDetailDto }) {
   return (
     <div className="space-y-4 p-5">
       {can('material:edit') && (
-        <div className="flex justify-end gap-2">
+        <div className="toolbar">
           <button
             className="btn-secondary btn-sm"
             disabled={fromLayPlan.isPending}

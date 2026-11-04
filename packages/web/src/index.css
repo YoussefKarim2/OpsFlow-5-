@@ -51,6 +51,12 @@
            uppercase tracking-wide ring-1 ring-inset;
   }
 
+  /* The actions of a screen, in one slim right-aligned bar above its cards —
+     not loose buttons floating in the page. */
+  .toolbar {
+    @apply flex flex-wrap items-center justify-end gap-2 rounded-md border border-ink-200 bg-white px-3 py-2 shadow-card;
+  }
+
   .th {
     @apply whitespace-nowrap px-3 py-2 text-left text-2xs font-semibold uppercase
            tracking-wider text-ink-500;

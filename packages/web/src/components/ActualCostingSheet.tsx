@@ -634,7 +634,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
       {/* Edit puts the section into a form, as everywhere else in OpsFlow. What
           is different is that there is nothing to press afterwards: changes are
           written a moment after the typing stops, and the indicator says so. */}
-      <div className="no-print flex items-center justify-end gap-3">
+      <div className="no-print toolbar">
         <SaveState state={saveState} dirty={dirty} onRetry={() => saveNow()} onReload={() => void onReload()} />
         <button
           type="button"

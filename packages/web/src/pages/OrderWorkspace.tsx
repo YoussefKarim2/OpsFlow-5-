@@ -166,19 +166,18 @@ export function OrderWorkspacePage() {
           title row with the progress at its right, the facts, and the next
           thing to do. */}
       <div className="shrink-0 border-b border-ink-200 bg-white">
-        <div className="px-5 pt-2">
-          {/* The order's name and number, set like a document title: a small
-              line saying where you are and which purchase order this is, then
-              the name itself. The number is a labelled tag rather than a grey
-              lozenge, so it reads as the identifier it is. */}
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+        <div className="px-5 pt-2.5">
+          {/* Row one: where you are, and the order's standing — the title with
+              its badges on the left, progress and the one destructive action on
+              the right. Row two: the facts a coordinator checks first, as a
+              labelled strip. Row three: the next thing to do, one line. */}
+          <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1">
             <div className="min-w-0">
               <div className="flex items-center gap-1.5 text-2xs font-semibold uppercase tracking-wider text-ink-500">
                 <Link to="/orders" className="inline-flex items-center gap-0.5 hover:text-ink-800">
                   <ChevronLeft className="h-3 w-3" /> Orders
                 </Link>
                 <span className="text-ink-300">/</span>
-                <span>Purchase order</span>
                 <span className="rounded border border-ink-300 bg-white px-1.5 py-px font-mono text-xs font-bold normal-case tracking-normal text-ink-900">
                   {order.poNumber}
                 </span>
@@ -195,20 +194,13 @@ export function OrderWorkspacePage() {
               </div>
             </div>
 
-            {/* Progress, in the title row rather than a block of its own. The
-                sentence about where the number comes from is the tooltip. */}
             <div
-              className="ml-auto flex items-center gap-2"
-              title={`Calculated from ${order.stages.reduce((a, s) => a + s.completedTasks, 0)} of ${order.stages.reduce((a, s) => a + s.totalTasks, 0)} workflow tasks — never typed in.`}
+              className="flex items-center gap-2 pt-1"
+              title={`Calculated from ${order.stages.reduce((a, s) => a + s.completedTasks, 0)} of ${order.stages.reduce((a, s) => a + s.totalTasks, 0)} workflow tasks — each stage weighted by how much of the order it represents.`}
             >
               <span className="text-2xs font-semibold uppercase tracking-wider text-ink-500">Progress</span>
               <ProgressBar value={order.progressPct} height="md" className="w-28" />
               <span className="tnum text-sm font-semibold text-ink-900">{order.progressPct}%</span>
-              {/*
-                Deleting an order is a super-admin action and nothing else. It
-                is not behind a permission because permissions are a table an
-                administrator can edit, and this is the one action with no undo.
-              */}
               {isSuperAdmin && (
                 <button
                   type="button"
@@ -221,10 +213,7 @@ export function OrderWorkspacePage() {
             </div>
           </div>
 
-          {/* The nine facts a coordinator checks before doing anything.
-              Quantity and delivery are here because "how many, by when" is
-              the question behind every other one. */}
-          <dl className="mt-1 flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
+          <dl className="mt-2 grid grid-cols-4 gap-x-4 gap-y-1.5 rounded-md border border-ink-200 bg-ink-50/70 px-3 py-2 text-xs lg:grid-cols-8">
             <HeaderFact label="Client" value={order.client.name} />
             <HeaderFact label="Style" value={order.styleNumber} />
             <HeaderFact label="Coordinator" value={order.coordinator?.name} />
@@ -240,7 +229,6 @@ export function OrderWorkspacePage() {
             <HeaderFact label="Season" value={order.season} />
           </dl>
 
-          {/* The next thing to do, stated once, at the top. */}
           {steps?.current && (
             <button
               onClick={() => setTab(steps.current!.tab)}
@@ -249,13 +237,9 @@ export function OrderWorkspacePage() {
               <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-accent-600 text-[10px] font-semibold text-white">
                 {steps.current.order}
               </span>
-              <span className="min-w-0 flex-1">
-                <span className="text-sm font-semibold text-accent-900">
-                  Next: {steps.current.label}
-                </span>
-                {steps.current.missing && (
-                  <span className="ml-2 text-xs text-accent-800">— {steps.current.missing}</span>
-                )}
+              <span className="min-w-0 flex-1 truncate">
+                <span className="text-sm font-semibold text-accent-900">Next: {steps.current.label}</span>
+                {steps.current.missing && <span className="ml-2 text-xs text-accent-800">— {steps.current.missing}</span>}
               </span>
               <span className="shrink-0 text-xs font-medium text-accent-700">Go →</span>
             </button>
@@ -372,9 +356,9 @@ export function OrderWorkspacePage() {
 
 function HeaderFact({ label, value }: { label: string; value: string | null | undefined }) {
   return (
-    <div className="flex gap-1.5">
-      <dt className="text-ink-400">{label}:</dt>
-      <dd className="font-medium text-ink-800">{value || '—'}</dd>
+    <div className="min-w-0">
+      <dt className="text-2xs font-semibold uppercase tracking-wider text-ink-400">{label}</dt>
+      <dd className="truncate font-medium text-ink-800" title={value ?? undefined}>{value || '—'}</dd>
     </div>
   );
 }
