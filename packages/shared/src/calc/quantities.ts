@@ -389,9 +389,30 @@ export function resolveShippedQty(
   return sum(shipments.filter((s) => HAS_SHIPPED.has(s.status)).map((s) => s.qty));
 }
 
+/** A carton as the packed-pieces rule needs it: its pieces, and whether it was split by colour and size. */
+export interface CartonLike {
+  qty: number;
+  orderColorId: string | null;
+  orderSizeId: string | null;
+}
+
+/**
+ * Pieces packed: the PACKED ledger, plus the cartons that never reached it.
+ *
+ * A carton with a colour and a size writes its pieces to the ledger; one
+ * saved as "mixed / not specified" does not, and so the Packing tab counted
+ * 500 pcs the Overview, the status and the order list did not. One rule for
+ * all of them: the ledger, plus every carton the ledger could not hold.
+ */
+export function resolvePackedQty(cells: readonly QtyCell[], cartons: readonly CartonLike[] = []): number {
+  const unledgered = cartons.filter((c) => !c.orderColorId || !c.orderSizeId);
+  return ledgerTotal(cells, QtyLedger.PACKED) + sum(unledgered.map((c) => c.qty));
+}
+
 export function computeFunnel(
   cells: readonly QtyCell[],
   shipments: readonly ShipmentLike[] = [],
+  cartons: readonly CartonLike[] = [],
 ): FunnelStep[] {
   const t = ledgerTotals(cells);
   const base = t[QtyLedger.ORDER] ?? 0;
@@ -401,7 +422,9 @@ export function computeFunnel(
     // or the two contradict each other on the same screen.
     const qty = ledger === QtyLedger.SHIPPED
       ? resolveShippedQty(cells, shipments)
-      : t[ledger] ?? 0;
+      : ledger === QtyLedger.PACKED
+        ? resolvePackedQty(cells, cartons)
+        : t[ledger] ?? 0;
     const step: FunnelStep = { ledger, qty, pctOfOrder: safePct(qty, base), pctOfPrev: prev === null ? 100 : safePct(qty, prev) };
     prev = qty;
     return step;

@@ -15,7 +15,7 @@ import {
   computeStageProgress, computeOrderProgress, currentStage, deriveOrderStatus,
   deriveHealth, deriveNextAction, evaluateAlerts, countBySeverity,
   computeFunnel, computeColorProgress, computeCutVariance, computeStockDeduction,
-  resolveShippedQty, furthestShipmentStatus, recordedCutQty,
+  resolveShippedQty, resolvePackedQty, furthestShipmentStatus, recordedCutQty,
   computeProductionAnalytics, computeBomSummary, computeCosting, computeQualityPassPct,
   computeMaterialPosition, computeStockPosition, computeConsumptionVariance,
   computeMarkerPlan, parseSizeRatio, evaluateAllGates, sanitiseOverrides, deriveCostLines, visibleDerivedLines,
@@ -306,6 +306,8 @@ export interface DerivedOrder {
   costing: ReturnType<typeof computeCosting>;
   /** Pieces shipped, from whichever record holds the answer. */
   shippedQty: number;
+  /** Pieces packed: the PACKED ledger plus the cartons it could not hold. */
+  packedQty: number;
   /** In-line ledger or sewing records, whichever is further along. */
   producedQty: number;
   daysRemaining: number | null;
@@ -392,7 +394,9 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
   // same reality, recorded by different people. Take whichever is further along
   // rather than letting one department's lag understate the order.
   const producedQty = Math.max(totals[QtyLedger.IN_LINE] ?? 0, production.producedQty);
-  const packedQty = totals[QtyLedger.PACKED] ?? 0;
+  // The ledger plus the cartons it could not hold ("mixed / not specified"),
+  // so the Packing tab, the funnel, the status and the order list agree.
+  const packedQty = resolvePackedQty(cells, order.packingLists.flatMap((l) => l.cartons));
   // Whichever record answers it — the colour × size breakdown, or the
   // consignments recorded on Packing & Shipping. One rule, used by the status,
   // the funnel, the costing and the order list, so none of them can disagree.
@@ -638,7 +642,7 @@ export function deriveOrder(order: FullOrder, today = new Date()): DerivedOrder 
     currentStageKey: stage?.stageKey ?? null,
     status, health,
     nextAction: deriveNextAction(stages),
-    alerts, production, bom, costing, shippedQty, producedQty, daysRemaining,
+    alerts, production, bom, costing, shippedQty, packedQty, producedQty, daysRemaining,
     materials,
     blockers: gates.blockers,
     warnings: gates.warnings,
@@ -731,7 +735,7 @@ export async function getOrderDetail(orderId: string, today = new Date()): Promi
     nextAction: d.nextAction,
     stages: d.stages,
     alerts: d.alerts,
-    funnel: computeFunnel(d.cells, order.shipments),
+    funnel: computeFunnel(d.cells, order.shipments, order.packingLists.flatMap((l) => l.cartons)),
     colorProgress: computeColorProgress(d.cells, d.colors),
     cutVariance: computeCutVariance(
       d.cells, cutPct,
@@ -801,7 +805,7 @@ export function buildOrderSummary(
     shippingMethod: order.shippingMethod,
     orderQty: d.totals[QtyLedger.ORDER] ?? 0,
     producedQty: d.producedQty,
-    packedQty: d.totals[QtyLedger.PACKED] ?? 0,
+    packedQty: d.packedQty,
     shippedQty: d.shippedQty,
     currentStage: d.currentStageKey,
     currentStageLabel: d.currentStageKey ? STAGE_META[d.currentStageKey].label : null,

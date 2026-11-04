@@ -21,12 +21,12 @@ export function factoryDefaults(): FactoryDefaults {
 export async function refreshFactoryDefaults(): Promise<FactoryDefaults> {
   const [daily, machines] = await Promise.all([
     prisma.costingRecord.findFirst({
-      where: { dailyCostUsd: { not: null }, dailyCostEnteredAt: { not: null } },
+      where: { dailyCostUsd: { gt: 0 }, dailyCostEnteredAt: { not: null } },
       orderBy: { dailyCostEnteredAt: 'desc' },
       select: { dailyCostUsd: true, order: { select: { poNumber: true } } },
     }),
     prisma.costingRecord.findFirst({
-      where: { machineCount: { not: null }, machineCountEnteredAt: { not: null } },
+      where: { machineCount: { gt: 0 }, machineCountEnteredAt: { not: null } },
       orderBy: { machineCountEnteredAt: 'desc' },
       select: { machineCount: true },
     }),

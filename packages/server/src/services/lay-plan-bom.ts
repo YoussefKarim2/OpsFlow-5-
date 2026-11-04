@@ -41,7 +41,7 @@ export async function syncLayPlanFabricToBom(tx: Prisma.TransactionClient, order
     tx.marker.findMany({ where: { orderId }, orderBy: { position: 'asc' } }),
     // The sheet's own FABRIC / COLOR / METER figures, as its import recorded them.
     tx.fabricRecord.findMany({
-      where: { orderId, importJobId: { not: null }, requiredM: { not: null } },
+      where: { orderId, importJobId: { not: null }, requiredM: { not: null }, standalone: true },
       select: { fabricName: true, colorName: true, requiredM: true },
     }),
     tx.bomItem.findMany({

@@ -451,6 +451,22 @@ inventoryRouter.post('/bom/:bomItemId/link', requirePermission('material:edit'),
   const bom = await prisma.bomItem.findUnique({ where: { id: req.params.bomItemId } });
   if (!bom) throw new NotFoundError('BOM line');
 
+  // A line with material already issued, or stock held for it, is tied to
+  // that material's shelf. Relinked, the old reservation held stock for
+  // nothing and corrections returned stock to a shelf that never gave it.
+  if (bom.materialId !== materialId) {
+    const [issues, held] = await Promise.all([
+      prisma.materialIssue.count({ where: { bomItemId: bom.id } }),
+      prisma.materialReservation.count({ where: { bomItemId: bom.id, status: { in: ['ACTIVE', 'PENDING'] } } }),
+    ]);
+    if (Number(bom.issuedQty?.toString() ?? 0) > 0 || issues > 0) {
+      throw new ValidationError(`Material has already been issued against ${bom.item}, so it cannot be linked to a different material. Add a new line for the other material instead.`);
+    }
+    if (held > 0) {
+      throw new ValidationError(`${bom.item} has stock reserved or requested, so it cannot be linked to a different material. Release the reservation or withdraw the request on the Materials tab first.`);
+    }
+  }
+
   if (materialId) {
     const material = await prisma.material.findUnique({ where: { id: materialId } });
     if (!material) throw new NotFoundError('Material');

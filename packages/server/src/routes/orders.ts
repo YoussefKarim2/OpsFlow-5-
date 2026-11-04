@@ -480,7 +480,11 @@ ordersRouter.get('/:id/matrix', requirePermission('order:read'), asyncHandler(as
     colors: order.colors.map((c) => ({ id: c.id, name: c.color.name, hex: c.color.hex, position: c.position })),
     sizes: inWearingOrder(order.sizes.map((s) => ({ id: s.id, name: s.size.name, position: s.position }))),
     matrices,
-    totals: d.totals,
+    // The shipped total follows the one rule the rest of the order uses
+    // (`resolveShippedQty`): consignments recorded on Packing & Shipping count
+    // even before they are split by colour and size. The Quantity tab's
+    // "Shipped 0" beside a header saying 50 shipped was this figure.
+    totals: { ...d.totals, [QtyLedger.SHIPPED]: d.shippedQty },
   });
 }));
 

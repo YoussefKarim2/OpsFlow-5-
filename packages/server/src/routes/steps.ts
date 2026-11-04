@@ -18,7 +18,7 @@ import multer from 'multer';
 import ExcelJS from 'exceljs';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
-import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines, sanitiseOverrides, sourceRefCovers, visibleDerivedLines } from '@opsflow/shared';
+import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines, sanitiseOverrides, sourceRefCovers, stepOverridePermission, visibleDerivedLines } from '@opsflow/shared';
 import { detectFileKind, FILE_KIND_LABEL } from '../services/import/file-kind.js';
 import { extractFromPdf } from '../services/import/pdf-extractor.js';
 import { sizeRank } from '../services/import/po-lines.js';
@@ -41,7 +41,7 @@ const proformaUpload = multer({
 import { prisma } from '../db.js';
 import { requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
-import { NotFoundError, BadRequestError, ValidationError, ConflictError } from '../errors.js';
+import { NotFoundError, BadRequestError, ValidationError, ConflictError, ForbiddenError } from '../errors.js';
 import { storage } from '../services/storage/index.js';
 import { logActivity } from '../services/activity-service.js';
 import { sanitiseHtml } from '../util/sanitise-html.js';
@@ -96,9 +96,15 @@ const statusSchema = z.object({
   notes: z.string().trim().max(4000).optional(),
 });
 
-stepsRouter.post('/:id/steps/:stageKey/status', requirePermission('order:edit'), asyncHandler(async (req, res) => {
+stepsRouter.post('/:id/steps/:stageKey/status', asyncHandler(async (req, res) => {
   const orderId = await resolveOrderId(req.params.id);
   const stageKey = parseStageKey(req.params.stageKey);
+  // The step's own department, not any order editor: marked done by hand, a
+  // step quiets its gate, and the inspection's gate is the inspector's to quiet.
+  const needed = stepOverridePermission(stageKey);
+  if (!currentUser(req).permissions.includes(needed)) {
+    throw new ForbiddenError(`Changing the ${STEP_BY_KEY[stageKey]?.label ?? stageKey} step by hand needs the ${needed} permission.`);
+  }
   const body = statusSchema.parse(req.body);
   const user = currentUser(req);
 
@@ -648,6 +654,8 @@ const proformaSchema = z.object({
   consolidatingVendor: z.string().trim().max(200).nullable().optional(),
   terms: z.string().trim().max(5000).nullable().optional(),
   lines: z.array(proformaLineSchema).max(200).optional(),
+  /** The copy this edit started from; a save over a newer one is refused. */
+  updatedAt: z.string().datetime().nullable().optional(),
 });
 
 /** The totals the sheet computes in H15:H31 — derived here, never stored. */
@@ -663,14 +671,16 @@ function withTotals(inv: {
       quantity: qty, unitPrice: price,
       // Null, not zero. A line with no price yet has no total — saying "0.00"
       // would put a number on the customer's document that nobody agreed.
-      lineTotal: qty != null && price != null ? qty * price : null,
+      // To the cent, like every line printed; summing raw floats made the
+      // lines not add up to their own total.
+      lineTotal: qty != null && price != null ? Math.round(qty * price * 100) / 100 : null,
     };
   });
   const priced = lines.filter((l) => l.lineTotal != null);
   return {
     ...inv,
     lines,
-    grandTotal: priced.length > 0 ? priced.reduce((a, l) => a + (l.lineTotal ?? 0), 0) : null,
+    grandTotal: priced.length > 0 ? Math.round(priced.reduce((a, l) => a + (l.lineTotal ?? 0), 0) * 100) / 100 : null,
     /** True when at least one line is still missing a quantity or a price. */
     incomplete: lines.some((l) => l.lineTotal == null),
   };
@@ -725,9 +735,24 @@ stepsRouter.put('/:id/proforma', requirePermission('invoice:write'), asyncHandle
   // The lines are replaced wholesale inside a transaction. A proforma is one
   // document; a half-written one is worse than the previous version.
   const invoice = await prisma.$transaction(async (tx) => {
-    const inv = existing
-      ? await tx.proformaInvoice.update({ where: { id: existing.id }, data: scalars })
-      : await tx.proformaInvoice.create({ data: { orderId, preparedById: user.id, ...scalars } });
+    let inv: { id: string };
+    if (existing) {
+      // Written only over the copy the person edited, and only while it is
+      // still unsent: a save from a stale tab used to replace every line.
+      const hit = await tx.proformaInvoice.updateMany({
+        where: {
+          id: existing.id, sentAt: null,
+          ...(body.updatedAt ? { updatedAt: new Date(body.updatedAt) } : {}),
+        },
+        data: scalars,
+      });
+      if (hit.count !== 1) {
+        throw new ConflictError('This proforma was changed by someone else (or sent) while you were editing. Reload to see the latest copy — your changes were not saved.');
+      }
+      inv = existing;
+    } else {
+      inv = await tx.proformaInvoice.create({ data: { orderId, preparedById: user.id, ...scalars } });
+    }
 
     if (body.lines) {
       await tx.proformaInvoiceLine.deleteMany({ where: { invoiceId: inv.id } });
@@ -888,7 +913,7 @@ stepsRouter.get('/:id/proforma/export.xlsx', requirePermission('invoice:read'), 
   for (const l of inv.lines) {
     const qty = l.quantity == null ? null : Number(l.quantity.toString());
     const price = l.unitPrice == null ? null : Number(l.unitPrice.toString());
-    const amount = qty != null && price != null ? qty * price : null;
+    const amount = qty != null && price != null ? Math.round(qty * price * 100) / 100 : null;
     if (amount != null) { total += amount; priced += 1; } else unpriced = true;
     if (qty != null) totalQty += qty;
     const row = ws.addRow([l.description, qty, l.unit, price, amount]);
@@ -1208,9 +1233,13 @@ stepsRouter.put('/:id/costing', requirePermission('costing:read'), requirePermis
     // old daily cost the factory's again.
     const now = new Date();
     const storedDaily = current?.dailyCostUsd == null ? null : Number(current.dailyCostUsd.toString());
+    const cents = (v: number | null) => (v == null ? null : Math.round(v * 100) / 100);
     const enteredField = {
-      ...(rest.dailyCostUsd !== undefined && rest.dailyCostUsd != null && rest.dailyCostUsd !== storedDaily ? { dailyCostEnteredAt: now } : {}),
-      ...(rest.machineCount !== undefined && rest.machineCount != null && rest.machineCount !== (current?.machineCount ?? null) ? { machineCountEnteredAt: now } : {}),
+      // Only a real figure, and only one that differs at the two decimals the
+      // sheet shows: a 0 typed for a free sample made C.M $0 on every order,
+      // and 1033.6986 re-saved as 1033.70 made an old cost the factory's again.
+      ...(rest.dailyCostUsd != null && rest.dailyCostUsd > 0 && cents(rest.dailyCostUsd) !== cents(storedDaily) ? { dailyCostEnteredAt: now } : {}),
+      ...(rest.machineCount != null && rest.machineCount > 0 && rest.machineCount !== (current?.machineCount ?? null) ? { machineCountEnteredAt: now } : {}),
     };
 
     const record = await tx.costingRecord.upsert({

@@ -264,6 +264,8 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
   const inFlightRef = useRef(false);
   /** The draft as it was when the in-flight save was sent. */
   const sentRef = useRef('');
+  /** A save asked for while one was in flight (leaving the tab): sent when that one lands. */
+  const queuedRef = useRef(false);
   /**
    * The server's version this draft was edited from: taken from the record
    * when the draft adopts it, and from each save's answer. Sent with every
@@ -368,7 +370,10 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
       }
       setSaveState('error');
     },
-    onSettled: () => { inFlightRef.current = false; },
+    onSettled: () => {
+      inFlightRef.current = false;
+      if (queuedRef.current) { queuedRef.current = false; saveRef.current(); }
+    },
   });
 
   /** Send the draft, unless one is already on its way or this copy is out of date. */
@@ -404,7 +409,20 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
    */
   const dirtyRef = useRef(dirty);
   dirtyRef.current = dirty;
-  useEffect(() => () => { if (dirtyRef.current) saveRef.current(); }, []);
+  useEffect(() => () => {
+    if (!dirtyRef.current) return;
+    // A save already on its way returns `saveNow` early; the edit typed
+    // after it was sent would be dropped. Queue one behind it instead.
+    if (inFlightRef.current) queuedRef.current = true; else saveRef.current();
+  }, []);
+  // Closing or reloading the page inside the debounce (the deploy's own
+  // reload included) must ask first, or the last keystrokes go missing.
+  useEffect(() => {
+    if (!dirty) return;
+    const ask = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', ask);
+    return () => window.removeEventListener('beforeunload', ask);
+  }, [dirty]);
 
   /**
    * The whole costing, recomputed from the draft on every keystroke.

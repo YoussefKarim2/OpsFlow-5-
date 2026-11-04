@@ -292,12 +292,14 @@ class Parser {
   }
 
   /** Every number an argument holds: a range's numeric cells (text and blanks skipped, as Excel's SUM does). */
-  private numbers(args: Arg[]): number[] {
+  private numbers(args: Arg[], skipSubtotals = false): number[] {
     const out: number[] = [];
     for (const a of args) {
       if (a != null && typeof a === 'object') {
         if ((a.r1 - a.r0 + 1) * (a.c1 - a.c0 + 1) > MAX_RANGE_CELLS) throw new Unsupported('range too large');
         for (let r = a.r0; r <= a.r1; r++) for (let c = a.c0; c <= a.c1; c++) {
+          // SUBTOTAL over a column of block subtotals skips them, as Excel does.
+          if (skipSubtotals && /^\s*(SUBTOTAL|AGGREGATE)\s*\(/i.test((a.ws.getRow(r).getCell(c) as { formula?: string }).formula ?? '')) continue;
           const v = cellValue(a.ws, r, c, this.depth, this.seen);
           if (typeof v === 'number') out.push(v);
         }
@@ -389,7 +391,7 @@ class Parser {
       }
       case 'SUBTOTAL': {
         const kind = one(0) % 100;
-        const n = this.numbers(args.slice(1));
+        const n = this.numbers(args.slice(1), true);
         if (kind === 9) return n.reduce((a, b) => a + b, 0);
         if (kind === 1) { if (!n.length) throw new Unsupported('#DIV/0!'); return n.reduce((a, b) => a + b, 0) / n.length; }
         if (kind === 2 || kind === 3) return n.length;
@@ -426,6 +428,8 @@ function matcher(criterion: Value): (v: Value) => boolean {
   const m = /^(<>|<=|>=|=|<|>)(.*)$/.exec(text);
   const op = m ? m[1]! : '=';
   const raw = m ? m[2]! : text;
+  // "Navy*" matches by pattern in Excel; matched literally it gave 0.
+  if (/[*?~]/.test(raw)) throw new Unsupported('wildcard criterion');
   const n = raw.trim() !== '' && Number.isFinite(Number(raw)) ? Number(raw) : null;
   return (v) => compareValues(v ?? (n != null ? null : ''), n ?? raw, op);
 }

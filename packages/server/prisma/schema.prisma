@@ -848,6 +848,10 @@ model FabricRecord {
   notes              String?
   /// Set when this row came from a Laying & Marking Excel import.
   importJobId        String?
+  /// A sheet fabric with no lay of its own at import (a rib, a lining): its
+  /// metres count on the bill of materials in their own right. A fabric the
+  /// lays cover is not, so renaming its lays does not leave a ghost line.
+  standalone         Boolean    @default(false)
   order              Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
   importJob          ImportJob? @relation(fields: [importJobId], references: [id], onDelete: SetNull)
 

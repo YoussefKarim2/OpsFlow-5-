@@ -292,9 +292,15 @@ export function buildInvoiceDocument(input: {
       // No breakdown exists, so the comparison is the order as a whole: one
       // row, same label on both sides. Labelling the shipped side differently
       // from the ordered side would print the whole order as short.
+      // The colour's own rate when there is one colour, or one rate shared
+      // by every colour; otherwise the order's price. A PO priced per style
+      // used to bill the whole shipment at the order price, or at none.
+      const colourRates = new Set(order.colors.map((c) => c.unitPriceUsd).filter((p): p is number => p != null));
       lines = [{
         kind: InvoiceLineKind.ITEM, description: order.orderName, size: null,
-        quantity: shipment.qty, unitPrice: price, amount: null,
+        quantity: shipment.qty,
+        unitPrice: (soleColour ? priceOf(soleColour) : null) ?? (colourRates.size === 1 ? [...colourRates][0]! : null) ?? price,
+        amount: null,
       }];
       reconciliation = reconcileShippedAgainstOrdered(
         [{ product: order.orderName, label: 'All sizes', qty: orderedQty }],
@@ -522,7 +528,7 @@ const BUILD_INCLUDE = {
     orderBy: { createdAt: 'desc' as const },
   },
   // Which lists are already on an issued invoice, so "choose for me" prefers one that is not.
-  invoiceOrders: { where: { invoice: { kind: 'INVOICE' as const, status: 'ISSUED' as const } }, select: { packingListId: true } },
+  invoiceOrders: { where: { invoice: { kind: 'INVOICE' as const, status: 'ISSUED' as const } }, select: { packingListId: true, invoice: { select: { shipmentId: true } } } },
 } satisfies Prisma.OrderInclude;
 
 type LoadedOrder = Prisma.OrderGetPayload<{ include: typeof BUILD_INCLUDE }>;
@@ -587,7 +593,10 @@ export function pickDefaults(o: LoadedOrder, chosen: { packingListId?: string | 
   if (chosen.shipmentId && !shipment) throw new NotFoundError('Shipment');
   if (!shipment) {
     const rank: Record<ShipmentStatus, number> = { DELIVERED: 4, SHIPPED: 3, BOOKED: 2, READY: 1, NOT_READY: 0 };
-    shipment = [...o.shipments].sort((a, b) => rank[b.status] - rank[a.status])[0];
+    // Not a consignment already on an issued invoice: two invoices of one
+    // order were given the same shipment, and the second could not be issued.
+    const invoicedShipments = new Set(o.invoiceOrders.map((i) => i.invoice?.shipmentId).filter((id): id is string => id != null));
+    shipment = o.shipments.filter((s) => !invoicedShipments.has(s.id)).sort((a, b) => rank[b.status] - rank[a.status])[0];
   }
   return { packingList: packingList ?? null, shipment: shipment ?? null };
 }

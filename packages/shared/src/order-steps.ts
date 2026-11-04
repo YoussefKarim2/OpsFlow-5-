@@ -34,6 +34,7 @@
  */
 
 import { StageKey, StageStatus, Department, QtyLedger } from './enums.js';
+import type { Permission } from './permissions.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // What the system knows about an order, for deciding step state
@@ -93,6 +94,8 @@ export interface StepContext {
   /** Costing. */
   hasCosting: boolean;
   costLineCount: number;
+  /** A stored cost line with both a quantity and a price: the costing has been priced, not just opened. */
+  costingPriced: boolean;
   /** Proforma invoice / invoice. */
   hasProformaInvoice: boolean;
   proformaLineCount: number;
@@ -493,9 +496,14 @@ export const ORDER_STEPS: readonly OrderStepDef[] = [
       'External operation costs',
     ],
     tab: 'costing',
-    isDoneWhen: (c) => c.hasCosting && has(c.costLineCount),
+    // Every save writes one derived line per BOM row, priced or not, so a
+    // note saved during cutting used to mark this step done. Done means the
+    // costing can answer: priced lines, and the shipped pieces it is per.
+    isDoneWhen: (c) => c.hasCosting && c.costingPriced && c.shippedQty > 0,
     missing: (c) =>
-      c.hasCosting ? (has(c.costLineCount) ? null : 'Add the cost lines') : 'Start the costing',
+      !c.hasCosting ? 'Start the costing'
+        : !c.costingPriced ? 'Price the cost lines'
+        : c.shippedQty > 0 ? null : 'Waiting for the shipped quantity',
     hasStarted: (c) => c.hasCosting,
   },
   {
@@ -714,4 +722,28 @@ export function deriveOrderSteps(ctx: StepContext, blockedSteps: ReadonlySet<Sta
 function toIso(v: Date | string | null | undefined): string | null {
   if (!v) return null;
   return v instanceof Date ? v.toISOString() : String(v);
+}
+
+/**
+ * Who may mark a step done, not required, or open again, by hand.
+ *
+ * A COMPLETED override beats the data and quiets the step's gate, so it is
+ * the department accountable for the step that decides — a coordinator could
+ * mark the inspection done while a failure was still open. Steps with no
+ * department of their own fall to the order's editors.
+ */
+const STEP_OVERRIDE_PERMISSION: Partial<Record<StageKey, Permission>> = {
+  [StageKey.CUT_ORDER]: 'cutting:write',
+  [StageKey.LAYING_FABRIC]: 'cutting:write',
+  [StageKey.BILL_OF_MATERIAL]: 'material:edit',
+  [StageKey.EXTERNAL_ORDER]: 'external:write',
+  [StageKey.PRODUCTION_FOLLOW_UP]: 'production:write',
+  [StageKey.PACKING]: 'packing:write',
+  [StageKey.AUDIT]: 'quality:audit',
+  [StageKey.ACTUAL_COSTING]: 'costing:write',
+  [StageKey.PROFORMA_INVOICE]: 'invoice:write',
+  [StageKey.INVOICE]: 'invoice:write',
+};
+export function stepOverridePermission(stageKey: StageKey): Permission {
+  return STEP_OVERRIDE_PERMISSION[stageKey] ?? 'order:edit';
 }

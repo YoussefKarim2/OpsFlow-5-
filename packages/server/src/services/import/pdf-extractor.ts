@@ -982,6 +982,7 @@ export async function extractFromPdf(
     });
   }
   if (best === 'lines' && poOrder) {
+    for (const n of poOrder.notes) issues.push({ level: 'WARNING', field: null, sheet: null, cell: null, message: n });
     matrices.length = 0;
     if (poOrder.matrix) {
       matrices.push({

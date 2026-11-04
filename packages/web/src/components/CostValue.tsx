@@ -17,6 +17,7 @@
  * the plain figure while being typed into.
  */
 
+import { useState } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { fitWidth } from '../lib/fit-width';
 import { editableText, formatCell, isTypeableNumber, NOT_CALCULATED, type CellKind } from '@opsflow/shared';
@@ -61,6 +62,7 @@ export function CostField({
   waiting?: string;
   tone?: FieldTone;
 }) {
+  const [focused, setFocused] = useState(false);
   const overridden = value.trim() !== '';
   const unknown = !overridden && calculated == null;
   const shown = overridden
@@ -85,7 +87,12 @@ export function CostField({
                 // like a blank waiting to be filled in.
                 tone !== 'input' && !overridden && 'border-dashed border-ink-200 bg-ink-50/60',
                 overridden && 'border-violet-400 bg-violet-50 pr-8 text-violet-900')}
-              value={value !== '' ? value : editableText(calculated, kind, places)}
+              // Backspaced to empty, the box stays empty while it has the
+              // cursor: the calculated figure filling it at once meant the next
+              // digit typed went on the end of it (12.35 → 12.358).
+              value={value !== '' ? value : focused ? '' : editableText(calculated, kind, places)}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
               // What it waits for is written under the box; inside it, cut to
               // "Waiting for the shipped qu", it said nothing.
               placeholder={unknown ? NOT_CALCULATED : ''}
@@ -195,6 +202,7 @@ export function CostCell({
   onRevert: () => void;
   className?: string;
 }) {
+  const [focused, setFocused] = useState(false);
   const overridden = value.trim() !== '';
   const shown = overridden
     ? formatCell(kind === 'text' ? value : Number(value), kind, places)
@@ -219,7 +227,9 @@ export function CostCell({
         className={clsx('input tnum px-1.5 py-1 text-right text-xs',
           // Room for the revert arrow only when there is one to make room for.
           overridden && 'border-violet-400 bg-violet-50 pr-6 text-violet-900', className)}
-        value={value !== '' ? value : editableText(calculated, kind, places)}
+        value={value !== '' ? value : focused ? '' : editableText(calculated, kind, places)}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
         style={fitWidth(value !== '' ? value : editableText(calculated, kind, places), 6, overridden ? '2.75rem' : '1rem')}
         // A dash, with the words on hover: "Not calculated" does not fit a figure's box.
         placeholder={shown === NOT_CALCULATED ? '—' : ''}

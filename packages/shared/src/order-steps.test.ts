@@ -32,7 +32,7 @@ function fresh(over: Partial<StepContext> = {}): StepContext {
     producedQty: 0, productionRecordCount: 0,
     auditCount: 0, auditPassed: false, openQualityFailure: false,
     cartonCount: 0, packedQty: 0, packingApproved: false,
-    hasCosting: false, costLineCount: 0,
+    hasCosting: false, costLineCount: 0, costingPriced: false,
     hasProformaInvoice: false, proformaLineCount: 0,
     shippedQty: 0, shipmentBooked: false,
     taskCounts: {},
@@ -419,7 +419,7 @@ describe('progress across the whole order', () => {
       auditCount: 1, auditPassed: true,
       cartonCount: 25, packedQty: 1972, packingApproved: true,
       stockRecorded: true,
-      hasCosting: true, costLineCount: 12,
+      hasCosting: true, costLineCount: 12, costingPriced: true,
       shippedQty: 1972, shipmentBooked: true,
       overrides: {
         // The two steps that need a person.
@@ -486,5 +486,22 @@ describe('steps that share a screen', () => {
     assert.equal(r.steps.find((s) => s.key === StageKey.MAIN_ORDER)!.ledger, QtyLedger.ORDER);
     // Steps with no grid of their own must not claim one.
     assert.equal(r.steps.find((s) => s.key === StageKey.BILL_OF_MATERIAL)!.ledger, null);
+  });
+});
+
+describe('the Actual Costing step', () => {
+  const step = (c: StepContext) => deriveOrderSteps(c).steps.find((s) => s.key === StageKey.ACTUAL_COSTING)!;
+  test('a saved note or an unpriced sheet is not a finished costing', () => {
+    const s = step(fresh({ hasCosting: true, costLineCount: 9, costingPriced: false, shippedQty: 0 }));
+    assert.notEqual(s.state, StepState.COMPLETED);
+    assert.equal(s.missing, 'Price the cost lines');
+  });
+  test('priced lines still wait for the shipped quantity', () => {
+    const s = step(fresh({ hasCosting: true, costLineCount: 9, costingPriced: true, shippedQty: 0 }));
+    assert.notEqual(s.state, StepState.COMPLETED);
+    assert.equal(s.missing, 'Waiting for the shipped quantity');
+  });
+  test('priced and shipped is done', () => {
+    assert.equal(step(fresh({ hasCosting: true, costLineCount: 9, costingPriced: true, shippedQty: 300 })).state, StepState.COMPLETED);
   });
 });

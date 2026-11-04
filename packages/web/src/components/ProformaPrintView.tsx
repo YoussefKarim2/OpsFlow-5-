@@ -47,7 +47,7 @@ const money = (n: number | null) =>
   n == null ? '—' : `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const lineTotal = (l: PrintLine) =>
-  l.quantity == null || l.unitPrice == null ? null : l.quantity * l.unitPrice;
+  l.quantity == null || l.unitPrice == null ? null : Math.round(l.quantity * l.unitPrice * 100) / 100;
 
 /** A labelled value, omitted entirely when empty — blanks are noise on paper. */
 function Row({ label, value }: { label: string; value: string | null | undefined }) {

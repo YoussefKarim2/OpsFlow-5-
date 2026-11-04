@@ -26,9 +26,10 @@ import {
 } from 'lucide-react';
 import {
   StageStatus, StepState, DEPARTMENT_LABEL,
-  type StageKey, type OrderStepState,
+  type StageKey, type OrderStepState, stepOverridePermission,
 } from '@opsflow/shared';
 import { api, type OrderStepsPayload } from '../../lib/api';
+import { useAuth } from '../../lib/auth';
 import { displayStepState } from '../../lib/step-display';
 import { Card, Modal, Field, clsx, useToast } from '../../components/ui';
 
@@ -185,6 +186,10 @@ export function StepHeader({
 }) {
   const qc = useQueryClient();
   const toast = useToast();
+  const { can } = useAuth();
+  // Marking a step by hand is the responsible department's call (the server
+  // refuses anyone else); buttons that end in a refusal are not offered.
+  const mayOverride = can(stepOverridePermission(step.key));
   const [dialog, setDialog] = useState<null | 'not-required' | 'waiting'>(null);
   const [reason, setReason] = useState('');
 
@@ -283,7 +288,9 @@ export function StepHeader({
           </div>
 
           <div className="flex w-full shrink-0 flex-col gap-1.5 sm:w-52">
-            {step.state === 'COMPLETED' ? (
+            {!mayOverride ? (
+              <p className="text-2xs text-ink-400">Marked done, or not required, by the department responsible for it.</p>
+            ) : step.state === 'COMPLETED' ? (
               <button
                 className="btn-ghost btn-sm justify-center"
                 disabled={busy}

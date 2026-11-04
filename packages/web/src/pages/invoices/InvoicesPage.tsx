@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react';
+import { cairoMonth } from '../../lib/cairo-day';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { Building2, Check, FileText, Plus, Receipt, Search, Send, X } from 'lucide-react';
@@ -67,7 +68,8 @@ export function InvoicesPage() {
   const stats = useMemo(() => {
     const docs = list.data?.data ?? [];
     const now = new Date();
-    const thisMonth = (d: string) => { const x = new Date(d); return x.getUTCFullYear() === now.getUTCFullYear() && x.getUTCMonth() === now.getUTCMonth(); };
+    const month = cairoMonth(now);
+    const thisMonth = (d: string) => cairoMonth(d) === month;
     const issuedInvoices = docs.filter((d) => d.kind === 'INVOICE' && d.status === 'ISSUED');
     return {
       drafts: docs.filter((d) => d.status === 'DRAFT').length,
@@ -125,7 +127,7 @@ export function InvoicesPage() {
                   <span>Ordered <b className="tnum">{c.orderQty.toLocaleString()}</b></span>
                   <span>Packed <b className="tnum">{c.packedQty.toLocaleString()}</b></span>
                   <span>Shipped <b className="tnum">{c.shippedQty.toLocaleString()}</b></span>
-                  <span>Price {c.pricePerPieceUsd == null ? <i className="text-amber-700">not set</i> : <b className="tnum">${c.pricePerPieceUsd.toFixed(2)}</b>}</span>
+                  <span>Price {c.pricePerPieceUsd == null ? <i className="text-amber-700">not set</i> : <b className="tnum">${c.pricePerPieceUsd.toFixed(Number.isInteger(c.pricePerPieceUsd * 100) ? 2 : 4)}</b>}</span>
                 </div>
                 {c.invoices.some((i) => i.status === 'ISSUED' && i.kind === 'INVOICE') && (
                   <span className="text-2xs text-ink-500">Invoiced so far: {c.invoices.filter((i) => i.status === 'ISSUED' && i.kind === 'INVOICE').reduce((a, i) => a + i.totalQty, 0).toLocaleString()} pcs</span>

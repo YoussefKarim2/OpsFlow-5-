@@ -15,6 +15,7 @@
  */
 
 import type { PrismaClient, Prisma } from '@prisma/client';
+import { layFabricKey } from '@opsflow/shared';
 import { ValidationError, NotFoundError, ConflictError } from '../../errors.js';
 import { suppressChangeEvents } from '../../request-context.js';
 import { logActivity } from '../../services/activity-service.js';
@@ -247,28 +248,37 @@ export async function commitLayingImport(
       // Cutting and fabric rows are additive logs, not a plan to reconcile row
       // by row the way markers are. Only written when the row actually
       // carries that data, so a lay-only file does not create empty log rows.
+      // Written once: a "Replace" re-import of the same sheet used to add
+      // another copy of every row's records each time.
       if (row.cutDate || row.cutByName) {
-        await tx.cuttingRecord.create({
-          data: {
-            orderId: order.id,
-            cutDate: row.cutDate,
-            cutByName: row.cutByName,
-            importJobId: input.jobId,
-          },
+        const same = await tx.cuttingRecord.findFirst({
+          where: { orderId: order.id, importJobId: { not: null }, cutDate: row.cutDate ?? null, cutByName: row.cutByName ?? null, actualCutQty: null },
+          select: { id: true },
         });
-        cuttingRecordsCreated++;
+        if (!same) {
+          await tx.cuttingRecord.create({
+            data: { orderId: order.id, cutDate: row.cutDate, cutByName: row.cutByName, importJobId: input.jobId },
+          });
+          cuttingRecordsCreated++;
+        }
       }
       if (row.fabricConsumptionM != null) {
-        await tx.fabricRecord.create({
-          data: {
-            orderId: order.id,
-            fabricName: row.fabricName ?? 'Unspecified',
-            colorName: row.fabricColor,
-            actualConsumptionM: row.fabricConsumptionM,
-            importJobId: input.jobId,
+        const same = await tx.fabricRecord.findFirst({
+          where: {
+            orderId: order.id, importJobId: { not: null }, requiredM: null,
+            fabricName: row.fabricName ?? 'Unspecified', colorName: row.fabricColor ?? null, actualConsumptionM: row.fabricConsumptionM,
           },
+          select: { id: true },
         });
-        fabricRecordsCreated++;
+        if (!same) {
+          await tx.fabricRecord.create({
+            data: {
+              orderId: order.id, fabricName: row.fabricName ?? 'Unspecified', colorName: row.fabricColor,
+              actualConsumptionM: row.fabricConsumptionM, importJobId: input.jobId,
+            },
+          });
+          fabricRecordsCreated++;
+        }
       }
     }
 
@@ -320,8 +330,12 @@ export async function commitLayingImport(
         // a blank leaves whatever the warehouse recorded. "Issued to" is a
         // department (CUT, PRINT), kept in its own column, not as the
         // responsible person.
+        // A fabric no lay of this sheet uses (a rib, a lining) counts on the
+        // bill in its own right; one the lays cover is theirs, so renaming
+        // the lays later does not leave its old line behind.
+        const standalone = !input.rows.some((r) => layFabricKey(r.fabricName ?? 'Unspecified', r.fabricColor) === layFabricKey(f.fabric, f.color));
         const data = {
-          fabricName: f.fabric, colorName: f.color, requiredM: f.meters, importJobId: input.jobId,
+          fabricName: f.fabric, colorName: f.color, requiredM: f.meters, importJobId: input.jobId, standalone,
           ...(f.issuedM != null ? { issuedM: f.issuedM } : {}),
           ...(f.issuedTo ? { issuedTo: f.issuedTo } : {}),
           ...(f.description ? { description: f.description } : {}),

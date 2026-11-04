@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { z } from 'zod';
-import { QtyLedger } from '@opsflow/shared';
+import { QtyLedger, resolvePackedQty } from '@opsflow/shared';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
@@ -35,12 +35,30 @@ const dec = (v: { toString(): string } | null | undefined): number | null =>
 async function assertPackedCeiling(orderId: string, added: number): Promise<void> {
   if (added <= 0) return;
   const order = await prisma.order.findUniqueOrThrow({ where: { id: orderId }, include: ORDER_INCLUDE });
-  const totals = deriveOrder(order).totals;
+  const d = deriveOrder(order);
+  const totals = d.totals;
   assertPackingWithinReason(
-    (totals[QtyLedger.PACKED] ?? 0) + added,
+    resolvePackedQty(d.cells, order.packingLists.flatMap((l) => l.cartons)) + added,
     totals[QtyLedger.ORDER] ?? 0,
     totals[QtyLedger.CUT] ?? 0,
   );
+}
+
+/**
+ * A packing list an issued invoice describes is history. Its cartons cannot
+ * change under the document: the manifest the customer holds would describe
+ * boxes that no longer exist, and the list would look fresh for invoicing again.
+ */
+async function assertListNotInvoiced(listId: string): Promise<void> {
+  const inv = await prisma.invoice.findFirst({
+    where: { packingListId: listId, status: 'ISSUED' },
+    select: { number: true },
+  });
+  if (inv) {
+    throw new ConflictError(
+      `Invoice ${inv.number} was issued from this packing list, so its cartons cannot change. Void that invoice first, or make a new list.`,
+    );
+  }
 }
 
 /**
@@ -285,7 +303,20 @@ packingRouter.put('/:orderId/files/:attachmentId/cartons', requirePermission('pa
     cartons.push(carton);
   });
   const edit: PackingEdit = { cartons, editedAt: new Date().toISOString(), editedBy: actor.name };
-  await prisma.attachment.update({ where: { id: attachment.id }, data: { packingEdit: edit as unknown as Prisma.InputJsonValue } });
+  // Written only over the copy the person started from: two saves from the
+  // same base, a moment apart, used to both pass the check above.
+  const written = await prisma.attachment.updateMany({
+    where: {
+      id: attachment.id,
+      ...(input.base == null
+        ? { packingEdit: { equals: Prisma.DbNull } }
+        : { packingEdit: { path: ['editedAt'], equals: input.base } }),
+    },
+    data: { packingEdit: edit as unknown as Prisma.InputJsonValue },
+  });
+  if (written.count !== 1) {
+    throw new ConflictError('Someone else changed these cartons while you were editing. Your changes were not saved — look again and redo them.');
+  }
   const totals = totalsOf(cartons);
   await logActivity({
     orderId: req.params.orderId, actorId: actor.id, actorName: actor.name,
@@ -400,6 +431,7 @@ packingRouter.put('/cartons/:cartonId/lines', requirePermission('packing:write')
   if (carton.packingList.approved) {
     throw new ValidationError('This packing list has been approved. Reopen it before changing a carton.');
   }
+  await assertListNotInvoiced(carton.packingList.id);
   for (const r of rows) {
     if (!r.orderSizeId && !r.sizeLabel?.trim()) {
       throw new ValidationError('Every size row needs a size.');
@@ -505,6 +537,7 @@ packingRouter.delete('/cartons/:cartonId', requirePermission('packing:write'), a
   if (carton.packingList.approved) {
     throw new ValidationError('This packing list has been approved. Reopen it before removing a carton.');
   }
+  await assertListNotInvoiced(carton.packingList.id);
 
   const orderId = carton.packingList.orderId;
   const colorId = carton.orderColorId;
@@ -551,6 +584,7 @@ packingRouter.post('/list/:listId/cartons/bulk', requirePermission('packing:writ
   if (list.approved) {
     throw new ValidationError('This packing list has been approved. Reopen it before adding cartons.');
   }
+  await assertListNotInvoiced(list.id);
   for (const r of rows) {
     if (r.netWeightKg != null && r.grossWeightKg != null && r.netWeightKg > r.grossWeightKg) {
       throw new ValidationError(`Carton ${r.cartonNumber}: net weight cannot exceed gross weight.`);
@@ -607,6 +641,7 @@ packingRouter.post('/list/:listId/cartons', requirePermission('packing:write'), 
   if (list.approved) {
     throw new ValidationError('This packing list has been approved. Reopen it before adding cartons.');
   }
+  await assertListNotInvoiced(list.id);
   if (input.netWeightKg != null && input.grossWeightKg != null && input.netWeightKg > input.grossWeightKg) {
     throw new ValidationError('Net weight cannot exceed gross weight.');
   }

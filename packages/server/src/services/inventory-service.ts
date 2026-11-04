@@ -901,7 +901,9 @@ export async function issueToProduction(
       if (input.bomItemId) {
         const bom = await tx.bomItem.findUnique({ where: { id: input.bomItemId } });
         if (bom) {
-          const lineQty = convertQty(qty, material.unit, bom.unit) ?? qty;
+          // Typed in the line's own unit, the typed figure goes on the line:
+          // pieces → dozens → pieces lost 0.04 of every 100 to rounding.
+          const lineQty = suppliedUnit === bom.unit.toUpperCase() ? quantise(input.qty) : (convertQty(qty, material.unit, bom.unit) ?? qty);
           await tx.bomItem.update({
             where: { id: input.bomItemId },
             data: {

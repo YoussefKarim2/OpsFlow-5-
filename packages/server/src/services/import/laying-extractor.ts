@@ -29,6 +29,10 @@ import { detectFileKind } from './file-kind.js';
 import { readAgeLayingSheet, type AgeLayingSheet } from './age-laying-reader.js';
 import { asPercent } from './percent.js';
 
+/** Wastage is a few percent: 0.015 is 1.5%, and a plain 1.5 is 1.5% too. */
+const asWastagePercent = (n: number | null): number | null =>
+  n == null || !Number.isFinite(n) ? null : Math.round((n > 0 && n <= 0.5 ? n * 100 : n) * 1000) / 1000;
+
 const LAYING_CONCEPTS = new Set<ImportConcept>([
   // MATERIAL as well as FABRIC: plenty of laying sheets head that column
   // "Material" rather than "Fabric", and both already mean the same field on
@@ -490,7 +494,7 @@ export async function extractLayingMarking(
       totalLengthM: toNumber(cellAt(row, ImportConcept.TOTAL_LENGTH)),
       nestPcs: toNumber(cellAt(row, ImportConcept.NEST_PCS)),
       efficiencyPct: asPercent(toNumber(cellAt(row, ImportConcept.EFFICIENCY))),
-      wastagePct: asPercent(toNumber(cellAt(row, ImportConcept.WASTAGE))),
+      wastagePct: asWastagePercent(toNumber(cellAt(row, ImportConcept.WASTAGE))),
       fabricConsumptionM: toNumber(cellAt(row, ImportConcept.FABRIC_CONSUMPTION)),
       cutDate: safeDate(cellAt(row, ImportConcept.CUT_DATE)),
       cutByName: toText(cellAt(row, ImportConcept.RESPONSIBLE_PERSON)),

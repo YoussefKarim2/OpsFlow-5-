@@ -556,6 +556,8 @@ export function readPoHeader(lines: readonly PoTextLine[], dayFirst: boolean): P
 // ── Lines into an order ─────────────────────────────────────────────────────
 
 export interface PoOrder {
+  /** Things changed while reading, for the import's issues: a dozen turned into pieces. */
+  notes: string[];
   /** Colour rows × size columns, for the order's quantity matrix. */
   matrix: { sizes: string[]; rows: Array<{ color: string; cells: Record<string, number>; total: number }> } | null;
   orderName: string | null;
@@ -576,7 +578,15 @@ export interface PoOrder {
  * Shirt — ROY/WHT"), so no line is merged into another and every quantity is
  * where the document put it.
  */
-export function poLinesToOrder(lines: readonly PoLine[]): PoOrder {
+export function poLinesToOrder(input: readonly PoLine[]): PoOrder {
+  const notes: string[] = [];
+  // A line priced per dozen is twelve pieces at a twelfth of the price:
+  // "10 DZ at $48.00" read as 10 pieces at $48 each.
+  const lines = input.map((l) => {
+    if (l.unit !== 'DOZEN') return l;
+    notes.push(`${l.description}: ${l.quantity} dozen read as ${l.quantity * 12} pieces at $${(l.unitPrice / 12).toFixed(4)} each.`);
+    return { ...l, quantity: l.quantity * 12, unitPrice: Math.round((l.unitPrice / 12) * 10000) / 10000, unit: 'PCS' };
+  });
   const styles = [...new Set(lines.map((l) => l.description))];
   const multi = styles.length > 1;
   const byRow = new Map<string, Record<string, number>>();
@@ -596,6 +606,7 @@ export function poLinesToOrder(lines: readonly PoLine[]): PoOrder {
   const prices = new Set(lines.map((l) => l.unitPrice));
   const codes = [...new Set(lines.map((l) => l.itemCode?.split(/[-_./]/).slice(0, 2).join('-')).filter(Boolean))] as string[];
   return {
+    notes,
     matrix: lines.length === 0 ? null : {
       sizes: sortedSizes,
       rows: [...byRow].map(([color, cells]) => ({ color, cells, total: Object.values(cells).reduce((a, b) => a + b, 0) })),

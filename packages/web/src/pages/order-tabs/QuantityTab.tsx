@@ -318,6 +318,13 @@ export function QuantityTab({
           </div>
         </div>
 
+        {ledger === QtyLedger.SHIPPED && !dirty && (data.totals[QtyLedger.SHIPPED] ?? 0) > matrix.grandTotal && (
+          <p className="border-b border-ink-200 bg-amber-50 px-4 py-2 text-xs text-amber-800">
+            {fmtNumber((data.totals[QtyLedger.SHIPPED] ?? 0) - matrix.grandTotal)} pcs were recorded as consignments on
+            Packing &amp; Shipping and are not yet split by colour and size here. The order's shipped figure counts them.
+          </p>
+        )}
+
         {ledger === QtyLedger.CUT && (
           <div className="border-b border-ink-200">
             <div className="grid grid-cols-1 gap-px bg-ink-200 sm:grid-cols-2 lg:grid-cols-4">

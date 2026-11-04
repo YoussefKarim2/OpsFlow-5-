@@ -214,6 +214,7 @@ export function buildStepContext(
 
     hasCosting: order.costing != null,
     costLineCount: order.costing?.lines.length ?? 0,
+    costingPriced: ((order.costing?.lines ?? []) as Array<{ quantity: unknown; unitPriceUsd: unknown }>).some((l) => l.quantity != null && l.unitPriceUsd != null),
 
     hasProformaInvoice: extras.hasProformaInvoice,
     proformaLineCount: extras.proformaLineCount,

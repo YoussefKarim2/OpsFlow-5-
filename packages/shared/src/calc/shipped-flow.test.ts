@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { QtyLedger } from '../enums.js';
-import { computeFunnel, computeVariances, resolveShippedQty, type QtyCell } from './quantities.js';
+import { computeFunnel, computeVariances, resolvePackedQty, resolveShippedQty, type QtyCell } from './quantities.js';
 import { computeCosting } from './costing.js';
 import { deriveOrderStatus } from './progress.js';
 import { evaluateAlerts } from './alerts.js';
@@ -169,5 +169,22 @@ describe('an order that has shipped stops being overdue', () => {
     const reverted = evaluateAlerts({ ...base, order: { ...base.order, shippedQty: 0 } });
     assert.equal(overdue(shipped), false);
     assert.equal(overdue(reverted), true);
+  });
+});
+
+describe('packed pieces', () => {
+  const cells: QtyCell[] = [
+    { colorId: 'c1', sizeId: 's1', ledger: QtyLedger.ORDER, qty: 1000 },
+    { colorId: 'c1', sizeId: 's1', ledger: QtyLedger.PACKED, qty: 200 },
+  ];
+  test('a carton saved without a colour or size counts, once, beside the ledger', () => {
+    const cartons = [
+      { qty: 200, orderColorId: 'c1', orderSizeId: 's1' },   // already in the ledger
+      { qty: 500, orderColorId: null, orderSizeId: null },    // "mixed / not specified"
+      { qty: 50, orderColorId: 'c1', orderSizeId: null },
+    ];
+    assert.equal(resolvePackedQty(cells, cartons), 750);
+    assert.equal(computeFunnel(cells, [], cartons).find((f) => f.ledger === QtyLedger.PACKED)!.qty, 750);
+    assert.equal(computeFunnel(cells, []).find((f) => f.ledger === QtyLedger.PACKED)!.qty, 200);
   });
 });

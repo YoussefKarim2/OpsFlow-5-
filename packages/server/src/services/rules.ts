@@ -187,11 +187,20 @@ export async function assertTaskCompletable(
   if (task.blockedByTaskId) {
     const blocker = await prisma.task.findUnique({
       where: { id: task.blockedByTaskId },
-      select: { title: true, status: true },
+      select: { title: true, status: true, sequence: true },
     });
-    if (blocker && blocker.status !== 'COMPLETED') {
+    // The whole group before this one, not only the task the link names:
+    // "Review the quantity matrix" could be completed while "Enter sizes and
+    // quantities" was still open, because the link pointed at another task.
+    const open = blocker
+      ? await prisma.task.findFirst({
+        where: { orderId: task.orderId, sequence: blocker.sequence, status: { not: 'COMPLETED' } },
+        select: { title: true }, orderBy: { createdAt: 'asc' },
+      })
+      : null;
+    if (open) {
       throw new TaskPrerequisiteError(
-        `"${task.title}" is waiting on "${blocker.title}", which is not complete.`,
+        `"${task.title}" is waiting on "${open.title}", which is not complete.`,
       );
     }
   }

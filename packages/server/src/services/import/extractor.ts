@@ -375,6 +375,12 @@ function readAnchored(
  * row beside it holds one line. Null when the label is not merged (a one-line
  * note), so the single-cell read stands.
  */
+/** "3%" or "3 %" typed as text: the fraction it means. */
+function percentText(v: unknown): number | null {
+  const m = /^\s*(-?\d+(?:[.,]\d+)?)\s*%\s*$/.exec(String(cellText(v)));
+  return m ? Number(m[1]!.replace(',', '.')) / 100 : null;
+}
+
 function readNoteBlock(sheet: ExcelJS.Worksheet, spec: FieldSpec): string | null {
   const anchor = findAnchor(sheet, spec.anchor);
   if (!anchor) return null;
@@ -447,7 +453,9 @@ function extractMatrix(sheet: ExcelJS.Worksheet, spec: MatrixSpec, issues: Impor
   for (let r = header.row + 1; r <= header.row + 60; r++) {
     const label = String(cellText(cellValue(sheet.getRow(r).getCell(header.col)))).trim();
 
-    if (norm(label) === norm(spec.terminator)) {
+    // "Total", "TOTAL" and "Grand Total" end the grid as "Totals" does; read
+    // as a colour, they doubled the order.
+    if (norm(label) === norm(spec.terminator) || /^(grand )?totals?$/.test(norm(label))) {
       // The sheet's own grand total, for cross-checking.
       for (let c = header.col + 1; c <= header.col + 40; c++) {
         const headerText = norm(cellValue(sheet.getRow(header.row).getCell(c)));
@@ -793,7 +801,7 @@ export async function extractWorkbook(buffer: Buffer, forcedProfile?: ImportProf
     if (value != null && !isExcelError(value)) {
       switch (spec.type) {
         case 'number':
-        case 'percent': parsed = toNumber(value); break;
+        case 'percent': parsed = toNumber(value) ?? percentText(value); break;
         case 'date': parsed = toDate(value); break;
         default: parsed = cellText(value).trim() || null;
       }
@@ -849,6 +857,16 @@ export async function extractWorkbook(buffer: Buffer, forcedProfile?: ImportProf
   // Percentages arrive as fractions (0.05) in this workbook, but a user may
   // have typed 5. Normalise anything above 1 down by a hundred.
   for (const key of ['cutPercentage', 'accessoryPercentage']) {
+    const v0 = fields[key];
+    // A cell holding 1 (meant as 1%) is 100% as a fraction, and a cut order
+    // of twice the order; nothing between 50% and 100% is a real allowance.
+    if (typeof v0 === 'number' && (v0 < 0 || (v0 > 0.5 && v0 <= 1))) {
+      fields[key] = null;
+      issues.push({
+        level: 'WARNING', field: key, sheet: null, cell: null,
+        message: `${key === 'cutPercentage' ? 'Cut' : 'Accessory'} percentage reads as ${(v0 * 100).toFixed(1)}%, which cannot be right, so it is not used. Check the figure on the review screen.`,
+      });
+    }
     const v = fields[key];
     if (typeof v === 'number' && v > 1) {
       fields[key] = v / 100;

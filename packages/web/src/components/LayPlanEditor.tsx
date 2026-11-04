@@ -30,6 +30,8 @@ export interface LayRowInput {
 interface Draft {
   id?: string; markerNumber: string; fabric: string; color: string; panel: string; ratio: string;
   layers: string; markerLengthM: string; totalLengthM: string; nestPcs: string; efficiencyPct: string; maxLayer: string;
+  /** The total was typed by hand this session, so it is kept as typed. */
+  totalTyped?: boolean;
 }
 
 const text = (v: number | null | undefined) => (v == null ? '' : String(v));
@@ -74,7 +76,22 @@ export function LayPlanEditor({ orderId, lays, defaultFabric, onSaved, onCancel 
     onError: (e) => setError(e instanceof ApiError ? e.message : 'Could not save the lay plan.'),
   });
 
-  const set = (i: number, patch: Partial<Draft>) => setRows((rs) => rs.map((r, n) => (n === i ? { ...r, ...patch } : r)));
+  const set = (i: number, patch: Partial<Draft>) => setRows((rs) => rs.map((r, n) => {
+    if (n !== i) return r;
+    const next = { ...r, ...patch };
+    // A recorded total is for the layers and marker it was recorded with.
+    // Halving the layers used to leave the metres whole, so the bill kept
+    // asking for fabric the lay no longer needs; scale it by its allowance.
+    if (('layers' in patch || 'markerLengthM' in patch) && !('totalLengthM' in patch) && !r.totalTyped && r.totalLengthM.trim() !== '') {
+      const oldTheo = (num(r.layers) ?? 0) * (num(r.markerLengthM) ?? 0);
+      const newTheo = (num(next.layers) ?? 0) * (num(next.markerLengthM) ?? 0);
+      const oldTotal = num(r.totalLengthM);
+      if (oldTheo > 0 && oldTotal != null && newTheo > 0) next.totalLengthM = String(Math.round(newTheo * (oldTotal / oldTheo) * 100) / 100);
+      else if (newTheo === 0) next.totalLengthM = '';
+    }
+    if ('totalLengthM' in patch) next.totalTyped = true;
+    return next;
+  }));
   const numeric = (apply: (v: string) => void) => (e: { target: { value: string } }) => { if (isTypeableNumber(e.target.value)) apply(e.target.value); };
   const remove = (i: number) => { const r = rows[i]!; if (r.id) setRemoved((x) => [...x, r.id!]); setRows((rs) => rs.filter((_, n) => n !== i)); };
 

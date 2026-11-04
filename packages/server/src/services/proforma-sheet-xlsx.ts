@@ -211,7 +211,8 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
       row.mixedRates || row.unitPrice == null || row.total == null
         || Math.abs(Math.round(Number(row.qty) * row.unitPrice * 100) / 100 - row.total) > 0.000001
         ? row.total
-        : { formula: `A${r}*J${r}`, result: row.total },
+        // Rounded in the cell, or SUM() added the fractions of a cent back.
+        : { formula: `ROUND(A${r}*J${r},2)`, result: row.total },
       perContainer > 0 ? { formula: `H${r}/$L$20`, result: row.containerShare ?? undefined } : null,
     ];
     values.forEach((v, j) => {

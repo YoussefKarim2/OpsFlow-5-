@@ -58,6 +58,8 @@ export interface SheetTable {
   score: number;
   /** Rows hidden in the sheet and so not read: a hidden row is a cancelled or superseded line. */
   hiddenRows?: number;
+  /** Columns hidden in the sheet and so not read: a size taken out of the order. */
+  hiddenColumns?: number;
   /**
    * The table's own "Total" row, read in the same columns as the rows, when
    * it has exactly one — the figure the customer will quote back, and so the
@@ -298,7 +300,12 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
       const k = sequence.findIndex((q) => q.i === i);
       return k === -1 ? null : cols[k] ?? null;
     });
-  const identity: Array<number | null> = columns.map((c) => c);
+  // A hidden column is a size taken out of the order, as a hidden row is a
+  // line taken out; read, a cancelled XL came back into every colour.
+  const hiddenCols = columns.map((c, i) => c != null && !!headers[i] && !!sheet.getColumn(c).hidden);
+  const hiddenColumns = hiddenCols.filter(Boolean).length;
+  hiddenCols.forEach((h, i) => { if (h) headers[i] = ''; });
+  const identity: Array<number | null> = columns.map((c, i) => (hiddenCols[i] ? null : c));
   const sideMappings = sideStarts.map((k) => {
     const fullSequence = allHeaders.map((h, i) => ({ text: h.toLowerCase(), i })).filter((h) => h.text !== '');
     return mappingFor(fullSequence.slice(k, k + sequence.length).map((q) => allColumns[q.i]!));
@@ -441,6 +448,7 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
     score: scoreTable(headers, rows),
     ...(totalsRow ? { totalsRow } : {}),
     ...(hiddenRows > 0 ? { hiddenRows } : {}),
+    ...(hiddenColumns > 0 ? { hiddenColumns } : {}),
   };
 }
 
@@ -457,7 +465,8 @@ function nextPopulated(sheet: ExcelJS.Worksheet, from: number, to: number, colum
 /** "Total", "Grand total", "Subtotal", "Sum" — a row that restates the others. */
 function isTotalsLabel(value: unknown): boolean {
   const text = String(cellText(value)).trim().toLowerCase();
-  return /^(total|totals|grand total|sum|sub\s*total)\b/.test(text);
+  // "Navy Total" is Excel's Data→Subtotal row: the colour restated, not another colour.
+  return /^(total|totals|grand total|sum|sub\s*total)\b/.test(text) || /\btotals?$/.test(text);
 }
 
 /**
@@ -753,6 +762,12 @@ function columnLetter(n: number): string {
 function buildWideMatrix(ctx: BuildContext, sizeColumns: Array<{ index: number; name: string }>): ExtractedMatrix | null {
   const colorCol = columnFor(ctx.analyses, ImportConcept.COLOR);
   if (colorCol == null) return null;
+  // Two styles in one grid name their rows "Style — Colour", as the long
+  // layout does; read by colour alone, ST-100 Navy and ST-200 Navy became
+  // one row and two products became one.
+  const styleCol = columnFor(ctx.analyses, ImportConcept.STYLE);
+  const styleOf = (row: unknown[]) => (styleCol == null ? '' : String(cellText(row[styleCol])).trim());
+  const multiStyle = styleCol != null && new Set(ctx.table.rows.map(styleOf).filter(Boolean)).size > 1;
 
   // The grid's own "Total" column, to the right of the sizes: each colour's
   // figure as the customer added it up.
@@ -763,11 +778,12 @@ function buildWideMatrix(ctx: BuildContext, sizeColumns: Array<{ index: number; 
   const stated: Array<{ color: string; stated: number | null; read: number }> = [];
   let totalsRow = ctx.table.totalsRow;
   for (const row of ctx.table.rows) {
-    const color = String(cellText(row[colorCol])).trim();
-    if (!color) continue;
+    const colorText = String(cellText(row[colorCol])).trim();
+    if (!colorText) continue;
     // A totals row that survived the table read — labelled in the colour
     // column rather than the first one — is the grid restated, not a colour.
-    if (isTotalsLabel(color)) { totalsRow ??= row; continue; }
+    if (isTotalsLabel(colorText)) { totalsRow ??= row; continue; }
+    const color = multiStyle && styleOf(row) ? `${styleOf(row)} — ${colorText}` : colorText;
 
     const cells: Record<string, number> = {};
     let total = 0;

@@ -459,6 +459,8 @@ export interface ProformaLineDto {
 export interface ProformaDto {
   id: string;
   number: string | null;
+  /** The copy's version: sent back with a save, so one over a newer copy is refused. */
+  updatedAt: string;
   date: string;
   consignee: string | null;
   billingAddress: string | null;

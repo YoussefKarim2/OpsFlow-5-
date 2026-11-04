@@ -24,6 +24,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Send, Lock, Upload, Download, Info, Printer } from 'lucide-react';
 import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
 import { api, type ProformaDto } from '../../lib/api';
+import { cairoDay } from '../../lib/cairo-day';
 import {
   Card, Field, Spinner, ConfirmDialog, Num, clsx, useToast, ErrorNote,
 } from '../../components/ui';
@@ -40,6 +41,8 @@ interface LineDraft {
 
 
 interface Draft {
+  /** The server copy this draft was made from; null for a new one. */
+  updatedAt: string | null;
   number: string;
   date: string;
   consignee: string;
@@ -56,6 +59,7 @@ interface Draft {
 }
 
 const EMPTY_DRAFT: Draft = {
+  updatedAt: null,
   number: '', date: '', consignee: '', billingAddress: '', email: '',
   vesselVoyage: '', containerSeal: '', shippingDate: '', shipmentFrom: '',
   shipmentTo: '', consolidatingVendor: '', terms: '', lines: [],
@@ -74,8 +78,9 @@ const day = (iso: string | null | undefined) => (iso ? iso.slice(0, 10) : '');
  */
 function seedFrom(order: OrderDetailDto): Draft {
   return {
+    updatedAt: null,
     number: '',
-    date: new Date().toISOString().slice(0, 10),
+    date: cairoDay(),
     consignee: order.client.name,
     billingAddress: order.client.billingAddress ?? '',
     email: '',
@@ -97,6 +102,7 @@ function seedFrom(order: OrderDetailDto): Draft {
 
 function fromServer(inv: ProformaDto): Draft {
   return {
+    updatedAt: inv.updatedAt,
     number: inv.number ?? '',
     date: day(inv.date),
     consignee: inv.consignee ?? '',
@@ -192,6 +198,7 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
 
   const save = useMutation({
     mutationFn: (d: Draft) => api.steps.saveProforma(orderId, {
+      updatedAt: d.updatedAt,
       number: d.number.trim() || null,
       date: d.date || undefined,
       consignee: d.consignee.trim() || null,
@@ -238,10 +245,11 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
   const lineTotal = (l: LineDraft): number | null => {
     const q = numOrNull(l.quantity);
     const p = numOrNull(l.unitPrice);
-    return q != null && p != null ? q * p : null;
+    // To the cent, as each line prints; summed raw, the lines did not add up.
+    return q != null && p != null ? Math.round(q * p * 100) / 100 : null;
   };
   const priced = draft.lines.map(lineTotal).filter((t): t is number => t != null);
-  const grand = priced.length > 0 ? priced.reduce((a, b) => a + b, 0) : null;
+  const grand = priced.length > 0 ? Math.round(priced.reduce((a, b) => a + b, 0) * 100) / 100 : null;
   const anyIncomplete = draft.lines.some((l) => l.description.trim() && lineTotal(l) == null);
 
   return (

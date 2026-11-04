@@ -14,7 +14,7 @@ import { materialiseWorkflow } from '../workflow-service.js';
 import { logActivity } from '../activity-service.js';
 import { ValidationError } from '../../errors.js';
 import { suppressChangeEvents } from '../../request-context.js';
-import { normalisePoNumber } from '../rules.js';
+import { normalisePoNumber, assertValidPercentage } from '../rules.js';
 import { syncLayPlanFabricToBom } from '../lay-plan-bom.js';
 import { cairoDay } from '../../util/cairo-day.js';
 
@@ -322,6 +322,7 @@ export async function commitImport(
   // Date: a cleared or unreadable one reached Prisma as an Invalid Date.
   const deliveryDate = isValidDate(f.requiredDeliveryDate) ? f.requiredDeliveryDate : shipDate;
   const cutPct = typeof f.cutPercentage === 'number' && Number.isFinite(f.cutPercentage) ? f.cutPercentage : 0.05;
+  assertValidPercentage(cutPct, 'Cut percentage');
 
   const result = await prisma.$transaction(async (tx) => {
     const clientId = await upsertClient(

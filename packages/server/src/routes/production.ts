@@ -115,6 +115,34 @@ const recordSchema = z.object({
   notes: z.string().optional(),
 });
 
+/**
+ * Tell the coordinator the moment the order slips — not at the next review.
+ * Run after every change to the sewing records: a correction of 450 down to
+ * 45 pushes the order behind as surely as a new entry does.
+ */
+async function notifyIfSlipped(order: { id: string; poNumber: string }, before: ReturnType<typeof deriveOrder>, actor: { id: string }) {
+  const after = await prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: ORDER_INCLUDE });
+  const derivedAfter = deriveOrder(after);
+  if (derivedAfter.production.isBehindSchedule && !before.production.isBehindSchedule) {
+    await logAndNotify(
+      {
+        orderId: order.id, actorId: actor.id, actorName: 'System',
+        action: 'PRODUCTION_DELAY_DETECTED',
+        summary: `production is now projected to finish ${derivedAfter.production.slipDays} day(s) after the required date`,
+      },
+      {
+        type: 'PRODUCTION_DELAY',
+        title: `${order.poNumber} is behind schedule`,
+        body: `At the current rate the order finishes ${derivedAfter.production.slipDays} day(s) late. ` +
+          `${Math.round(derivedAfter.production.requiredDailyRate ?? 0).toLocaleString()}/day is needed.`,
+        link: `/orders/${order.id}?tab=production`,
+        departments: ['FACTORY_MANAGER', 'PRODUCTION_MANAGER'],
+      },
+    );
+  }
+  return derivedAfter;
+}
+
 productionRouter.post('/:orderId', requirePermission('production:write'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   const input = recordSchema.parse(req.body);
@@ -145,10 +173,6 @@ productionRouter.post('/:orderId', requirePermission('production:write'), asyncH
     },
   });
 
-  // Recompute after the write so the delay notification reflects the new reality.
-  const after = await prisma.order.findUniqueOrThrow({ where: { id: order.id }, include: ORDER_INCLUDE });
-  const derivedAfter = deriveOrder(after);
-
   await logActivity({
     orderId: order.id, actorId: actor.id, actorName: actor.name,
     action: 'PRODUCTION_RECORDED',
@@ -157,24 +181,7 @@ productionRouter.post('/:orderId', requirePermission('production:write'), asyncH
     meta: { operation: input.operation, qty: input.qty, line: input.line ?? null },
   });
 
-  // Tell the coordinator the moment the order slips — not at the next review.
-  if (derivedAfter.production.isBehindSchedule && !d.production.isBehindSchedule) {
-    await logAndNotify(
-      {
-        orderId: order.id, actorId: actor.id, actorName: 'System',
-        action: 'PRODUCTION_DELAY_DETECTED',
-        summary: `production is now projected to finish ${derivedAfter.production.slipDays} day(s) after the required date`,
-      },
-      {
-        type: 'PRODUCTION_DELAY',
-        title: `${order.poNumber} is behind schedule`,
-        body: `At the current rate the order finishes ${derivedAfter.production.slipDays} day(s) late. ` +
-          `${Math.round(derivedAfter.production.requiredDailyRate ?? 0).toLocaleString()}/day is needed.`,
-        link: `/orders/${order.id}?tab=production`,
-        departments: ['FACTORY_MANAGER', 'PRODUCTION_MANAGER'],
-      },
-    );
-  }
+  const derivedAfter = await notifyIfSlipped(order, d, actor);
 
   await refreshOrderCache(order.id);
   res.status(201).json({
@@ -212,9 +219,11 @@ productionRouter.patch('/record/:id', requirePermission('production:write'), asy
   // Zero is a real answer — the line ran and made nothing — exactly as when
   // recording one, so a correction to 0 is accepted rather than refused.
   assertValidQuantity(qty, 'Production quantity');
+  let before: { order: { id: string; poNumber: string }; d: ReturnType<typeof deriveOrder> } | null = null;
   if (operation === 'SEWING' || record.operation === 'SEWING') {
     const order = await prisma.order.findUniqueOrThrow({ where: { id: record.orderId }, include: ORDER_INCLUDE });
     const d = deriveOrder(order);
+    before = { order, d };
     const removedSewing = record.operation === 'SEWING' ? record.qty : 0;
     const addedSewing = operation === 'SEWING' ? qty : 0;
     if (operation === 'SEWING') {
@@ -249,6 +258,7 @@ productionRouter.patch('/record/:id', requirePermission('production:write'), asy
     entityType: 'ProductionRecord', entityId: record.id,
     meta: { before: { qty: record.qty, operation: record.operation, date: record.date.toISOString() }, after: { qty: updated.qty, operation: updated.operation, date: updated.date.toISOString() } },
   });
+  if (before) await notifyIfSlipped(before.order, before.d, actor);
   await refreshOrderCache(record.orderId);
   res.json({
     record: {
@@ -265,9 +275,11 @@ productionRouter.delete('/record/:id', requirePermission('production:write'), as
 
   // Taking out a sewing entry lowers produced; it may not drop below what has
   // already gone on shipments without the same override shipping needs.
+  let before: { order: { id: string; poNumber: string }; d: ReturnType<typeof deriveOrder> } | null = null;
   if (record.operation === 'SEWING') {
     const order = await prisma.order.findUniqueOrThrow({ where: { id: record.orderId }, include: ORDER_INCLUDE });
     const d = deriveOrder(order);
+    before = { order, d };
     assertProducedCoversShipped({
       producedBefore: d.producedQty,
       producedAfter: producedAfterChange({
@@ -281,6 +293,7 @@ productionRouter.delete('/record/:id', requirePermission('production:write'), as
   }
 
   await prisma.productionRecord.delete({ where: { id: record.id } });
+  if (before) await notifyIfSlipped(before.order, before.d, actor);
   await logActivity({
     orderId: record.orderId, actorId: actor.id, actorName: actor.name,
     action: 'PRODUCTION_DELETED',
