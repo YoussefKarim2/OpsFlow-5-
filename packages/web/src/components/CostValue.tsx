@@ -17,29 +17,48 @@
  * the plain figure while being typed into.
  */
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { fitWidth } from '../lib/fit-width';
-import { editableText, formatCell, isTypeableNumber, NOT_CALCULATED, type CellKind } from '@opsflow/shared';
+import { editableText, fmtMoney, formatCell, isTypeableNumber, NOT_CALCULATED, type CellKind } from '@opsflow/shared';
 import { clsx } from './ui';
 
 /**
- * What a field is for, which is the thing the screen has to make obvious.
- *
- *   input   — somebody has to type it; nothing else in OpsFlow knows it
- *   auto    — read from the order, or worked out from other fields
- *   result  — the answer the page exists to give
- *
- * All three stay editable: a coordinator reconciling against an invoice can
- * type over anything. But a screen where twenty-seven fields look equally like
- * blanks to fill in is the spreadsheet feeling this is meant to remove — only
- * six of them actually want typing.
+ * One row of a figures sheet: the name on the left with a note under it —
+ * where the figure came from, how it was worked out, or what it is still
+ * waiting for — and the figure on the right. Every figure on the costing
+ * has this shape, whether it was typed, read or worked out, so the page
+ * reads as one document rather than three kinds of form.
  */
-export type FieldTone = 'input' | 'auto' | 'result';
+export function SheetRow({ label, note, noteTone = 'muted', children }: {
+  label: string;
+  note?: ReactNode;
+  noteTone?: 'muted' | 'amber' | 'violet' | 'red';
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4 px-4 py-2">
+      <div className="min-w-0 flex-1">
+        <p className="text-sm text-ink-700">{label}</p>
+        {note && (
+          <p className={clsx(
+            'text-2xs leading-snug',
+            noteTone === 'muted' && 'text-ink-400',
+            noteTone === 'amber' && 'text-amber-700',
+            noteTone === 'violet' && 'text-violet-600',
+            noteTone === 'red' && 'text-red-700',
+          )}>
+            {note}
+          </p>
+        )}
+      </div>
+      <div className="shrink-0 text-right">{children}</div>
+    </div>
+  );
+}
 
 export function CostField({
   label, editing, value, calculated, kind, places, onChange, onRevert, hint, from, waiting,
-  tone = 'input',
 }: {
   label: string;
   editing: boolean;
@@ -60,7 +79,6 @@ export function CostField({
    * "Waiting for the shipped quantity" is something a person can act on.
    */
   waiting?: string;
-  tone?: FieldTone;
 }) {
   const [focused, setFocused] = useState(false);
   const overridden = value.trim() !== '';
@@ -68,120 +86,126 @@ export function CostField({
   const shown = overridden
     ? formatCell(kind === 'text' ? value : Number(value), kind, places)
     : formatCell(calculated, kind, places);
+  const calcText = formatCell(calculated, kind, places);
+
+  // One note under the label, the most useful one: that the figure was typed,
+  // else what it waits for, else where it came from or how it was worked out.
+  const [note, noteTone] = overridden
+    ? [`typed · calculated ${calcText}`, 'violet' as const]
+    : unknown && waiting ? [waiting, 'amber' as const]
+    : from ? [`from ${from}`, 'muted' as const]
+    : [hint, 'muted' as const];
 
   return (
-    <div>
-      <p className="label flex items-baseline justify-between gap-2">
-        <span>{label}</span>
-        {from && <span className="text-2xs font-normal normal-case text-ink-400">from {from}</span>}
-      </p>
-
+    <SheetRow label={label} note={note} noteTone={noteTone}>
       {editing ? (
-        <>
-          <div className="relative">
-            <input
-              type="text"
-              inputMode={kind === 'text' ? 'text' : 'decimal'}
-              className={clsx('input', kind !== 'text' && 'tnum text-right',
-                // A worked-out field is still typeable, but it should not look
-                // like a blank waiting to be filled in.
-                tone !== 'input' && !overridden && 'border-dashed border-ink-200 bg-ink-50/60',
-                overridden && 'border-violet-400 bg-violet-50 pr-8 text-violet-900')}
-              // Backspaced to empty, the box stays empty while it has the
-              // cursor: the calculated figure filling it at once meant the next
-              // digit typed went on the end of it (12.35 → 12.358).
-              value={value !== '' ? value : focused ? '' : editableText(calculated, kind, places)}
-              onFocus={() => setFocused(true)}
-              onBlur={() => setFocused(false)}
-              // What it waits for is written under the box; inside it, cut to
-              // "Waiting for the shipped qu", it said nothing.
-              placeholder={unknown ? NOT_CALCULATED : ''}
-              onChange={(e) => {
-                const next = e.target.value;
-                if (kind !== 'text' && !isTypeableNumber(next)) return;
-                onChange(next);
-              }}
-            />
-            {overridden && (
-              <button
-                type="button"
-                className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-violet-600
-                           hover:bg-violet-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
-                title={`Put back the calculated figure — ${formatCell(calculated, kind, places)}`}
-                aria-label={`Revert to the calculated figure, ${formatCell(calculated, kind, places)}`}
-                onClick={onRevert}
-              >
-                <RotateCcw className="h-3 w-3" />
-              </button>
-            )}
-          </div>
-          {waiting && unknown
-            ? <p className="mt-1 text-2xs text-amber-700">{waiting}</p>
-            : hint && <p className="mt-1 text-2xs text-ink-500">{hint}</p>}
-        </>
-      ) : (
-        <>
-          <p className={clsx(
-            tone === 'result' ? 'text-lg font-semibold' : 'text-sm',
-            overridden ? 'text-violet-800' : unknown ? 'text-ink-400' : 'text-ink-900',
-            unknown && tone === 'result' && 'text-sm font-normal',
-          )}>
-            {unknown && waiting ? waiting : shown}
-          </p>
+        <div className="relative">
+          <input
+            type="text"
+            inputMode={kind === 'text' ? 'text' : 'decimal'}
+            className={clsx('input', kind === 'text' ? 'w-52' : 'tnum w-36 text-right',
+              // A worked-out field is still typeable, but it should not look
+              // like a blank waiting to be filled in.
+              !overridden && 'border-dashed border-ink-200 bg-ink-50/60',
+              overridden && 'border-violet-400 bg-violet-50 pr-8 text-violet-900')}
+            // Backspaced to empty, the box stays empty while it has the
+            // cursor: the calculated figure filling it at once meant the next
+            // digit typed went on the end of it (12.35 → 12.358).
+            value={value !== '' ? value : focused ? '' : editableText(calculated, kind, places)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
+            // What it waits for is written under the label; inside the box,
+            // cut to "Waiting for the shipped qu", it said nothing.
+            placeholder={unknown ? NOT_CALCULATED : ''}
+            onChange={(e) => {
+              const next = e.target.value;
+              if (kind !== 'text' && !isTypeableNumber(next)) return;
+              onChange(next);
+            }}
+          />
           {overridden && (
-            <p className="mt-0.5 text-2xs text-violet-600">
-              typed — calculated {formatCell(calculated, kind, places)}
-            </p>
+            <button
+              type="button"
+              className="absolute right-1 top-1/2 -translate-y-1/2 rounded p-1 text-violet-600
+                         hover:bg-violet-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-500"
+              title={`Put back the calculated figure — ${calcText}`}
+              aria-label={`Revert to the calculated figure, ${calcText}`}
+              onClick={onRevert}
+            >
+              <RotateCcw className="h-3 w-3" />
+            </button>
           )}
-        </>
+        </div>
+      ) : (
+        <p
+          className={clsx(
+            'text-sm font-semibold', kind !== 'text' && 'tnum',
+            overridden ? 'text-violet-800' : unknown ? 'text-ink-300' : 'text-ink-900',
+          )}
+          title={unknown ? NOT_CALCULATED : shown}
+        >
+          {unknown ? '—' : shown}
+        </p>
       )}
-    </div>
+    </SheetRow>
   );
 }
 
 /** A figure stored in its own column rather than typed over a calculation. */
 export function StoredField({
-  label, editing, value, onChange, hint, invalid, type = 'decimal', filledFrom,
+  label, editing, value, onChange, hint, invalid, type = 'decimal', kind = 'number', fallback,
 }: {
   label: string;
   editing: boolean;
   value: string;
   onChange: (v: string) => void;
+  /** What the figure is, in a few words. Shown under the label in both modes. */
   hint?: string;
-  /** Why what was typed cannot be stored, when it cannot. Shown under the field. */
+  /** Why what was typed cannot be stored, when it cannot. */
   invalid?: string;
   type?: 'decimal' | 'date';
-  /** Shown in place of the dash when the box is blank but the figure is known from elsewhere. */
-  filledFrom?: string;
+  /** How a stored figure reads at rest: "$38.49" rather than "38.49". */
+  kind?: 'money' | 'number';
+  /** The figure OpsFlow uses while the box is blank, and where it holds it. */
+  fallback?: { value: string; note: string };
 }) {
+  const blank = value.trim() === '';
+  const display = blank
+    ? (fallback?.value ?? '—')
+    : kind === 'money' && Number.isFinite(Number(value)) ? fmtMoney(Number(value)) : value;
+  const [note, noteTone] = invalid
+    ? [invalid, 'red' as const]
+    : blank && fallback
+      ? [editing ? `blank — ${fallback.value}, ${fallback.note}, is used` : fallback.note, 'muted' as const]
+      : [hint, 'muted' as const];
+
   return (
-    <div>
-      <p className="label">{label}</p>
+    <SheetRow label={label} note={note} noteTone={noteTone}>
       {editing ? (
-        <>
-          {type === 'date' ? (
-            <input
-              type="date" className="input" value={value}
-              onChange={(e) => onChange(e.target.value)}
-            />
-          ) : (
-            <input
-              type="text" inputMode="decimal"
-              className={clsx('input tnum text-right', invalid && 'border-red-400 ring-1 ring-red-400')}
-              value={value}
-              aria-invalid={invalid ? true : undefined}
-              onChange={(e) => { if (isTypeableNumber(e.target.value)) onChange(e.target.value); }}
-            />
-          )}
-          {invalid && <p className="mt-1 text-2xs text-red-700">{invalid}</p>}
-          {hint && <p className="mt-1 text-2xs text-ink-500">{hint}</p>}
-        </>
+        type === 'date' ? (
+          <input
+            type="date" className="input w-40" value={value}
+            onChange={(e) => onChange(e.target.value)}
+          />
+        ) : (
+          <input
+            type="text" inputMode="decimal"
+            className={clsx('input tnum w-36 text-right', invalid && 'border-red-400 ring-1 ring-red-400')}
+            value={value}
+            placeholder={fallback?.value}
+            aria-invalid={invalid ? true : undefined}
+            onChange={(e) => { if (isTypeableNumber(e.target.value)) onChange(e.target.value); }}
+          />
+        )
       ) : (
-        <p className="text-sm text-ink-800">
-          {value !== '' ? value : filledFrom ? <span className="italic text-ink-500">{filledFrom}</span> : '—'}
+        <p className={clsx(
+          'tnum text-sm font-semibold',
+          blank && !fallback ? 'text-ink-300' : blank ? 'text-ink-700' : 'text-ink-900',
+        )}>
+          {display}
         </p>
       )}
-    </div>
+    </SheetRow>
   );
 }
 
