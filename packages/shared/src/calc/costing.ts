@@ -225,25 +225,13 @@ export interface CostingResult {
   /** Dollars per machine-day: daily cost over all factory machines. */
   machineCostPerDay: number | null;
   workDays: number | null;
-  /** Pieces per work day: pieces sewn ÷ work days, or the cut ÷ work days before any sewing is recorded. */
+  /** The factory's "Productivity rate": the Production step's target production per day (Maestro `'Production Follow up'!J13`), or typed. */
   productivityRate: number | null;
-  productivityBasis: 'produced' | 'cut';
   /** Machines on this order's line: typed on the costing, else the Production tab's machine table. */
   lineMachineQty: number | null;
   lineMachineSource: 'typed' | 'production' | null;
   /** The Production tab's target pieces per day. */
   targetPerDay: number | null;
-  /**
-   * What a piece costs to make at the target: the line's machine cost per day
-   * (machine cost × line machines) over the pieces it is meant to make a day.
-   */
-  targetCostPerPieceUsd: number | null;
-  /**
-   * C.M at the target — the new costing sheet's `((H9×H12)/L15)×G15`, without
-   * the days in line it multiplied in (which made it days-in-line times too
-   * high). Shown beside the actual C.M for comparison; not in the total.
-   */
-  targetCmCostUsd: number | null;
   /** Actual C.M per piece: the actual C.M over the 1st degree pieces it is charged to. */
   cmCostPerPieceUsd: number | null;
   /** Calendar days the order occupied a line, as recorded. */
@@ -371,8 +359,10 @@ export function computeCosting(input: CostingInput): CostingResult {
   );
 
   const workDays = pick('workDays', safeDiv(machineDaysUsed, machineCount));
-  const productivityBasis: CostingResult['productivityBasis'] = producedQty != null && producedQty > 0 ? 'produced' : 'cut';
-  const productivityRate = pick('productivityRate', safeDiv(productivityBasis === 'produced' ? producedQty : cutQty, workDays));
+  // The factory's template (Final Template Po, Maestro) takes the
+  // productivity rate straight from the Production sheet's "Target
+  // Production / Day" — the line's target, not a measured output.
+  const productivityRate = pick('productivityRate', targetPerDay != null && targetPerDay > 0 ? targetPerDay : null);
 
   // --- Line costs --------------------------------------------------------
   const priced: Array<CostLineInput & { cost: number | null }> = lines.map((l) => ({
@@ -437,41 +427,27 @@ export function computeCosting(input: CostingInput): CostingResult {
    *
    *   daily cost ÷ productivity rate × 1st degree qty
    *
-   * The factory costs its daily figure for every day it runs, and the
-   * productivity rate is how many pieces this order got out of one such day
-   * (cut ÷ work days, where work days = machine-days ÷ all machines). One over
-   * the other is what a piece cost to make, and the pieces that passed
-   * end-line inspection are the ones it is charged against.
+   * The factory's own formula, `'Actual Costing'!K39` of the Maestro template:
    *
-   * Written out, that is the machine run cost — machine cost × machine-days —
-   * spread over the pieces cut and charged for the pieces that passed:
+   *   ((Machine Cost × Machine Already Used) ÷ Productivity rate) × 1st Degree Qty
    *
-   *   machine cost × machine-days ÷ cut qty × 1st degree qty
-   *
-   * so when every cut piece passes it is exactly the workbook's `=D17*D13`,
-   * work days × daily cost. An earlier version divided the whole run cost by
-   * the productivity rate instead of the daily cost; the units of that are
-   * dollars × days, not dollars, and it charged an order work-days times what its
-   * machines had cost to run (3.3× on an 11-day order).
+   * Machine Cost is the daily cost over all factory machines; Machine Already
+   * Used is the line's machines for the days it held them; the productivity
+   * rate is the Production step's target per day; and the pieces charged are
+   * the ones that passed end-line inspection. Implemented as written, at the
+   * owner's instruction, so the sheet and the application never disagree.
    *
    * Nothing is rounded on the way through — only the figure that reaches the
    * screen is formatted — and every division goes through `safeDiv`, so a
-   * productivity rate of zero or an unrecorded one leaves the whole thing
-   * uncalculated rather than infinite.
+   * target of zero or none leaves the whole thing uncalculated, not infinite.
    */
-  const costPerPiece = safeDiv(dailyCostUsd, productivityRate);
+  const machineRunCost = machineCostPerDay != null && machineDaysUsed != null ? machineCostPerDay * machineDaysUsed : null;
+  const costPerPiece = safeDiv(machineRunCost, productivityRate);
   const cmCostUsd = pick(
     'cmCostUsd',
     costPerPiece != null && firstDegreeQty != null ? costPerPiece * firstDegreeQty : null,
   );
 
-  // C.M at the target, for comparison. The line's machine cost for a day over
-  // the pieces it is meant to make that day; charged against the same 1st
-  // degree pieces as the actual.
-  const targetCostPerPieceUsd = machineCostPerDay != null && lineMachineQty != null
-    ? safeDiv(machineCostPerDay * lineMachineQty, targetPerDay)
-    : null;
-  const targetCmCostUsd = targetCostPerPieceUsd != null && firstDegreeQty != null ? targetCostPerPieceUsd * firstDegreeQty : null;
   const cmCostPerPieceUsd = safeDiv(cmCostUsd, firstDegreeQty);
 
   const costParts = [fabricCostUsd, accessoryCostUsd, externalCostUsd, cmCostUsd, otherCostUsd];
@@ -550,29 +526,18 @@ export function computeCosting(input: CostingInput): CostingResult {
   // known work days means the work days were zero — nothing can be produced
   // per day in no days, and asking for a cut quantity sent people to the wrong
   // screen.
-  needs('productivityRate', productivityRate,
-    workDays == null ? 'Waiting for the work days'
-      : workDays === 0 ? 'Waiting for work days above zero — the machine-days used is 0'
-      : 'Waiting for a cut quantity or sewing output');
-  // A rate of 0 is a cut of 0 with no sewing yet: say what is missing, not
-  // "waiting for the productivity rate" beside a rate the sheet shows as 0.
-  if (productivityRate === 0 && waiting.productivityRate == null) waiting.productivityRate = 'Waiting for a cut quantity or sewing output';
+  needs('productivityRate', productivityRate, 'Waiting for the target production per day on the Production step');
+  if (productivityRate === 0 && waiting.productivityRate == null) waiting.productivityRate = 'Waiting for a productivity rate above zero';
   needs('cmCostUsd', cmCostUsd,
     noDaily ? `Waiting for ${noDaily}`
-      : machineDaysUsed == null ? 'Waiting for the line machines and days in line'
       : noMachines ? `Waiting for ${noMachines}`
-      : productivityRate === 0
-        ? (overridden.includes('productivityRate') ? 'Waiting for a productivity rate above zero' : 'Waiting for a cut quantity or sewing output')
-      : productivityRate == null ? 'Waiting for the productivity rate'
+      : machineDaysUsed == null ? 'Waiting for the line machines and days in line'
+      : productivityRate == null ? 'Waiting for the target production per day on the Production step'
+      : productivityRate === 0 ? 'Waiting for a productivity rate above zero'
       : firstDegreeQty == null ? 'Waiting for the 1st degree quantity' : null);
   needs('machineDaysUsed', machineDaysUsed,
     lineMachineQty == null ? 'Waiting for the line machines — type them, or enter the machine table on the Production step'
       : 'Waiting for the days in line — type them, or record sewing on the Production step');
-  needs('targetCmCostUsd', targetCmCostUsd,
-    targetPerDay == null || targetPerDay <= 0 ? 'Waiting for the target production per day on the Production step'
-      : machineCostPerDay == null ? (noMachines ? `Waiting for ${noMachines}` : "Waiting for the factory's daily cost")
-      : lineMachineQty == null ? 'Waiting for the line machines'
-      : firstDegreeQty == null ? 'Waiting for the 1st degree quantity' : null);
   // Nothing issued is a different wait from nothing priced: the costing
   // counts what the warehouse issued, and a priced line nobody has issued
   // said "waiting for a unit price" when the price was already there.
@@ -631,8 +596,8 @@ export function computeCosting(input: CostingInput): CostingResult {
     firstDegreeQty, secondDegreeQty,
     diffPct,
     shippedVsOrderedPct: shippedShare,
-    machineCostPerDay, workDays, productivityRate, productivityBasis,
-    lineMachineQty, lineMachineSource, targetPerDay, targetCostPerPieceUsd, targetCmCostUsd, cmCostPerPieceUsd,
+    machineCostPerDay, workDays, productivityRate,
+    lineMachineQty, lineMachineSource, targetPerDay, cmCostPerPieceUsd,
     daysInLine, daysInLineUsed, daysInLineSource,
     lines: linesOut, groups,
     fabricCostUsd, accessoryCostUsd, externalCostUsd,

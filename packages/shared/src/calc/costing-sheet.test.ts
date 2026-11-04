@@ -35,10 +35,10 @@ describe('actual costing — the header block', () => {
   test('work days and productivity follow the machine-days actually used', () => {
     // BASE records 12 machines on the line for 11 days, so machine-days is
     // 132 — worked out, not the 130 that used to be typed in.
-    const r = computeCosting(BASE);
+    const r = computeCosting({ ...BASE, targetPerDay: 500 });
     assert.equal(r.machineDaysUsed, 132);
     assert.ok(Math.abs((r.workDays ?? 0) - 132 / 38) < 1e-9);
-    assert.ok(Math.abs((r.productivityRate ?? 0) - 2084 / (132 / 38)) < 1e-6);
+    assert.equal(r.productivityRate, 500, "the Production step's target per day");
   });
 
   test('the inputs are echoed back so the sheet can print them', () => {
@@ -220,14 +220,14 @@ describe('actual costing — the money', () => {
     lines: [line('FABRIC', 'Rosetta', 1000, 'Met.', 2, 'bom:FABRIC')],
   };
 
-  test('C.M is the daily cost per piece produced, over the pieces that passed', () => {
+  test('C.M is the machine run cost over the target per day, charged for the pieces that passed', () => {
     // daily cost ÷ productivity × 1st degree qty, in dollars throughout. The
     // formula itself is covered in `cm-cost.test.ts`; this holds that the
     // sheet as a whole still produces it.
-    const r = computeCosting(shipped);
+    const r = computeCosting({ ...shipped, targetPerDay: 500 });
     const used = 12 * 11;
-    const productivity = 2084 / (used / 38);
-    const expected = (1867 / productivity) * 1950;
+    // Maestro K39: ((machine cost × machine-days) ÷ target per day) × 1st degree.
+    const expected = (((1867 / 38) * used) / 500) * 1950;
     assert.ok(Math.abs((r.cmCostUsd ?? 0) - expected) < 1e-9,
       `got ${r.cmCostUsd}, expected ${expected}`);
   });
@@ -398,19 +398,16 @@ describe('actual costing — what may be stored as an override', () => {
 });
 
 describe('actual costing — why productivity is missing', () => {
-  test('zero work days is named as such, not as a missing cut quantity', () => {
-    // No machine-days on a known machine count gives zero work days, and no
-    // rate can be worked out per day of nothing. The cut quantity was there.
-    const r = computeCosting({ ...BASE, lineMachineQty: 0, daysInLine: 11 });
+  test('the productivity rate is the target, whatever the work days', () => {
+    const r = computeCosting({ ...BASE, lineMachineQty: 0, daysInLine: 11, targetPerDay: 500 });
     assert.equal(r.workDays, 0);
-    assert.equal(r.productivityRate, null);
-    assert.doesNotMatch(r.waiting.productivityRate ?? '', /cut quantity/);
-    assert.match(r.waiting.productivityRate ?? '', /work days/);
+    assert.equal(r.productivityRate, 500);
   });
 
-  test('unknown work days still asks for the work days', () => {
-    const r = computeCosting({ ...BASE, lineMachineQty: null, daysInLine: null, machineDaysUsed: null });
-    assert.equal(r.waiting.productivityRate, 'Waiting for the work days');
+  test('no target on the Production step asks for it', () => {
+    const r = computeCosting({ ...BASE, targetPerDay: null });
+    assert.equal(r.productivityRate, null);
+    assert.equal(r.waiting.productivityRate, 'Waiting for the target production per day on the Production step');
   });
 });
 

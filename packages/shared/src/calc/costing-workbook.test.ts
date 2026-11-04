@@ -54,10 +54,10 @@ describe('the workbook formulas, cell by cell', () => {
     assert.ok(Math.abs(r.workDays! - 130 / 38) < 1e-12);
   });
 
-  test('D18 — Productivity rate is the cut quantity over the work days', () => {
-    const r = computeCosting({ ...BASE, cutQty: 69 });
-    // Excel's own value in D18, with its own J12 of 69.
-    assert.ok(Math.abs(r.productivityRate! - 20.169230769230769) < 1e-12);
+  test("D18 — Productivity rate: the Maestro template reads the Production sheet's target per day", () => {
+    const r = computeCosting({ ...BASE, cutQty: 69, targetPerDay: 500 });
+    assert.equal(r.productivityRate, 500);
+    assert.equal(computeCosting({ ...BASE, cutQty: 69 }).productivityRate, null, 'no target, no rate');
   });
 
   test('N11 — Diff. Percentage is shipped over ordered, less 100%', () => {
@@ -88,19 +88,18 @@ describe('the workbook formulas, cell by cell', () => {
     assert.ok(Math.abs(r.groups.accessory.total! - 100) < 1e-12);
   });
 
-  test('N36 — work days × daily cost, charged for the pieces that passed', () => {
+  test('N36 — the machine run cost over the target, charged for the pieces that passed', () => {
     // The workbook's own formula: `=D17*D13`, the machine run cost.
-    const workbook = (130 / 38) * 1867;
+    const runCost = (1867 / 38) * 130;
 
-    // The factory's C.M is daily cost ÷ productivity × 1st degree qty, which
-    // is that same run cost spread over the pieces cut and charged for the
-    // ones that passed inspection. So it is the workbook's figure exactly
-    // when every cut piece passed, and that share of it otherwise. Held in
+    // The Maestro template (K39) spreads that run cost over the line's
+    // target per day and charges it for the pieces that passed inspection:
+    // ((machine cost × machine-days) ÷ target) × 1st degree. Held in
     // `cm-cost.test.ts`; recorded here against the source cell.
-    const all = computeCosting({ ...BASE, firstDegreeQty: 2084 });
-    assert.ok(Math.abs(all.cmCostUsd! - workbook) < 1e-9);
-    const some = computeCosting({ ...BASE, firstDegreeQty: 1950 });
-    assert.ok(Math.abs(some.cmCostUsd! - (workbook * 1950 / 2084)) < 1e-9);
+    const all = computeCosting({ ...BASE, firstDegreeQty: 2084, targetPerDay: 500 });
+    assert.ok(Math.abs(all.cmCostUsd! - (runCost / 500) * 2084) < 1e-9);
+    const some = computeCosting({ ...BASE, firstDegreeQty: 1950, targetPerDay: 500 });
+    assert.ok(Math.abs(some.cmCostUsd! - (runCost / 500) * 1950) < 1e-9);
   });
 
   test('N37 — the Total is the sections plus C.M', () => {
@@ -166,8 +165,8 @@ describe('deliberate departures from the workbook', () => {
   test('there is no dollar rate: the daily cost is entered in dollars', () => {
     // The workbook kept D13 in pounds and converted at D12. OpsFlow holds one
     // currency, so C.M is the daily cost's own figure with nothing applied.
-    const r = computeCosting({ ...BASE, firstDegreeQty: 2084 });
-    assert.ok(Math.abs(r.cmCostUsd! - (130 / 38) * 1867) < 1e-9);
+    const r = computeCosting({ ...BASE, firstDegreeQty: 2084, targetPerDay: 500 });
+    assert.ok(Math.abs(r.cmCostUsd! - (((1867 / 38) * 130) / 500) * 2084) < 1e-9);
   });
 
   test('2nd Degree is the recorded count, not cut minus first degree', () => {

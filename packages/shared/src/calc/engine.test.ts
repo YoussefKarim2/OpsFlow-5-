@@ -485,10 +485,10 @@ describe('costing — the #DIV/0! cells become "Not calculated"', () => {
   };
 
   test('machine economics match Actual Costing!D16/D17/D18', () => {
-    const r = computeCosting({ ...base, shippedQty: null });
+    const r = computeCosting({ ...base, shippedQty: null, targetPerDay: 500 });
     assert.ok(Math.abs((r.machineCostPerDay ?? 0) - 49.1315789) < 1e-5);
     assert.ok(Math.abs((r.workDays ?? 0) - 3.4210526) < 1e-6);
-    assert.ok(Math.abs((r.productivityRate ?? 0) - 609.1692308) < 1e-4);
+    assert.equal(r.productivityRate, 500, "the Production step's target per day");
   });
 
   test('unshipped order returns null unit cost rather than #DIV/0!', () => {
@@ -510,13 +510,11 @@ describe('costing — the #DIV/0! cells become "Not calculated"', () => {
     // cost ÷ productivity × 1st degree qty: that same run cost over the 2,084
     // pieces cut, charged for the 1,950 that passed, so 123.22. Held cell by
     // cell in `cm-cost.test.ts`.
-    const r = computeCosting({ ...base, shippedQty: 1972, firstDegreeQty: 1950 });
-    const workDays = 130 / 38;
-    const productivity = 2084 / workDays;
-    const expected = (1867 / productivity) * 1950;
-    assert.ok(Math.abs((r.cmCostUsd ?? 0) - expected) < 0.01,
+    const r = computeCosting({ ...base, shippedQty: 1972, firstDegreeQty: 1950, targetPerDay: 500 });
+    // Maestro K39: ((machine cost × machine-days) ÷ target per day) × 1st degree.
+    const expected = (((1867 / 38) * 130) / 500) * 1950;
+    assert.ok(Math.abs((r.cmCostUsd ?? 0) - expected) < 1e-9,
       `got ${r.cmCostUsd}, expected ${expected}`);
-    assert.ok(Math.abs(expected - (workDays * 1867) * 1950 / 2084) < 1e-9);
   });
 
   test('a shipped order produces a real unit cost and profit', () => {

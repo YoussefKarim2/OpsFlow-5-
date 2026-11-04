@@ -306,9 +306,7 @@ class Layout {
       { label: 'Machine cost', value: money(c.machineCostPerDay), key: 'machineCostPerDay', sub: 'per machine-day' },
       { label: 'Machine-days used', value: num(c.machineDaysUsed), key: 'machineDaysUsed', sub: c.lineMachineSource === 'production' && c.machineDaysUsed != null && c.lineMachineQty != null && c.daysInLineUsed != null && c.machineDaysUsed !== c.lineMachineQty * c.daysInLineUsed ? 'as recorded on this costing' : 'line machines × days in line' },
       { label: 'Work days', value: num(c.workDays, 2), key: 'workDays', sub: 'machine-days ÷ all machines' },
-      { label: 'Productivity rate', value: num(c.productivityRate, 2), key: 'productivityRate', sub: c.productivityBasis === 'produced' ? 'pieces sewn ÷ work days' : 'cut qty ÷ work days' },
-      { label: 'Target per day', value: num(c.targetPerDay), sub: 'from the Production step' },
-      { label: 'Cost per piece at target', value: c.targetCostPerPieceUsd == null ? DASH : fmtMoney(c.targetCostPerPieceUsd), sub: 'machine cost × line machines ÷ target' },
+      { label: 'Productivity rate', value: num(c.productivityRate, 2), key: 'productivityRate', sub: 'target per day, from the Production step' },
     ], 4);
   }
 
@@ -413,23 +411,13 @@ class Layout {
     const cmPerPiece = c.cmCostUsd != null && c.firstDegreeQty ? c.cmCostUsd / c.firstDegreeQty : null;
     this.tableRow({
       section: 'C.M',
-      item: 'Production — daily cost ÷ productivity rate, per piece passed',
+      item: 'Production — machine cost × machine-days ÷ productivity rate, per piece passed',
       actual: num(c.firstDegreeQty),
       unit: 'PCS',
       price: cmPerPiece == null ? DASH : fmtMoney(cmPerPiece),
       cost: this.shown(money(c.cmCostUsd), 'cmCostUsd'),
       pct: pct(share(c.cmCostUsd)),
     }, { fill: INK[50] });
-    // The target's C.M beside the actual one, for comparison — not in the total.
-    if (c.targetCmCostUsd != null) {
-      this.tableRow({
-        section: '', item: `At the target of ${num(c.targetPerDay)} pcs/day (comparison, not in the total)`,
-        actual: num(c.firstDegreeQty), unit: 'PCS',
-        price: c.targetCostPerPieceUsd == null ? DASH : fmtMoney(c.targetCostPerPieceUsd),
-        cost: money(c.targetCmCostUsd), pct: DASH,
-      });
-    }
-
     this.tableRow({
       section: 'Total', item: 'Total actual cost',
       cost: this.shown(money(total), 'totalCostUsd'),

@@ -765,27 +765,12 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
             places: 2, hint: 'machine-days ÷ all machines',
           })}
           {field('Productivity rate', 'productivityRate', live.productivityRate, 'number', {
-            places: 2,
-            hint: live.productivityBasis === 'produced'
-              ? `pieces sewn (${fmtNumber(live.source.producedQty ?? 0)}) ÷ work days`
-              : 'cut qty ÷ work days — sewn pieces once sewing is recorded',
+            places: 2, hint: "the Production step's target production per day",
           })}
           {field('Cutted Qty', 'cutQty', live.source.cutQty, 'number', { from: live.source.cutQtySource === 'recorded' ? 'cutting records' : 'cut order' })}
           {field('1st Degree Qty', 'firstDegreeQty', live.source.firstDegreeQty, 'number', { from: 'out-line' })}
           {field('2nd Degree Qty', 'secondDegreeQty', live.source.secondDegreeQty, 'number', { from: '2nd-degree' })}
           {field('Diff. Percentage', 'diffPct', live.diffPct, 'percent', { hint: 'shipped ÷ ordered − 100%' })}
-          <Fact
-            label="Target per day"
-            value={live.targetPerDay == null ? null : `${fmtNumber(live.targetPerDay)} pcs`}
-            hint="the Production step's target production per day"
-            waiting={live.targetPerDay == null ? 'Waiting for the target on the Production step' : undefined}
-          />
-          <Fact
-            label="Cost per piece at target"
-            value={live.targetCostPerPieceUsd == null ? null : perPiece(live.targetCostPerPieceUsd)}
-            hint="machine cost × line machines ÷ target per day"
-            waiting={live.waiting.targetCmCostUsd && live.targetCostPerPieceUsd == null ? live.waiting.targetCmCostUsd : undefined}
-          />
         </div>
       </Card>
 
@@ -882,14 +867,14 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
                 </tr>
               )}
 
-              {/* C.M — daily cost ÷ productivity rate, charged against the
-                  pieces that passed end-line inspection. The consumption and
-                  unit price columns show that quantity and the cost per piece,
-                  so the row multiplies out to its own total the way every
-                  other row in this table does. */}
+              {/* C.M — the factory's formula: machine cost × machine-days ÷
+                  productivity rate, charged against the pieces that passed
+                  end-line inspection. The consumption and unit price columns
+                  show that quantity and the cost per piece, so the row
+                  multiplies out to its own total like every other row. */}
               <tr className="bg-ink-50">
                 <td className="td font-semibold text-ink-900">C.M</td>
-                <td className="td min-w-[12rem] whitespace-normal text-ink-600">Production — daily cost ÷ productivity rate, per piece passed</td>
+                <td className="td min-w-[12rem] whitespace-normal text-ink-600">Production — machine cost × machine-days ÷ productivity rate, per piece passed</td>
                 <td className="td" />
                 <td className="td tnum text-right">
                   {live.firstDegreeQty == null ? '—' : fmtNumber(live.firstDegreeQty)}
@@ -907,40 +892,6 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
                 <td className="td tnum text-right">{pctCell(pctOf(live.cmCostUsd, total))}</td>
                 {editing && <td className="td" />}
               </tr>
-              {/* The same C.M at the Production step's target, for comparison:
-                  what the pieces would have cost had the line made its target. */}
-              <tr className="bg-white">
-                <td className="td" />
-                {/* These two descriptions wrap: kept on one line, they set the
-                    Item column's width and pushed Cost and % off the card. */}
-                <td className="td min-w-[12rem] whitespace-normal text-xs text-ink-500">
-                  At the target{live.targetPerDay != null ? ` of ${fmtNumber(live.targetPerDay)} pcs/day` : ''} — for comparison, not in the total
-                  {live.targetCmCostUsd == null && live.waiting.targetCmCostUsd && (
-                    <span className="block text-2xs text-amber-700">{live.waiting.targetCmCostUsd}</span>
-                  )}
-                </td>
-                <td className="td" />
-                <td className="td tnum text-right text-xs text-ink-500">
-                  {live.targetCmCostUsd == null || live.firstDegreeQty == null ? '—' : fmtNumber(live.firstDegreeQty)}
-                </td>
-                <td className="td text-xs text-ink-500">PCS</td>
-                <td className="td tnum text-right text-xs text-ink-500">
-                  {live.targetCostPerPieceUsd == null ? '—' : perPiece(live.targetCostPerPieceUsd)}
-                </td>
-                <td className="td tnum text-right text-xs text-ink-500">
-                  {live.targetCmCostUsd == null ? '—' : fmtMoney(live.targetCmCostUsd)}
-                  {live.targetCmCostUsd != null && live.cmCostUsd != null && live.cmCostUsd !== 0 && (
-                    <span className={clsx('block text-2xs', live.targetCmCostUsd < live.cmCostUsd ? 'text-amber-700' : 'text-emerald-700')}>
-                      {live.targetCmCostUsd < live.cmCostUsd
-                        ? `actual is ${fmtMoney(live.cmCostUsd - live.targetCmCostUsd)} above target`
-                        : `actual is ${fmtMoney(live.targetCmCostUsd - live.cmCostUsd)} under target`}
-                    </span>
-                  )}
-                </td>
-                <td className="td" />
-                {editing && <td className="td" />}
-              </tr>
-
               <tr className="bg-ink-100">
                 <td className="td font-bold text-ink-900" colSpan={6}>Total</td>
                 <td className="td text-right">
@@ -1040,17 +991,6 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
 /** A per-piece cost: four decimals below a dollar, where two would round $0.028 to $0.03. */
 const perPiece = (n: number) => fmtMoney(n, '$', Math.abs(n) < 1 ? 4 : 2);
 
-/** A figure shown, not typed: read from another section. */
-function Fact({ label, value, hint, waiting }: { label: string; value: string | null; hint?: string; waiting?: string }) {
-  return (
-    <div>
-      <p className="label">{label}</p>
-      <p className={clsx('text-sm tnum', value == null ? 'text-ink-300' : 'font-semibold text-ink-900')}>{value ?? '—'}</p>
-      {value == null && waiting ? <p className="mt-0.5 text-2xs text-amber-700">{waiting}</p>
-        : hint ? <p className="mt-0.5 text-2xs text-ink-500">{hint}</p> : null}
-    </div>
-  );
-}
 
 function SaveState({
   state, dirty, onRetry, onReload,
