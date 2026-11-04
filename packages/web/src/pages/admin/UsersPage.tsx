@@ -10,8 +10,9 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  UserPlus, ShieldCheck, KeyRound, Lock, Unlock, Ban, RotateCcw, Pencil, ShieldAlert,
+  UserPlus, ShieldCheck, KeyRound, Lock, Unlock, Ban, RotateCcw, Pencil, ShieldAlert, ListChecks,
 } from 'lucide-react';
+import { UserAccessModal } from './UserAccessModal';
 import { DEPARTMENT_LABEL, type Department } from '@opsflow/shared';
 import { api, type AdminUser } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -46,6 +47,7 @@ export function UsersPage() {
   const [search, setSearch] = useState('');
   const [showInactive, setShowInactive] = useState(true);
 
+  const [accessOf, setAccessOf] = useState<AdminUser | null>(null);
   const canManage = me?.isSuperAdmin === true;
 
   const refresh = () => qc.invalidateQueries({ queryKey: ['admin'] });
@@ -176,7 +178,20 @@ export function UsersPage() {
                       </div>
                     </td>
                     <td className="td text-ink-600">{u.email}</td>
-                    <td className="td">{u.roleLabel}</td>
+                    <td className="td">
+                      {u.roleLabel}
+                      {(u.grantedPermissions.length > 0 || u.revokedPermissions.length > 0) && (
+                        <span
+                          className="ml-1.5 text-2xs font-medium text-violet-700"
+                          title={[
+                            u.grantedPermissions.length ? `Given: ${u.grantedPermissions.join(', ')}` : '',
+                            u.revokedPermissions.length ? `Taken away: ${u.revokedPermissions.join(', ')}` : '',
+                          ].filter(Boolean).join('\n')}
+                        >
+                          + own access
+                        </span>
+                      )}
+                    </td>
                     <td className="td text-ink-600">
                       {DEPARTMENT_LABEL[u.department as Department]?.en ?? u.department}
                     </td>
@@ -194,6 +209,9 @@ export function UsersPage() {
                           <>
                             <IconButton label="Edit details" onClick={() => setEditing(u)}>
                               <Pencil className="h-3.5 w-3.5" />
+                            </IconButton>
+                            <IconButton label="Choose what this person can access" onClick={() => setAccessOf(u)}>
+                              <ListChecks className="h-3.5 w-3.5" />
                             </IconButton>
                             <IconButton
                               label="Reset password"
@@ -344,6 +362,13 @@ export function UsersPage() {
           </Field>
         )}
       </ConfirmDialog>
+
+      <UserAccessModal
+        key={accessOf?.id ?? 'none'}
+        user={accessOf}
+        isSelf={accessOf?.id === me?.id}
+        onClose={() => setAccessOf(null)}
+      />
 
       <Modal
         open={secret !== null}

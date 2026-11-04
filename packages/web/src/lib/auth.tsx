@@ -63,6 +63,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, [attempt]);
 
+  // Access a super administrator gives or takes away reaches the screen
+  // without a reload: re-read on coming back to the window, and every two
+  // minutes. The server already enforces it on the next request either way.
+  useEffect(() => {
+    if (!user) return;
+    const reread = () => { if (getToken()) void api.auth.me().then(setUser).catch(() => undefined); };
+    const onVisible = () => { if (document.visibilityState === 'visible') reread(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', reread);
+    const t = setInterval(reread, 120_000);
+    return () => { document.removeEventListener('visibilitychange', onVisible); window.removeEventListener('focus', reread); clearInterval(t); };
+  }, [user?.id]);
+
   // While the server is away, ask again every few seconds on our own. The
   // screen must not depend on a person pressing the button at the right
   // moment: the first attempt after the database returns can still fail on a

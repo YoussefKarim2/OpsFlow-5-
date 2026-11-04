@@ -21,7 +21,7 @@ import { authenticate, requirePermission, requireSuperAdmin, currentUser } from 
 import { asyncHandler } from '../util/async-handler.js';
 import {
   listUsers, getUser, createUser, setUserActive, resetPassword,
-  changeRole, setSuperAdmin, updateUserProfile, unlockUser, listRoles,
+  changeRole, setSuperAdmin, setUserPermissions, updateUserProfile, unlockUser, listRoles,
 } from '../services/user-service.js';
 import { SUPER_ADMIN_EMAILS } from '../config.js';
 import { NotFoundError } from '../errors.js';
@@ -144,6 +144,20 @@ adminRouter.post(
     const actor = currentUser(req);
     const { roleKey } = roleSchema.parse(req.body);
     res.json(await changeRole(actor, req.params.id, roleKey));
+  }),
+);
+
+const permissionsSchema = z.object({ permissions: z.array(z.string().min(1).max(60)).max(200) });
+
+/** Give or take away access for one person, on top of their role. Super administrators only. */
+adminRouter.put(
+  '/users/:id/permissions',
+  requireSuperAdmin,
+  requirePermission('role:assign'),
+  asyncHandler(async (req, res) => {
+    const actor = currentUser(req);
+    const { permissions } = permissionsSchema.parse(req.body);
+    res.json(await setUserPermissions(actor, req.params.id, permissions));
   }),
 );
 

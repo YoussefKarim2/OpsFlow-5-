@@ -224,6 +224,97 @@ export function computeLockout(
   return { attempts, locked: true, lockMinutes };
 }
 
+/**
+ * What a super administrator can give or take away account by account, on top
+ * of the account's role. Everything except the account-mutating actions: those
+ * come with being a super administrator (the flag and the allowlist), and
+ * taking one off a super administrator would leave nobody able to manage
+ * accounts.
+ */
+export const GRANTABLE_PERMISSIONS: readonly Permission[] = PERMISSIONS.filter(
+  (p) => !SUPER_ADMIN_ONLY_PERMISSIONS.includes(p),
+);
+
+/**
+ * One account's permissions: its role's, plus what was given to it, less what
+ * was taken away. Stored as the differences from the role, so a change to the
+ * role still reaches everything that was not set for the person by hand.
+ */
+export function effectivePermissions(
+  rolePermissions: readonly string[],
+  granted: readonly string[] = [],
+  revoked: readonly string[] = [],
+): Permission[] {
+  const grantable = new Set<string>(GRANTABLE_PERMISSIONS);
+  const out = new Set<string>(rolePermissions);
+  for (const p of granted) if (grantable.has(p)) out.add(p);
+  for (const p of revoked) if (grantable.has(p)) out.delete(p);
+  // In the catalogue's order, and only names the catalogue knows.
+  return PERMISSIONS.filter((p) => out.has(p));
+}
+
+/** The differences to store for a person who should hold exactly `wanted` of the grantable permissions. */
+export function permissionOverrides(
+  rolePermissions: readonly string[],
+  wanted: readonly string[],
+): { granted: Permission[]; revoked: Permission[] } {
+  const role = new Set(rolePermissions);
+  const want = new Set(wanted);
+  return {
+    granted: GRANTABLE_PERMISSIONS.filter((p) => want.has(p) && !role.has(p)),
+    revoked: GRANTABLE_PERMISSIONS.filter((p) => !want.has(p) && role.has(p)),
+  };
+}
+
+/** How each permission reads to the person granting it, grouped as the screens are. */
+export const PERMISSION_GROUPS: ReadonlyArray<{ label: string; permissions: ReadonlyArray<{ key: Permission; label: string }> }> = [
+  { label: 'Orders', permissions: [
+    { key: 'order:read', label: 'See orders' }, { key: 'order:create', label: 'Create orders' },
+    { key: 'order:edit', label: 'Edit orders' }, { key: 'order:delete', label: 'Delete orders' },
+    { key: 'import:run', label: 'Import POs and files' },
+  ] },
+  { label: 'Workflow', permissions: [
+    { key: 'task:read', label: 'See tasks' }, { key: 'task:assign', label: 'Assign tasks' }, { key: 'task:complete', label: 'Complete tasks' },
+  ] },
+  { label: 'Cutting & laying', permissions: [
+    { key: 'cutting:read', label: 'See cutting and markers' }, { key: 'cutting:write', label: 'Edit cutting and markers' },
+    { key: 'import:laying', label: 'Import the laying sheet' },
+  ] },
+  { label: 'Materials & BOM', permissions: [
+    { key: 'material:read', label: 'See materials' }, { key: 'material:edit', label: 'Edit materials and the BOM' },
+    { key: 'material:issue', label: 'Issue material' },
+  ] },
+  { label: 'Production', permissions: [
+    { key: 'production:read', label: 'See production' }, { key: 'production:write', label: 'Record production' },
+  ] },
+  { label: 'External work', permissions: [
+    { key: 'external:read', label: 'See outside work' }, { key: 'external:write', label: 'Edit outside work' },
+  ] },
+  { label: 'Quality', permissions: [
+    { key: 'quality:read', label: 'See inspections' }, { key: 'quality:audit', label: 'Record inspections' },
+  ] },
+  { label: 'Packing & shipping', permissions: [
+    { key: 'packing:read', label: 'See packing' }, { key: 'packing:write', label: 'Edit packing' },
+    { key: 'packing:approve', label: 'Approve packing lists' },
+    { key: 'shipment:read', label: 'See shipments' }, { key: 'shipment:write', label: 'Record shipments' },
+    { key: 'shipment:override', label: 'Ship more than produced (override)' },
+  ] },
+  { label: 'Costing & invoices', permissions: [
+    { key: 'costing:read', label: 'See costing' }, { key: 'costing:write', label: 'Edit costing' },
+    { key: 'invoice:read', label: 'See proformas and invoices' }, { key: 'invoice:write', label: 'Edit proformas and invoices' },
+    { key: 'invoice:issue', label: 'Issue and void invoices' },
+  ] },
+  { label: 'Reports & reference data', permissions: [
+    { key: 'report:read', label: 'See reports and dashboards' },
+    { key: 'client:manage', label: 'Manage clients' }, { key: 'factory:manage', label: 'Manage factories' },
+    { key: 'refdata:manage', label: 'Manage lists (colours, sizes, fabrics…)' },
+  ] },
+  { label: 'Administration', permissions: [
+    { key: 'user:manage', label: 'See the user list' }, { key: 'role:manage', label: 'See roles' },
+    { key: 'audit:read', label: 'Read the audit log' },
+  ] },
+];
+
 export function can(permissions: readonly string[], required: Permission): boolean {
   return permissions.includes(required);
 }

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import argon2 from 'argon2';
 import { z } from 'zod';
 import rateLimit from 'express-rate-limit';
-import { normaliseEmail, computeLockout } from '@opsflow/shared';
+import { normaliseEmail, computeLockout, effectivePermissions } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { newPasswordRule } from '../util/password-policy.js';
 import { config, isAllowlistedSuperAdmin } from '../config.js';
@@ -239,6 +239,7 @@ authRouter.post('/change-password', authenticate, changePasswordLimiter, request
 function toAuthPayload(user: {
   id: string; name: string; email: string; department: string;
   isSuperAdmin: boolean; mustChangePassword: boolean;
+  grantedPermissions: string[]; revokedPermissions: string[];
   role: { key: string; label: string; permissions: string[] };
 }) {
   return {
@@ -248,7 +249,7 @@ function toAuthPayload(user: {
     roleKey: user.role.key,
     roleLabel: user.role.label,
     department: user.department,
-    permissions: user.role.permissions,
+    permissions: effectivePermissions(user.role.permissions, user.grantedPermissions, user.revokedPermissions),
     // Mirrors the server-side check exactly: the flag alone is not enough.
     isSuperAdmin: user.isSuperAdmin && isAllowlistedSuperAdmin(user.email),
     mustChangePassword: user.mustChangePassword,

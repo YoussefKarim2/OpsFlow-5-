@@ -16,6 +16,7 @@ import { ForbiddenError, GoneError, NotFoundError, UnauthorizedError } from '../
 import { verifyFileToken } from '../services/file-links.js';
 import { readSessionToken } from '../middleware/auth.js';
 import { contentDisposition } from '../util/upload-name.js';
+import { effectivePermissions } from '@opsflow/shared';
 
 export const filesRouter = Router();
 
@@ -45,7 +46,7 @@ filesRouter.get('/:key', asyncHandler(async (req, res) => {
    */
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { active: true, mustChangePassword: true, passwordChangedAt: true, role: { select: { permissions: true } } },
+    select: { active: true, mustChangePassword: true, passwordChangedAt: true, grantedPermissions: true, revokedPermissions: true, role: { select: { permissions: true } } },
   });
   if (!user?.active) throw new UnauthorizedError();
   // The checks the authenticate middleware makes on every other route: a
@@ -56,7 +57,7 @@ filesRouter.get('/:key', asyncHandler(async (req, res) => {
     throw new UnauthorizedError('Your password was changed. Please sign in again.');
   }
   if (user.mustChangePassword) throw new UnauthorizedError('Choose a new password before opening documents.');
-  if (!user.role?.permissions?.includes('order:read')) {
+  if (!effectivePermissions(user.role?.permissions ?? [], user.grantedPermissions, user.revokedPermissions).includes('order:read')) {
     throw new ForbiddenError('You do not have access to order documents.');
   }
 

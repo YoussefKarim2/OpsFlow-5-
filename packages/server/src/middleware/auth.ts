@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import type { Permission } from '@opsflow/shared';
+import { effectivePermissions, type Permission } from '@opsflow/shared';
 import { config, isAllowlistedSuperAdmin } from '../config.js';
 import { prisma } from '../db.js';
 import { UnauthorizedError, ForbiddenError, PasswordChangeRequiredError } from '../errors.js';
@@ -107,7 +107,8 @@ export async function authenticate(req: Request, _res: Response, next: NextFunct
       name: user.name,
       roleKey: user.role.key,
       department: user.department,
-      permissions: user.role.permissions,
+      // The role's, plus what a super administrator gave this person, less what they took away.
+      permissions: effectivePermissions(user.role.permissions, user.grantedPermissions, user.revokedPermissions),
       // Re-checked against the allowlist on every request, so removing an
       // address from SUPER_ADMIN_EMAILS revokes the power at the next call
       // rather than at the next deploy.

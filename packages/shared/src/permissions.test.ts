@@ -18,6 +18,7 @@ import {
   SUPER_ADMIN_ONLY_PERMISSIONS, SYSTEM_ADMIN_PERMISSIONS, can, canAny, computeLockout,
   normaliseEmail, parseSuperAdminEmails,
   type Permission, type RoleKey,
+  GRANTABLE_PERMISSIONS, PERMISSION_GROUPS, effectivePermissions, permissionOverrides,
 } from './permissions.js';
 
 describe('permission table', () => {
@@ -362,5 +363,28 @@ describe('costing access', () => {
     const perms = ROLE_PERMISSIONS.WAREHOUSE as readonly Permission[];
     assert.ok(perms.includes('costing:read'));
     assert.ok(perms.includes('costing:write'));
+  });
+});
+
+describe('access given to one person', () => {
+  test('every grantable permission is named on the screen, once', () => {
+    const named = PERMISSION_GROUPS.flatMap((g) => g.permissions.map((p) => p.key));
+    assert.deepEqual([...named].sort(), [...GRANTABLE_PERMISSIONS].sort());
+  });
+  test('the account-mutating actions cannot be given or taken one by one', () => {
+    for (const p of SUPER_ADMIN_ONLY_PERMISSIONS) assert.ok(!GRANTABLE_PERMISSIONS.includes(p), p);
+    assert.ok(!effectivePermissions(ROLE_PERMISSIONS.PACKING, ['user:create']).includes('user:create'));
+    assert.ok(effectivePermissions(ROLE_PERMISSIONS.SUPER_ADMIN, [], ['user:create']).includes('user:create'));
+  });
+  test("role, plus what was given, less what was taken away", () => {
+    const eff = effectivePermissions(ROLE_PERMISSIONS.PACKING, ['costing:write', 'invoice:read'], ['packing:write']);
+    assert.ok(eff.includes('costing:write') && eff.includes('invoice:read') && eff.includes('order:read'));
+    assert.ok(!eff.includes('packing:write'));
+  });
+  test('the stored differences give back exactly what was ticked', () => {
+    const want = ['order:read', 'costing:read', 'invoice:issue'];
+    const { granted, revoked } = permissionOverrides(ROLE_PERMISSIONS.COORDINATOR, want);
+    const eff = effectivePermissions(ROLE_PERMISSIONS.COORDINATOR, granted, revoked);
+    assert.deepEqual(eff.filter((p) => GRANTABLE_PERMISSIONS.includes(p)).sort(), [...want].sort());
   });
 });

@@ -55,6 +55,10 @@ model User {
   failedLoginCount        Int                      @default(0)
   lockedUntil             DateTime?
   roleId                  String
+  /// Access given or taken away for this person alone, on top of their role,
+  /// by a super administrator. Stored as differences from the role.
+  grantedPermissions      String[]                 @default([])
+  revokedPermissions      String[]                 @default([])
   createdAt               DateTime                 @default(now())
   updatedAt               DateTime                 @updatedAt
   activityLogs            ActivityLog[]

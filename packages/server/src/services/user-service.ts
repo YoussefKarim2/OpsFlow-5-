@@ -21,7 +21,9 @@
 import { randomBytes } from 'node:crypto';
 import argon2 from 'argon2';
 import type { Department, Prisma, PrismaClient } from '@prisma/client';
-import { ROLE_LABEL, normaliseEmail, type RoleKey } from '@opsflow/shared';
+import {
+  GRANTABLE_PERMISSIONS, ROLE_LABEL, effectivePermissions, normaliseEmail, permissionOverrides, type RoleKey,
+} from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { isAllowlistedSuperAdmin, SUPER_ADMIN_EMAILS } from '../config.js';
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../errors.js';
@@ -54,6 +56,12 @@ export interface UserRow {
   createdByName: string | null;
   openTaskCount: number;
   orderCount: number;
+  /** What the account can do: its role's, plus what was given to it, less what was taken away. */
+  permissions: string[];
+  /** Its role's alone, so the screen can say which ticks are the person's own. */
+  rolePermissions: string[];
+  grantedPermissions: string[];
+  revokedPermissions: string[];
 }
 
 const USER_INCLUDE = {
@@ -100,6 +108,10 @@ export function toUserRow(u: UserWithIncludes): UserRow {
     createdByName: u.createdBy?.name ?? null,
     openTaskCount: u._count.assignedTasks,
     orderCount: u._count.coordinatedOrders,
+    permissions: effectivePermissions(u.role.permissions, u.grantedPermissions, u.revokedPermissions),
+    rolePermissions: u.role.permissions,
+    grantedPermissions: u.grantedPermissions,
+    revokedPermissions: u.revokedPermissions,
   };
 }
 
@@ -350,6 +362,41 @@ export async function changeRole(actor: AuthUser, targetId: string, roleKey: str
     meta: { email: target.email, from: target.role.key, to: role.key, superAdminRevoked: losesRights },
   });
 
+  return getUser(targetId);
+}
+
+/**
+ * Set exactly what one person can do, permission by permission.
+ *
+ * `wanted` is every grantable permission the person should hold; what their
+ * role already gives is not stored again, only the differences — so a later
+ * change to the role still reaches everything not set for them by hand. The
+ * account-mutating actions are not among the grantable ones: they come with
+ * being a super administrator.
+ */
+export async function setUserPermissions(actor: AuthUser, targetId: string, wanted: string[]): Promise<UserRow> {
+  const target = await loadUser(targetId);
+  assertNotSelf(actor, targetId, 'change the access of');
+  const unknown = wanted.filter((p) => !(GRANTABLE_PERMISSIONS as readonly string[]).includes(p));
+  if (unknown.length > 0) throw new ValidationError(`Not something that can be given one by one: ${unknown.join(', ')}.`);
+
+  const before = effectivePermissions(target.role.permissions, target.grantedPermissions, target.revokedPermissions);
+  const { granted, revoked } = permissionOverrides(target.role.permissions, wanted);
+  await prisma.user.update({ where: { id: targetId }, data: { grantedPermissions: granted, revokedPermissions: revoked } });
+  const after = effectivePermissions(target.role.permissions, granted, revoked);
+
+  const added = after.filter((p) => !before.includes(p));
+  const removed = before.filter((p) => !after.includes(p));
+  if (added.length > 0 || removed.length > 0) {
+    await logActivity({
+      actorId: actor.id, actorName: actor.name, action: 'USER_PERMISSIONS_CHANGED',
+      summary: `changed what ${target.email} can do`
+        + (added.length ? `: gave ${added.join(', ')}` : '')
+        + (removed.length ? `${added.length ? ';' : ':'} took away ${removed.join(', ')}` : ''),
+      entityType: 'User', entityId: targetId,
+      meta: { email: target.email, added, removed, granted, revoked },
+    });
+  }
   return getUser(targetId);
 }
 

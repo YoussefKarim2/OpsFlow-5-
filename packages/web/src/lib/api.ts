@@ -512,6 +512,11 @@ export interface AdminUser {
   createdByName: string | null;
   openTaskCount: number;
   orderCount: number;
+  /** What the account can do: its role's, plus what was given to it, less what was taken away. */
+  permissions: string[];
+  rolePermissions: string[];
+  grantedPermissions: string[];
+  revokedPermissions: string[];
 }
 
 export interface AuditRow {
@@ -763,6 +768,8 @@ export const api = {
       post<{ user: AdminUser; temporaryPassword: string }>(`/admin/users/${id}/reset-password`),
     unlockUser: (id: string) => post<AdminUser>(`/admin/users/${id}/unlock`),
     changeRole: (id: string, roleKey: string) => post<AdminUser>(`/admin/users/${id}/role`, { roleKey }),
+    /** Exactly what this person can do, of the permissions that can be given one by one. */
+    setPermissions: (id: string, permissions: string[]) => put<AdminUser>(`/admin/users/${id}/permissions`, { permissions }),
     setSuperAdmin: (id: string, isSuperAdmin: boolean) =>
       post<AdminUser>(`/admin/users/${id}/super-admin`, { isSuperAdmin }),
     roles: () => get<{ data: Array<{ key: string; label: string; permissionCount: number; userCount: number }> }>('/admin/roles'),
