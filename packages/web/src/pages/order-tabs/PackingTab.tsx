@@ -391,7 +391,6 @@ export function PackingTab({ order }: { order: OrderDetailDto; focus?: "packing"
         key={shipping ? 'open' : 'closed'}
         open={shipping} order={order} producedQty={order.producedQty}
         alreadyShippedQty={shipmentList.reduce((a, s) => a + s.qty, 0)}
-        suggestedQty={Math.max(0, packedQty - shipmentList.reduce((a, s) => a + s.qty, 0))}
         onClose={() => setShipping(false)}
         onDone={() => { setShipping(false); invalidate(); }}
       />
@@ -523,19 +522,16 @@ function CartonModal({
 }
 
 function ShipmentModal({
-  open, order, producedQty, alreadyShippedQty, suggestedQty, onClose, onDone,
+  open, order, producedQty, alreadyShippedQty, onClose, onDone,
 }: {
   open: boolean; order: OrderDetailDto; producedQty: number;
   /** Pieces on consignments already recorded; the limit is on the running total. */
   alreadyShippedQty: number;
-  /** Packed and not yet on a consignment: what this one most likely carries. */
-  suggestedQty: number;
   onClose: () => void; onDone: () => void;
 }) {
   const { can } = useAuth();
   const [form, setForm] = useState({
-    // Pre-filled from the packing list; a partial consignment is typed over it.
-    status: 'READY', qty: suggestedQty > 0 ? String(suggestedQty) : '', carrier: '', trackingNumber: '',
+    status: 'READY', qty: '', carrier: '', trackingNumber: '',
     actualShippingDate: localToday(),
   });
   const [reason, setReason] = useState('');

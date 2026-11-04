@@ -69,8 +69,6 @@ export interface PackingFileLayoutDto {
   };
   /** Set when the cartons were corrected by hand; they are shown in place of the file's reading. */
   edited: { at: string; by: string } | null;
-  /** Why the file cannot become the packing list's cartons yet; empty when it can. */
-  createCartons: string[];
 }
 
 /** One line of a hand-corrected packing file: a carton, or (`continues`) another colour in the carton above. */
@@ -1168,9 +1166,6 @@ export const api = {
       put<{ editedAt: string }>(`/packing/${orderId}/files/${attachmentId}/cartons`, { cartons, base }),
     /** Drop the corrections: the cartons are what the file says again. */
     resetFileCartons: (orderId: string, attachmentId: string) => del(`/packing/${orderId}/files/${attachmentId}/cartons`),
-    /** Make a packing list with the file's cartons, in one step. Refused unless the file read cleanly. */
-    createCartonsFromFile: (orderId: string, attachmentId: string) =>
-      post<{ id: string; cartons: number; pieces: number }>(`/packing/${orderId}/files/${attachmentId}/create-cartons`),
     createList: (orderId: string, body?: unknown) => post<{ id: string }>(`/packing/${orderId}`, body ?? {}),
     addCarton: (listId: string, body: unknown) => post<{ id: string }>(`/packing/list/${listId}/cartons`, body),
     /** A whole size grid in one save, rather than one request per size. */
