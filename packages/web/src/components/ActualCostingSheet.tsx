@@ -27,9 +27,9 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Check, Cloud, CloudOff, Download, Lock, Pencil, Plus, Printer, Trash2 } from 'lucide-react';
+import { Check, Cloud, CloudOff, Download, Lock, Pencil, Plus, Printer, RotateCcw, Trash2 } from 'lucide-react';
 import {
-  computeCosting, rowCost, applyRowEdit, sanitiseOverrides, visibleDerivedLines, outsideWorkKind, editableText,
+  computeCosting, rowCost, applyRowEdit, sanitiseOverrides, visibleDerivedLines, outsideWorkKind, editableText, sourceRefCovers,
   bomRefItemId,
   fmtMoney, fmtNumber, fmtPct, NOT_CALCULATED,
   type CostLineInput, type CostingResult, type OrderDetailDto,
@@ -40,7 +40,7 @@ import { useAuth } from '../lib/auth';
 import {
   CostCell, CostField, NumberCell, StoredField, TextCell, type FieldTone,
 } from './CostValue';
-import { Card, CardHeader, ErrorNote, clsx } from './ui';
+import { Card, CardHeader, ErrorNote, clsx, useToast } from './ui';
 
 type Group = CostLineDto['group'];
 
@@ -243,6 +243,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
   // the figures and every hand-added row with it.
   const mayWrite = can('costing:read') && can('costing:write');
   const editable = mayWrite && costing.isSuccess;
+  const toast = useToast();
 
   const record = costing.data?.data ?? null;
   const derivedLines = useMemo(() => costing.data?.derived ?? [], [costing.data]);
@@ -529,6 +530,40 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
     if (row.sourceRef) setHidden((h) => (h.includes(row.sourceRef!) ? h : [...h, row.sourceRef!]));
   };
 
+  /**
+   * Put back every bill-of-materials row the costing no longer shows: the
+   * ones removed here (by accident, often) and any added to the BOM since.
+   * A row edited here keeps the figures typed into it — that is the person's
+   * own work, not something the BOM should overwrite.
+   */
+  // The live lines and the removed ones together: the server leaves removed
+  // rows out of the live list, so without these the button saw nothing missing.
+  const removedLines = useMemo(() => costing.data?.removed ?? [], [costing.data]);
+  const bomRows = useMemo(
+    () => rowsFrom(null, [...derivedLines, ...removedLines]).filter((r) => r.sourceRef?.startsWith('bom:')),
+    [derivedLines, removedLines],
+  );
+  const missingFromBom = bomRows.filter((b) => !rows.some((r) => r.sourceRef
+    && (sourceRefCovers(r.sourceRef, b.sourceRef!) || sourceRefCovers(b.sourceRef!, r.sourceRef))));
+  const restoreFromBom = () => {
+    const back = missingFromBom;
+    setHidden((h) => h.filter((ref) => !ref.startsWith('bom:')));
+    if (back.length > 0) {
+      setRows((rs) => {
+        // Each group in the bill's own order: the restored rows go back where they were.
+        const order = new Map(bomRows.map((b, i) => [b.sourceRef, i]));
+        const at = (r: RowDraft) => (r.sourceRef != null && order.has(r.sourceRef) ? order.get(r.sourceRef)! : Number.MAX_SAFE_INTEGER);
+        const all = [...rs, ...back];
+        const derivedBom = all.filter((r) => r.derived && r.sourceRef?.startsWith('bom:')).sort((a, b) => at(a) - at(b));
+        const rest = all.filter((r) => !(r.derived && r.sourceRef?.startsWith('bom:')));
+        return [...derivedBom, ...rest];
+      });
+    }
+    toast.success(back.length > 0
+      ? `${back.length} row${back.length === 1 ? '' : 's'} brought back from the bill of materials`
+      : 'Every row on the bill of materials is already on the costing');
+  };
+
   const addRow = (group: Group) =>
     setRows((rs) => [...rs, {
       key: `new-${Date.now()}-${rs.length}`,
@@ -740,6 +775,19 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
         <CardHeader
           title="Costing"
           subtitle="Materials from the bill of materials, outside work from the External Order section. Rows can be edited, added and removed here without changing either."
+          action={editable && (
+            <button
+              type="button"
+              className="no-print btn-secondary btn-sm shrink-0"
+              title={missingFromBom.length > 0
+                ? `Put back ${missingFromBom.length} row${missingFromBom.length === 1 ? '' : 's'} of the bill of materials that ${missingFromBom.length === 1 ? 'is' : 'are'} not on the costing`
+                : 'Every row of the bill of materials is on the costing'}
+              onClick={restoreFromBom}
+            >
+              <RotateCcw className="h-3.5 w-3.5" /> Take all from the BOM
+              {missingFromBom.length > 0 && <span className="ml-1 rounded-full bg-amber-100 px-1.5 text-2xs font-semibold text-amber-800">{missingFromBom.length}</span>}
+            </button>
+          )}
         />
         <div className="overflow-x-auto">
           {/* Wide enough for the widest figure each column can hold — every

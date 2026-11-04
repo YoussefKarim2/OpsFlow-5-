@@ -18,7 +18,7 @@ import multer from 'multer';
 import ExcelJS from 'exceljs';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
-import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines, sanitiseOverrides, visibleDerivedLines } from '@opsflow/shared';
+import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines, sanitiseOverrides, sourceRefCovers, visibleDerivedLines } from '@opsflow/shared';
 import { detectFileKind, FILE_KIND_LABEL } from '../services/import/file-kind.js';
 import { extractFromPdf } from '../services/import/pdf-extractor.js';
 import { sizeRank } from '../services/import/po-lines.js';
@@ -1009,6 +1009,7 @@ stepsRouter.get('/:id/costing', requirePermission('costing:read'), asyncHandler(
     where: { orderId },
     include: { lines: { orderBy: [{ source: 'asc' }, { position: 'asc' }] } },
   });
+  const allDerived = await deriveFor(orderId);
 
   res.json({
     data: record && {
@@ -1043,7 +1044,10 @@ stepsRouter.get('/:id/costing', requirePermission('costing:read'), asyncHandler(
     // wrote. Rows somebody removed are left out here, as they are everywhere
     // else; rows claimed by an edited copy stay in, because the screen reads
     // the plan beside the edited row from them.
-    derived: visibleDerivedLines(await deriveFor(orderId), [], record?.hiddenCostRefs ?? []),
+    derived: visibleDerivedLines(allDerived, [], record?.hiddenCostRefs ?? []),
+    // The rows removed from this costing, so "Take all from the BOM" can show
+    // what it would put back and put it back at once.
+    removed: allDerived.filter((d) => (record?.hiddenCostRefs ?? []).some((h) => sourceRefCovers(h, d.sourceRef ?? ''))),
   });
 }));
 

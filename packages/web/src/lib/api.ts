@@ -1012,7 +1012,7 @@ export const api = {
     removeStock: (orderId: string, recordId: string) => del(`/orders/${orderId}/stock/${recordId}`),
 
     costing: (orderId: string) =>
-      get<{ data: CostingDto | null; derived: CostLineDto[] }>(`/orders/${orderId}/costing`),
+      get<{ data: CostingDto | null; derived: CostLineDto[]; removed?: CostLineDto[] }>(`/orders/${orderId}/costing`),
     saveCosting: (orderId: string, body: unknown) =>
       put<{ ok: true; derived: number; manual: number; updatedAt: string }>(`/orders/${orderId}/costing`, body),
     downloadCostingPdf: (orderId: string) =>
