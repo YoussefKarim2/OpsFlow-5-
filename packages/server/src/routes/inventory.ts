@@ -11,12 +11,12 @@
  */
 
 import { Router } from 'express';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import {
   MaterialType, MovementType, StockStatus, UnitOfMeasure,
   MATERIAL_TYPE_LABEL, MATERIAL_TYPE_FIELDS, MOVEMENT_TYPE_LABEL,
-  unitsCompatible,
+  unitsCompatible, convertQty,
 } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
@@ -484,10 +484,21 @@ inventoryRouter.post('/bom/:bomItemId/link', requirePermission('material:edit'),
   // The material already carries its last cost and its supplier; a line
   // with neither takes them, and says so in the log. Figures typed on the
   // line are the person's and are kept.
-  const material = materialId ? await prisma.material.findUnique({ where: { id: materialId }, select: { unitCostUsd: true, supplierName: true } }) : null;
+  const material = materialId ? await prisma.material.findUnique({ where: { id: materialId }, select: { unitCostUsd: true, supplierName: true, unit: true } }) : null;
   const filled: string[] = [];
   const data: { materialId: string | null; unitPriceUsd?: Prisma.Decimal; supplier?: string } = { materialId };
-  if (material?.unitCostUsd != null && bom.unitPriceUsd == null) { data.unitPriceUsd = material.unitCostUsd; filled.push('unit price'); }
+  if (material?.unitCostUsd != null && bom.unitPriceUsd == null) {
+    // The material's cost is per its own unit; the line is priced per the
+    // line's. A line in grams linked to a material at $8/kg costs $0.008 a
+    // gram, not $8. Converted over 10,000 units so a dozen's 1/12 keeps its
+    // precision; units that cannot be converted copy no price at all.
+    const perLineUnit = convertQty(10_000, bom.unit, material.unit);
+    if (perLineUnit != null && perLineUnit > 0) {
+      const price = Math.round(Number(material.unitCostUsd) * (perLineUnit / 10_000) * 1e6) / 1e6;
+      data.unitPriceUsd = new Prisma.Decimal(price);
+      filled.push('unit price');
+    }
+  }
   if (material?.supplierName && !bom.supplier) { data.supplier = material.supplierName; filled.push('supplier'); }
   await prisma.bomItem.update({ where: { id: bom.id }, data });
   await logActivity({
@@ -495,7 +506,7 @@ inventoryRouter.post('/bom/:bomItemId/link', requirePermission('material:edit'),
     actorId: actor.id, actorName: actor.name,
     action: materialId ? 'BOM_MATERIAL_LINKED' : 'BOM_MATERIAL_UNLINKED',
     summary: materialId
-      ? `linked the BOM line "${bom.item}" to a catalogue material`
+      ? `linked the BOM line "${bom.item}" to a catalogue material${filled.length ? ` and took its ${filled.join(' and ')}` : ''}`
       : `unlinked the BOM line "${bom.item}" from its material`,
     entityType: 'BomItem', entityId: bom.id,
   });

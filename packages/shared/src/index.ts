@@ -22,6 +22,7 @@ export * from './calc/costing.js';
 export * from './calc/costing-derive.js';
 export * from './calc/costing-overrides.js';
 export * from './calc/costing-format.js';
+export * from './calc/typed-number.js';
 export * from './calc/costing-rows.js';
 export * from './calc/costing-overview.js';
 export * from './calc/quality.js';

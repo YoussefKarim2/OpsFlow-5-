@@ -32,7 +32,8 @@ import { BadRequestError } from '../../errors.js';
 import type { ExtractionResult } from './extractor.js';
 import { toDate, buildLineItems } from './extractor.js';
 import { parseSpreadsheetDate } from '@opsflow/shared';
-import { detectSizeColumns, buildTransposedMatrix } from './tabular-extractor.js';
+import { detectSizeColumns, buildTransposedMatrix, sizeFolder } from './tabular-extractor.js';
+import { isTotalsLabel, isNonColourLabel } from './row-labels.js';
 import { readPoLines, readPoHeader, poLinesToOrder, detectDayFirst, findBoilerplate, orderSizes, type PoTextLine } from './po-lines.js';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -600,7 +601,9 @@ export async function extractFromPdf(
   // in. `detectSizeColumns` is the Excel reader's, reused rather than rewritten
   // — a run of adjacent columns whose headings are size tokens and whose cells
   // are numbers is a size grid whatever the document was.
-  const sizeCols = detectSizeColumns(rows[header.index] ?? [], dataAfterHeader);
+  // "XXL" and "2XL" over two columns are one size.
+  const foldSize = sizeFolder();
+  const sizeCols = detectSizeColumns(rows[header.index] ?? [], dataAfterHeader).map((c) => ({ ...c, name: foldSize(c.name) }));
   if (sizeCols.length >= 2) {
     const sizeIdx = new Set(sizeCols.map((c) => c.index));
     const matrixRows: Array<{ color: string; cells: Record<string, number>; total: number }> = [];
@@ -628,8 +631,10 @@ export async function extractFromPdf(
         .filter(({ c, i }) => c !== '' && !sizeIdx.has(i) && i < (sizeCols[0]?.index ?? 0) && toNum(c) == null)
         .map(({ c }) => c)[0];
       if (!label) continue;
-      // "Total" is the sheet's own sum, not a colour.
-      if (/^(total|sum|grand total)$/i.test(label)) continue;
+      // "Total", "Total:", "Subtotal", "Navy Total" are the sheet's own sums,
+      // not colours — the same rule the workbook reader uses. "Ratio" and
+      // "Prepack" under the sizes are not colours either.
+      if (isTotalsLabel(label) || isNonColourLabel(label)) continue;
 
       matrixRows.push({ color: label, cells, total });
     }
@@ -637,7 +642,7 @@ export async function extractFromPdf(
     if (matrixRows.length > 0) {
       matrices.push({
         ledger: 'ORDER',
-        sizes: sizeCols.map((c) => c.name),
+        sizes: [...new Set(sizeCols.map((c) => c.name))],
         rows: matrixRows,
         sheetTotal: null,
         computedTotal: matrixRows.reduce((a, r) => a + r.total, 0),
@@ -653,9 +658,10 @@ export async function extractFromPdf(
     const sizes: string[] = [];
     for (const row of dataAfterHeader) {
       const color = (row[iColor] ?? '').trim();
-      const size = (row[iSize] ?? '').trim();
+      const size = foldSize((row[iSize] ?? '').trim());
       const qty = toNum(row[iQty]);
       if (!color || !size || qty == null || qty <= 0) continue;
+      if (isTotalsLabel(color) || isNonColourLabel(color)) continue;
       if (!sizes.includes(size)) sizes.push(size);
       const cells = byColor.get(color) ?? {};
       cells[size] = (cells[size] ?? 0) + qty;
@@ -927,13 +933,24 @@ export async function extractFromPdf(
     || (r.kind === 'lines' && linesValueMatches)
     || (r.kind === 'grid' && gridValueMatches);
   const rank: Record<Reading, number> = { table: 2, grid: 1, lines: 0 };
+  // A reading with a totals line among its colours has counted the order
+  // twice; "most pieces" would pick it for exactly that reason.
+  const colourNames: Record<Reading, string[]> = {
+    table: matrices.flatMap((m) => m.rows.map((r) => r.color)),
+    grid: gridOrder?.matrix.rows.map((r) => r.color) ?? [],
+    lines: poOrder?.matrix?.rows.map((r) => r.color) ?? [],
+  };
+  const doubleCounts = (r: { kind: Reading }) => colourNames[r.kind].some((c) => isTotalsLabel(c.replace(/^.* — /, '')));
   readings.sort((x, y) =>
     Number(agrees(y)) - Number(agrees(x))
+    || Number(doubleCounts(x)) - Number(doubleCounts(y))
     || (printedPieces != null && !agrees(x) && !agrees(y) ? Math.abs(x.qty - printedPieces) - Math.abs(y.qty - printedPieces) : 0)
     || y.qty - x.qty
     || rank[y.kind] - rank[x.kind]);
   const best = readings[0]?.kind ?? null;
   const chosenQty = readings[0]?.qty ?? 0;
+  // The table reading kept: the document's printed piece count is its cross-check, as the grid's is.
+  if (best === 'table' && printedPieces != null && matrices.length === 1 && matrices[0]!.sheetTotal == null) matrices[0]!.sheetTotal = printedPieces;
 
   // A document's own title — "PULSE RUNNING CLUB - PRODUCTION ORDER" on its
   // first line — names an order that has no single style and no customer

@@ -27,6 +27,7 @@ import type ExcelJS from 'exceljs';
 import { formatRatioPart } from '@opsflow/shared';
 import { isUncachedFormula } from './extractor.js';
 import { asPercent } from './percent.js';
+import { parseAmount } from './size-grid.js';
 
 export interface AgeLay {
   /** The sheet row, for messages. */
@@ -154,8 +155,11 @@ export function cellStr(cell: ExcelJS.Cell | undefined): string {
 }
 
 function cellNum(cell: ExcelJS.Cell | undefined): number | null {
-  const s = cellStr(cell).replace(/[,\s%]/g, '');
+  const s = cellStr(cell).replace(/[\s%]/g, '');
   if (!s) return null;
+  // A comma by where it sits: "1,200" is twelve hundred, "2,35" m is two
+  // and a bit (stripped, it read as 235).
+  if (s.includes(',') && /^-?[\d.,]+$/.test(s)) return parseAmount(s);
   const n = Number(s);
   return Number.isFinite(n) ? n : null;
 }

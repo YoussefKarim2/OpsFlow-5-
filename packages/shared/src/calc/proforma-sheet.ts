@@ -53,6 +53,12 @@ export interface ProformaSheetSettings {
   signatory?: string | null;
   /** Keyed by `sheetRowKey`. */
   rows?: Record<string, SheetRowSettings>;
+  /**
+   * The packing figures as they stood when the proforma was issued, by order
+   * id. Written by the issue route, never typed: an issued document keeps the
+   * cartons and weights it went out with, whatever packing does afterwards.
+   */
+  packedAtIssue?: Record<string, Record<string, PackedStyle> | null> | null;
 }
 
 /** The HTS codes the factory's proforma uses; the field also takes any other code. */
@@ -107,6 +113,13 @@ export interface PackedStyle {
   cartons: number;
   grossKg: number | null;
   netKg: number | null;
+  /**
+   * The pieces in those cartons. The packing list stands in for the sheet's
+   * cartons and weights only once it holds the row's quantity: two cartons
+   * packed of a 10,000-piece row are a list being built, not 2 cartons.
+   * Absent on figures saved before it was counted, which are taken as whole.
+   */
+  pieces?: number;
 }
 
 export interface SheetRow {
@@ -192,7 +205,8 @@ export function buildSheet(
     // when the order is that one style and the row is named after the order.
     const label = g.style ?? g.name;
     const perCarton = t.perCarton && t.perCarton > 0 ? t.perCarton : guessPerCarton(label);
-    const packed = o.packedByStyle?.[sheetRowKey(g.name, null, false)] ?? null;
+    const listed = o.packedByStyle?.[sheetRowKey(g.name, null, false)] ?? null;
+    const packed = listed != null && (listed.pieces == null || listed.pieces >= qty) ? listed : null;
     // Typed figures first; then the packing list's own; then the division.
     const cartonsTyped = (t.cartons != null && t.cartons >= 0) || (packed != null && packed.cartons > 0);
     const cartons = t.cartons != null && t.cartons >= 0 ? t.cartons : packed != null && packed.cartons > 0 ? packed.cartons : qty > 0 ? Math.ceil(qty / perCarton) : 0;

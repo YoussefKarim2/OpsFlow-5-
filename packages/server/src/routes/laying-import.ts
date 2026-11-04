@@ -11,7 +11,7 @@
 import { createHash } from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
-import { normaliseHeader, toSavedMapping, ChangeCategory, NotificationPriority, type ImportConcept } from '@opsflow/shared';
+import { normaliseHeader, toSavedMapping, ChangeCategory, NotificationPriority, CONCEPT_META, type ImportConcept } from '@opsflow/shared';
 import { prisma } from '../db.js';
 import { authenticate, requirePermission, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
@@ -122,6 +122,28 @@ function readOptionsOf(job: { preview: unknown }): ReadOptions {
   };
 }
 
+/**
+ * The same file already committed into this order. Added on every reading of
+ * the job, not only the upload, so remapping a column does not drop it; and
+ * it says so when the lay plan that import made has since been removed.
+ */
+async function addReimportWarning(extraction: LayingExtractionResult, orderId: string, checksum: string | null, jobId: string): Promise<void> {
+  if (!checksum) return;
+  const before = await prisma.importJob.findFirst({
+    where: { targetOrderId: orderId, target: 'LAYING_MARKING', status: 'COMMITTED', checksum, id: { not: jobId } },
+    orderBy: { createdAt: 'desc' }, select: { createdAt: true },
+  });
+  if (!before) return;
+  const day = before.createdAt.toISOString().slice(0, 10);
+  const markers = await prisma.marker.count({ where: { orderId } });
+  extraction.issues.unshift({
+    level: 'WARNING', field: null, sheet: null, cell: null,
+    message: markers > 0
+      ? `This exact laying sheet was already imported into this order on ${day}. Importing it again changes nothing unless the lays were edited since — check the plan first.`
+      : `This exact laying sheet was already imported into this order on ${day}, but that lay plan has since been removed. Importing it again puts it back.`,
+  });
+}
+
 async function persistJob(jobId: string, extraction: LayingExtractionResult, read: ReadOptions = {}): Promise<void> {
   const hasErrors = extraction.issues.some((i) => i.level === 'ERROR');
   await prisma.importJob.update({
@@ -157,10 +179,6 @@ layingImportRouter.post('/upload', requirePermission('import:laying'), upload.si
   const checksum = createHash('sha256').update(req.file.buffer).digest('hex');
   // The same sheet brought in again: said before it is committed, because a
   // "Replace" re-import is the usual way duplicate records came about.
-  const before = await prisma.importJob.findFirst({
-    where: { targetOrderId: order.id, target: 'LAYING_MARKING', status: 'COMMITTED', checksum },
-    orderBy: { createdAt: 'desc' }, select: { createdAt: true },
-  });
   const job = await prisma.importJob.create({
     data: {
       fileName: req.file.originalname, storageKey: key, uploadedById: actor.id, status: 'UPLOADED',
@@ -186,12 +204,7 @@ layingImportRouter.post('/upload', requirePermission('import:laying'), upload.si
     });
   }
 
-  if (before) {
-    finalExtraction.issues.unshift({
-      level: 'WARNING', field: null, sheet: null, cell: null,
-      message: `This exact laying sheet was already imported into this order on ${before.createdAt.toISOString().slice(0, 10)}. Importing it again changes nothing unless the lays were edited since — check the plan first.`,
-    });
-  }
+  await addReimportWarning(finalExtraction, order.id, checksum, job.id);
   await persistJob(job.id, finalExtraction, {
     savedMapping: savedMapping ? savedMapping.mapping as Record<string, ImportConcept> : undefined,
   });
@@ -217,10 +230,19 @@ layingImportRouter.post('/:jobId/remap', requirePermission('import:laying'), asy
   const sheetName = input.sheetName ?? previous.sheetName;
   const sameSheet = sheetName === previous.sheetName;
   const overrides: Record<number, ImportConcept> = sameSheet ? { ...(previous.overrides ?? {}) } : {};
-  for (const [index, concept] of Object.entries(input.columnMapping ?? {})) overrides[Number(index)] = concept as ImportConcept;
+  // Checked as the order importer checks them: an unknown concept was stored,
+  // saved as a layout, and later replayed into a reader that dereferenced it.
+  for (const [index, concept] of Object.entries(input.columnMapping ?? {})) {
+    if (!Object.prototype.hasOwnProperty.call(CONCEPT_META, concept)) {
+      throw new BadRequestError(`"${concept}" is not a column type the importer knows. Pick the column's meaning from the list.`);
+    }
+    if (!/^\d+$/.test(index)) throw new BadRequestError(`"${index}" is not a column number.`);
+    overrides[Number(index)] = concept as ImportConcept;
+  }
 
   const read: ReadOptions = { sheetName, overrides, savedMapping: previous.savedMapping };
   const extraction = await extractLayingMarking(buffer, read);
+  await addReimportWarning(extraction, order.id, job.checksum, job.id);
   await persistJob(job.id, extraction, { ...read, sheetName: extraction.analysis.sheetName });
   res.json(await buildResponse(job.id, job.fileName, order.id, extraction));
 }));
@@ -238,7 +260,7 @@ layingImportRouter.post('/:jobId/save-mapping', requirePermission('import:laying
   if (Object.keys(mapping).length === 0) throw new BadRequestError('There is nothing to save — no columns were mapped.');
 
   const fingerprint = headerFingerprint(extraction.analysis.columns.map((c) => c.header));
-  const label = (req.body?.label as string | undefined) ?? `Laying & Marking layout`;
+  const label = z.object({ label: z.string().trim().min(1).max(120).optional() }).parse(req.body ?? {}).label ?? 'Laying & Marking layout';
   // Not a plain `upsert`: clientId is nullable, and Prisma's compound-unique
   // lookup can't take null for a key field — see the same fix in import.ts.
   const existing = await prisma.savedColumnMapping.findFirst({ where: { clientId: null, headerFingerprint: fingerprint } });

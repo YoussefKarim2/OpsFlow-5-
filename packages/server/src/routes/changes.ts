@@ -125,11 +125,24 @@ function toDto(e: EventRow) {
 // The factory-wide feed
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * User accounts and roles are announced in the feed as ADMIN changes, with
+ * their fields: email, phone, why an account was disabled, permissions given.
+ * Everybody reads the feed; those rows are for the people who manage accounts.
+ */
+function adminRowsVisible(req: Parameters<typeof currentUser>[0]): boolean {
+  const p = currentUser(req).permissions;
+  return p.includes('audit:read') || p.includes('user:manage');
+}
+const NOT_ADMIN: Prisma.ChangeEventWhereInput = { category: { not: 'ADMIN' as never } };
+
 changesRouter.get('/', requirePermission('order:read'), asyncHandler(async (req, res) => {
   const q = feedQuery.parse(req.query);
   const createdAt = createdAtWindow(q.from, q.to);
 
   const where: Prisma.ChangeEventWhereInput = {
+    // Both, when both apply: asking for ADMIN without the right finds nothing.
+    ...(adminRowsVisible(req) ? {} : { AND: [NOT_ADMIN] }),
     ...(q.category ? { category: q.category as never } : {}),
     ...(q.priority ? { priority: q.priority as never } : {}),
     ...(q.actorId ? { actorId: q.actorId } : {}),
@@ -166,16 +179,18 @@ changesRouter.get('/', requirePermission('order:read'), asyncHandler(async (req,
  * changed anything, is a dropdown nobody can use. This lists the people who
  * appear in the feed, and how often.
  */
-changesRouter.get('/filters', requirePermission('order:read'), asyncHandler(async (_req, res) => {
+changesRouter.get('/filters', requirePermission('order:read'), asyncHandler(async (req, res) => {
+  const where = adminRowsVisible(req) ? {} : NOT_ADMIN;
   const [actors, categories, priorities] = await Promise.all([
     prisma.changeEvent.groupBy({
+      where,
       by: ['actorId', 'actorName'],
       _count: { _all: true },
       orderBy: { _count: { actorId: 'desc' } },
       take: 50,
     }),
-    prisma.changeEvent.groupBy({ by: ['category'], _count: { _all: true } }),
-    prisma.changeEvent.groupBy({ by: ['priority'], _count: { _all: true } }),
+    prisma.changeEvent.groupBy({ where, by: ['category'], _count: { _all: true } }),
+    prisma.changeEvent.groupBy({ where, by: ['priority'], _count: { _all: true } }),
   ]);
 
   res.json({

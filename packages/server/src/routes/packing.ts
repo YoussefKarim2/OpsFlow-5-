@@ -540,11 +540,23 @@ packingRouter.delete('/cartons/:cartonId', requirePermission('packing:write'), a
   await assertListNotInvoiced(carton.packingList.id);
 
   const orderId = carton.packingList.orderId;
-  const colorId = carton.orderColorId;
 
   await prisma.$transaction(async (tx) => {
+    // Under the carton's lock and from a fresh read, as a size edit is: taken
+    // off by what it held before, a size edit committing in between left the
+    // packed ledger out by the edit's difference once the carton was gone.
+    await tx.$queryRaw`SELECT id FROM cartons WHERE id = ${carton.id} FOR UPDATE`;
+    const fresh = await tx.carton.findUnique({
+      where: { id: carton.id },
+      include: { lines: true, packingList: { select: { approved: true } } },
+    });
+    if (!fresh) throw new NotFoundError('Carton');
+    if (fresh.packingList.approved) {
+      throw new ValidationError('This packing list has been approved. Reopen it before removing a carton.');
+    }
+    const colorId = fresh.orderColorId;
     if (colorId) {
-      for (const [sizeId, delta] of ledgerDeltas(cartonHolding(carton), new Map())) {
+      for (const [sizeId, delta] of ledgerDeltas(cartonHolding(fresh), new Map())) {
         await tx.stageQuantity.upsert({
           where: {
             orderId_orderColorId_orderSizeId_ledger: {

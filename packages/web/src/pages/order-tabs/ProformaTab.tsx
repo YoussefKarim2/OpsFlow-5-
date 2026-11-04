@@ -22,7 +22,10 @@ import { useEffect, useRef, useState } from 'react';
 import { ProformaPrintView } from '../../components/ProformaPrintView';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Send, Lock, Upload, Download, Info, Printer } from 'lucide-react';
-import { fmtDate, type OrderDetailDto } from '@opsflow/shared';
+import {
+  computeInvoiceTotals, fmtDate, InvoiceLineKind, isTypeableFigure, lineTotal as exactLineTotal,
+  readTypedNumber, typedNumberOrNull, type OrderDetailDto,
+} from '@opsflow/shared';
 import { api, type ProformaDto } from '../../lib/api';
 import { cairoDay } from '../../lib/cairo-day';
 import {
@@ -124,12 +127,27 @@ function fromServer(inv: ProformaDto): Draft {
   };
 }
 
-const numOrNull = (s: string): number | null => {
-  const t = s.trim();
-  if (t === '') return null;
-  const n = Number(t);
-  return Number.isFinite(n) ? n : null;
-};
+/**
+ * A typed figure, read by the shared rule: "1,000" is a thousand, and "7,25"
+ * is refused rather than saved as nothing (it used to become null silently,
+ * and the line saved with no quantity).
+ */
+const numOrNull = typedNumberOrNull;
+
+/** Every figure on the lines that cannot be read, as sentences; saving waits until there are none. */
+function figureProblems(lines: LineDraft[]): string[] {
+  const out: string[] = [];
+  lines.forEach((l, i) => {
+    if (!l.description.trim()) return; // not saved
+    const name = `Line ${i + 1}`;
+    for (const [label, text] of [['quantity', l.quantity], ['unit price', l.unitPrice]] as const) {
+      const r = readTypedNumber(text);
+      if (!r.ok) out.push(`${name}, ${label}: ${r.reason}`);
+    }
+  });
+  return out;
+}
+const unreadable = (text: string) => !readTypedNumber(text).ok;
 
 export function ProformaTab({ order }: { order: OrderDetailDto }) {
   const orderId = order.id;
@@ -197,7 +215,10 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
   };
 
   const save = useMutation({
-    mutationFn: (d: Draft) => api.steps.saveProforma(orderId, {
+    mutationFn: (d: Draft) => {
+      const problems = figureProblems(d.lines);
+      if (problems.length > 0) throw new Error(problems[0]);
+      return api.steps.saveProforma(orderId, {
       updatedAt: d.updatedAt,
       number: d.number.trim() || null,
       date: d.date || undefined,
@@ -219,7 +240,8 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
           unit: l.unit.trim() || 'PCS',
           unitPrice: numOrNull(l.unitPrice),
         })),
-    }),
+      });
+    },
     onSuccess: () => { refresh(); toast.success('Proforma invoice saved'); },
     onError: (e) => toast.error(e),
   });
@@ -241,16 +263,17 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
   const setLine = (i: number, patch: Partial<LineDraft>) =>
     setDraft({ ...draft, lines: draft.lines.map((l, j) => (j === i ? { ...l, ...patch } : l)) });
 
-  // The same arithmetic the server does, so the screen and the document agree.
-  const lineTotal = (l: LineDraft): number | null => {
-    const q = numOrNull(l.quantity);
-    const p = numOrNull(l.unitPrice);
-    // To the cent, as each line prints; summed raw, the lines did not add up.
-    return q != null && p != null ? Math.round(q * p * 100) / 100 : null;
-  };
-  const priced = draft.lines.map(lineTotal).filter((t): t is number => t != null);
-  const grand = priced.length > 0 ? Math.round(priced.reduce((a, b) => a + b, 0) * 100) / 100 : null;
+  // The invoice engine's exact-cents arithmetic, so the screen, the printed
+  // document and the Excel export agree to the cent (float q × p × 100 did not).
+  const asInput = (l: LineDraft) => ({
+    kind: InvoiceLineKind.ITEM, description: l.description,
+    quantity: numOrNull(l.quantity), unitPrice: numOrNull(l.unitPrice), amount: null,
+  });
+  const lineTotal = (l: LineDraft): number | null => exactLineTotal(asInput(l));
+  const anyPriced = draft.lines.some((l) => lineTotal(l) != null);
+  const grand = anyPriced ? computeInvoiceTotals(draft.lines.map(asInput)).subtotal : null;
   const anyIncomplete = draft.lines.some((l) => l.description.trim() && lineTotal(l) == null);
+  const problems = figureProblems(draft.lines);
 
   return (
     <div className="space-y-4 p-5">
@@ -274,9 +297,9 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
           terms: draft.terms || null,
           lines: draft.lines.map((l) => ({
             description: l.description,
-            quantity: l.quantity === '' ? null : Number(l.quantity),
+            quantity: numOrNull(l.quantity),
             unit: l.unit,
-            unitPrice: l.unitPrice === '' ? null : Number(l.unitPrice),
+            unitPrice: numOrNull(l.unitPrice),
           })),
           sentAt: invoice?.sentAt ?? null,
         }}
@@ -327,7 +350,8 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
           <div className="flex gap-2">
             <button
               className="btn-ghost btn-sm"
-              disabled={sent || save.isPending}
+              disabled={sent || save.isPending || problems.length > 0}
+              title={problems[0]}
               onClick={() => save.mutate(draft)}
             >
               {save.isPending ? 'Saving…' : 'Save'}
@@ -466,9 +490,9 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
                     </td>
                     <td className="p-1">
                       <input
-                        className="input tnum border-transparent bg-transparent text-right"
-                        value={l.quantity}
-                        onChange={(e) => setLine(i, { quantity: e.target.value })}
+                        className={clsx('input tnum border-transparent bg-transparent text-right', unreadable(l.quantity) && 'ring-1 ring-red-400')}
+                        value={l.quantity} inputMode="decimal"
+                        onChange={(e) => { if (isTypeableFigure(e.target.value)) setLine(i, { quantity: e.target.value }); }}
                       />
                     </td>
                     <td className="p-1">
@@ -480,9 +504,9 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
                     </td>
                     <td className="p-1">
                       <input
-                        className="input tnum border-transparent bg-transparent text-right"
-                        value={l.unitPrice}
-                        onChange={(e) => setLine(i, { unitPrice: e.target.value })}
+                        className={clsx('input tnum border-transparent bg-transparent text-right', unreadable(l.unitPrice) && 'ring-1 ring-red-400')}
+                        value={l.unitPrice} inputMode="decimal"
+                        onChange={(e) => { if (isTypeableFigure(e.target.value)) setLine(i, { unitPrice: e.target.value }); }}
                       />
                     </td>
                     <td className="td tnum text-right font-semibold">
@@ -511,6 +535,13 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
                 </tr>
               </tfoot>
             </table>
+
+            {problems.length > 0 && (
+              <ul className="mt-1.5 space-y-0.5 rounded-md bg-red-50 px-3 py-2 text-xs text-red-700">
+                {problems.slice(0, 4).map((m) => <li key={m}>{m}</li>)}
+                {problems.length > 4 && <li>…and {problems.length - 4} more.</li>}
+              </ul>
+            )}
 
             {anyIncomplete && (
               <p className="mt-1.5 text-2xs text-amber-800">

@@ -490,14 +490,58 @@ const SELF_COMPLETING = new Set([
   'FM_MAIN_ORDER', 'CM_CUT_RATIOS', 'CM_REAL_MARKERS', 'CM_BOM_FABRIC', 'CO_BOM_ACCESSORIES', 'WH_ISSUE_MATERIALS', 'PK_BUILD_LIST',
 ]);
 
-export async function autoCompleteTasks(orderId: string): Promise<number> {
+/** What the order already knows, worked out by the caller with the order loaded. */
+export interface AutoCompleteFacts {
+  /** The lay plan covers the cut requirement in every size (the `marker-complete` gate). */
+  layPlanCoversCut: boolean;
+}
+
+/**
+ * Whether a self-completing task's work is actually done — stricter than
+ * `assertTaskCompletable`, which is the least a person needs before they may
+ * press Complete. One marker or one BOM line is enough to let somebody sign
+ * off; it is not proof that the lay plan or the accessories are finished, and
+ * a lay-plan import used to complete "Add accessories" on its own.
+ */
+async function workIsDone(templateKey: string, orderId: string, facts: AutoCompleteFacts): Promise<boolean> {
+  switch (templateKey) {
+    case 'FM_MAIN_ORDER':
+    case 'CM_CUT_RATIOS':
+      return true; // the shared check is the whole test: sizes entered, ratios recorded
+    case 'CM_REAL_MARKERS':
+      return facts.layPlanCoversCut;
+    case 'CM_BOM_FABRIC':
+      return (await prisma.bomItem.count({ where: { orderId, category: 'FABRIC' } })) > 0;
+    case 'CO_BOM_ACCESSORIES':
+      return (await prisma.bomItem.count({ where: { orderId, category: { not: 'FABRIC' } } })) > 0;
+    case 'WH_ISSUE_MATERIALS':
+      // Every line issued is the shared check; a bill with nothing to issue is not "issued".
+      return (await prisma.bomItem.count({ where: { orderId, requiredQty: { gt: 0 } } })) > 0;
+    case 'PK_BUILD_LIST':
+      // The first carton is the list being started, not built: done once a list with cartons is approved.
+      return (await prisma.packingList.count({ where: { orderId, approved: true, cartons: { some: {} } } })) > 0;
+    default:
+      return false;
+  }
+}
+
+export async function autoCompleteTasks(orderId: string, facts: AutoCompleteFacts): Promise<number> {
   const open = await prisma.task.findMany({
     where: { orderId, status: { not: 'COMPLETED' }, templateKey: { in: [...SELF_COMPLETING] } },
-    select: { id: true, orderId: true, templateKey: true, title: true, blockedByTaskId: true, sequence: true },
+    select: { id: true, orderId: true, templateKey: true, title: true, blockedByTaskId: true, sequence: true, startedAt: true },
     orderBy: { sequence: 'asc' },
   });
+  if (open.length === 0) return 0;
+  // A task somebody reopened is theirs again: its data was there when it was
+  // reopened, and completing it again in the same request undid the reopen.
+  const reopened = new Set((await prisma.activityLog.findMany({
+    where: { orderId, entityType: 'Task', action: 'TASK_REOPENED', entityId: { in: open.map((t) => t.id) } },
+    select: { entityId: true },
+  })).map((a) => a.entityId));
   let done = 0;
   for (const task of open) {
+    if (reopened.has(task.id)) continue;
+    if (!task.templateKey || !(await workIsDone(task.templateKey, orderId, facts))) continue;
     try {
       await assertTaskCompletable(prisma, task);
     } catch {
@@ -505,7 +549,7 @@ export async function autoCompleteTasks(orderId: string): Promise<number> {
     }
     const hit = await prisma.task.updateMany({
       where: { id: task.id, status: { not: 'COMPLETED' } },
-      data: { status: 'COMPLETED', completedAt: new Date(), completedById: null },
+      data: { status: 'COMPLETED', completedAt: new Date(), completedById: null, startedAt: task.startedAt ?? new Date() },
     });
     if (hit.count === 0) continue;
     done++;
@@ -515,6 +559,8 @@ export async function autoCompleteTasks(orderId: string): Promise<number> {
       entityType: 'Task', entityId: task.id,
     });
     await unblockDependents(prisma, orderId, task.sequence);
+    // As a completion by hand does: the next group is told it is their turn.
+    await notifyNextGroup(prisma, orderId, task.sequence, '');
   }
   return done;
 }

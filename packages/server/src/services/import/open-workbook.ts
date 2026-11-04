@@ -203,6 +203,11 @@ const EURO_NUMBER = /^-?\d{1,3}(\.\d{3})+(,\d{1,2})?$|^-?\d+,\d{1,2}$/;
 /** "1,200", "1,200.50", "2.35": the same numbers written the English way. */
 const ANGLO_NUMBER = /^-?\d{1,3}(,\d{3})+(\.\d{1,2})?$|^-?\d+\.\d{1,2}$/;
 
+/** A decimal comma, alone or after dotted thousands — "2,35", "1.234,5": only a European file writes these. */
+const EURO_DECIMAL = /^-?\d+,\d{1,2}$|^-?\d{1,3}(\.\d{3})+,\d{1,2}$/;
+/** "1.234.567": two dotted groups cannot be an English decimal. */
+const EURO_THOUSANDS_ONLY = /^-?\d{1,3}(\.\d{3}){2,}$/;
+
 /**
  * Whether a CSV writes its numbers the European way.
  *
@@ -211,18 +216,41 @@ const ANGLO_NUMBER = /^-?\d{1,3}(,\d{3})+(\.\d{1,2})?$|^-?\d+\.\d{1,2}$/;
  * Excel in a comma-decimal locale, so there a tie goes European too — a file
  * whose only decimals are "2,35"s and whose thousands are "1,200"s cannot be
  * told apart any other way.
+ *
+ * A comma-separated file needs real evidence first: a decimal comma ("12,5")
+ * or a number only Europe writes ("1.234.567"). "4.125" and "12.500" alone are
+ * English prices and weights to three places, and were read a thousand times
+ * over — $4,125 a shirt, 12,500 kg a carton.
  */
 export function csvIsEuropean(text: string, delimiter: string): boolean {
-  let euro = 0, anglo = 0;
+  let euro = 0, anglo = 0, evidence = 0;
   for (const line of text.split(/\r?\n/)) {
-    for (const raw of line.split(delimiter)) {
+    for (const raw of splitCsvLine(line, delimiter)) {
       const field = raw.trim().replace(/^"(.*)"$/, '$1');
-      if (EURO_NUMBER.test(field)) euro++;
-      else if (ANGLO_NUMBER.test(field)) anglo++;
+      if (EURO_NUMBER.test(field)) {
+        euro++;
+        if (EURO_DECIMAL.test(field) || EURO_THOUSANDS_ONLY.test(field)) evidence++;
+      } else if (ANGLO_NUMBER.test(field)) anglo++;
     }
   }
   if (euro === 0) return false;
-  return delimiter === ';' ? euro >= anglo : euro > anglo;
+  if (delimiter === ';') return euro >= anglo;
+  return evidence > 0 && euro > anglo;
+}
+
+/** One CSV line's fields, a quoted field ("12,5") kept whole. */
+function splitCsvLine(line: string, delimiter: string): string[] {
+  const out: string[] = [];
+  let field = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (ch === '"') { quoted = !quoted; field += ch; continue; }
+    if (ch === delimiter && !quoted) { out.push(field); field = ''; continue; }
+    field += ch;
+  }
+  out.push(field);
+  return out;
 }
 
 /** The Excel error strings ExcelJS's own mapping turned into error cells. */

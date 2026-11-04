@@ -19,7 +19,9 @@ import ExcelJS from 'exceljs';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
 import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines, sanitiseOverrides, sourceRefCovers, stepOverridePermission, visibleDerivedLines } from '@opsflow/shared';
+import { computeInvoiceTotals, InvoiceLineKind, lineTotal as exactLineTotal } from '@opsflow/shared';
 import { detectFileKind, FILE_KIND_LABEL } from '../services/import/file-kind.js';
+import { isUnsafeUploadName } from '../services/import/upload-guard.js';
 import { extractFromPdf } from '../services/import/pdf-extractor.js';
 import { sizeRank } from '../services/import/po-lines.js';
 import { fillMainOrderFromDocuments } from '../services/fill-main-order.js';
@@ -162,7 +164,8 @@ const upload = multer({
     file.originalname = decodeUploadName(file.originalname);
     // multer's callback is an overload pair: cb(error) rejects, cb(null, true)
     // accepts. Passing both accepts the file regardless of the error.
-    if (/[/\\]|\.\./.test(file.originalname)) {
+    // A path or a leading ".." only, as the importers' guard: "PO..final.pdf" is a name, not a path.
+    if (isUnsafeUploadName(file.originalname)) {
       cb(new BadRequestError('That file name is not allowed.'));
       return;
     }
@@ -673,14 +676,15 @@ function withTotals(inv: {
       // would put a number on the customer's document that nobody agreed.
       // To the cent, like every line printed; summing raw floats made the
       // lines not add up to their own total.
-      lineTotal: qty != null && price != null ? Math.round(qty * price * 100) / 100 : null,
+      lineTotal: exactLineTotal({ kind: InvoiceLineKind.ITEM, description: '', quantity: qty, unitPrice: price, amount: null }),
     };
   });
   const priced = lines.filter((l) => l.lineTotal != null);
   return {
     ...inv,
     lines,
-    grandTotal: priced.length > 0 ? Math.round(priced.reduce((a, l) => a + (l.lineTotal ?? 0), 0) * 100) / 100 : null,
+    // In exact cents, the engine every printed document uses: summed floats lost half-cents.
+    grandTotal: priced.length > 0 ? computeInvoiceTotals(priced.map((l) => ({ kind: InvoiceLineKind.ITEM, description: '', quantity: l.quantity, unitPrice: l.unitPrice, amount: null }))).subtotal : null,
     /** True when at least one line is still missing a quantity or a price. */
     incomplete: lines.some((l) => l.lineTotal == null),
   };
@@ -906,21 +910,31 @@ stepsRouter.get('/:id/proforma/export.xlsx', requirePermission('invoice:read'), 
   // Quantities are Decimal(14,4): metres of fabric are as common as pieces, and
   // a whole-number format showed 12.5 m as 13 beside an amount for 12.5.
   const qtyFormat = '#,##0.####';
-  let total = 0;
-  let totalQty = 0;
+  // A rate is shown as it is held (up to four places): at two places beside an
+  // amount worked from the full rate, the row did not multiply out.
+  const rateFormat = '#,##0.00##';
+  // Amounts and the total by the invoice engine's exact cents, the same
+  // arithmetic the screen and the printed proforma use.
+  const engineLines = inv.lines.map((l) => ({
+    kind: InvoiceLineKind.ITEM, description: l.description,
+    quantity: l.quantity == null ? null : Number(l.quantity.toString()),
+    unitPrice: l.unitPrice == null ? null : Number(l.unitPrice.toString()),
+    amount: null,
+  }));
+  const totals = computeInvoiceTotals(engineLines);
+  const total = totals.subtotal;
+  const totalQty = totals.totalQty;
   let priced = 0;
-  let unpriced = false;
-  for (const l of inv.lines) {
-    const qty = l.quantity == null ? null : Number(l.quantity.toString());
-    const price = l.unitPrice == null ? null : Number(l.unitPrice.toString());
-    const amount = qty != null && price != null ? Math.round(qty * price * 100) / 100 : null;
-    if (amount != null) { total += amount; priced += 1; } else unpriced = true;
-    if (qty != null) totalQty += qty;
-    const row = ws.addRow([l.description, qty, l.unit, price, amount]);
-    row.getCell(4).numFmt = '#,##0.00';
+  for (const [n, l] of inv.lines.entries()) {
+    const line = engineLines[n]!;
+    const amount = exactLineTotal(line);
+    if (amount != null) priced += 1;
+    const row = ws.addRow([l.description, line.quantity, l.unit, line.unitPrice, amount]);
+    row.getCell(4).numFmt = rateFormat;
     row.getCell(5).numFmt = '#,##0.00';
     row.getCell(2).numFmt = qtyFormat;
   }
+  const unpriced = totals.incomplete;
 
   // Matches the printed proforma: a total quantity, no total at all when
   // nothing is priced, and a note whenever the total leaves a line out.

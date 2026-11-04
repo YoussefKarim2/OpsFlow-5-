@@ -58,6 +58,8 @@ interface Stored {
   machineDaysUsed: string;
   sublimationCostUsd: string;
   embroideryCostUsd: string;
+  /** An outside-work figure typed before the Sublimation and Embroidery rows existed. */
+  externalOpCostUsd: string;
   notes: string;
 }
 
@@ -138,6 +140,7 @@ function storedFrom(record: CostingDto | null): Stored {
     machineDaysUsed: numText(record?.machineDaysUsed),
     sublimationCostUsd: editableText(record?.sublimationCostUsd, 'money'),
     embroideryCostUsd: editableText(record?.embroideryCostUsd, 'money'),
+    externalOpCostUsd: editableText(record?.externalOpCostUsd, 'money'),
     notes: record?.notes ?? '',
   };
 }
@@ -253,6 +256,8 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
   const derivedLines = useMemo(() => costing.data?.derived ?? [], [costing.data]);
 
   const [stored, setStored] = useState<Stored>(() => storedFrom(record));
+  /** The record held an old outside-work figure: its row stays while it is being cleared. */
+  const initialOuter = record?.externalOpCostUsd != null;
   const [over, setOver] = useState<Record<string, string>>(() => overridesFrom(record));
   const [rows, setRows] = useState<RowDraft[]>(() => rowsFrom(record, derivedLines));
   const [hidden, setHidden] = useState<string[]>(() => record?.hiddenCostRefs ?? []);
@@ -339,6 +344,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
       machineDaysUsed: asWhole(stored.machineDaysUsed),
       sublimationCostUsd: asNumber(stored.sublimationCostUsd),
       embroideryCostUsd: asNumber(stored.embroideryCostUsd),
+      externalOpCostUsd: asNumber(stored.externalOpCostUsd),
       notes: stored.notes || null,
       overrides: over,
       hiddenCostRefs: hidden,
@@ -450,6 +456,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
     lineMachineQty: asWhole(stored.lineMachineQty) ?? null,
     sublimationCostUsd: asNumber(stored.sublimationCostUsd),
     embroideryCostUsd: asNumber(stored.embroideryCostUsd),
+    externalOpCostUsd: asNumber(stored.externalOpCostUsd),
     overrides: sanitiseOverrides(over),
     lines: rows.map<CostLineInput>((r) => ({
       group: r.group,
@@ -1024,6 +1031,15 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
                 label="Embroidery" cost={live.embroideryCostUsd} total={total} editing={editing} hidden={!isOpen('external')}
                 value={stored.embroideryCostUsd} onChange={setField('embroideryCostUsd')}
               />
+              {/* A figure from before the two rows above existed. It is in the
+                  total, so it is shown — and can be cleared — rather than
+                  adding to the subtotal from nowhere. */}
+              {(stored.externalOpCostUsd.trim() !== '' || initialOuter) && (
+                <OutsideRow
+                  label="Other outside work" cost={asNumber(stored.externalOpCostUsd)} total={total} editing={editing} hidden={!isOpen('external')}
+                  value={stored.externalOpCostUsd} onChange={setField('externalOpCostUsd')}
+                />
+              )}
               {otherRows.map((r) => {
                 const kind = kindOf(r);
                 return (
@@ -1408,7 +1424,7 @@ function EditableRow({
         <NumberCell
           editing={editing} value={row.unitPrice}
           derived={row.derivedField === 'unitPrice'}
-          display={row.unitPrice === '' ? '—' : fmtMoney(Number(row.unitPrice))}
+          display={row.unitPrice === '' ? '—' : perPiece(Number(row.unitPrice))}
           onChange={(v) => onEditNumber(row.key, 'unitPrice', v)}
         />
       </td>

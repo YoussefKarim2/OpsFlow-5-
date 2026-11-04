@@ -36,12 +36,13 @@ import type { ImportIssue, ImportSheetInfo } from '@opsflow/shared';
 import type { ExtractionResult, ExtractedMatrix } from './extractor.js';
 import { detectFileKind } from './file-kind.js';
 import {
-  cellText, toNumber, toDate, buildLineItems, parseFieldOverride, isUncachedFormula, uncachedFormulaIssue,
+  cellText, toNumber, toPieces, toDate, buildLineItems, parseFieldOverride, isUncachedFormula, uncachedFormulaIssue,
 } from './extractor.js';
 import { toIsoDayOrNull, parseSpreadsheetDate } from '@opsflow/shared';
 import { loadWorkbook, readCsvWorkbook } from './open-workbook.js';
 import { readAgeLayingSheet } from './age-laying-reader.js';
-import { orderSizes, splitColourSize } from './po-lines.js';
+import { orderSizes, splitColourSize, sizeRank } from './po-lines.js';
+import { isTotalsLabel as isTotalsLabelText, startsWithTotalWord, isNonColourLabel } from './row-labels.js';
 import { BadRequestError } from '../../errors.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,6 +83,12 @@ function rawValue(cell: ExcelJS.Cell | undefined): unknown {
 // a sheet longer than that is reported rather than silently shortened.
 const MAX_SCAN_ROWS = 5000;
 const MAX_SCAN_COLS = 60;
+/**
+ * How far down a header row is looked for. Thirty missed a PO whose terms and
+ * notes ran to row 35 — "no table could be found". A normal file's header is
+ * near the top and the candidates past it cost only a row read each.
+ */
+const MAX_HEADER_SCAN_ROWS = 200;
 
 /**
  * The fewest columns a header row can have.
@@ -113,7 +120,7 @@ const MIN_HEADER_COLUMNS = 2;
  * "first" and "best" are not the same row in a file with a title block.
  */
 export function findHeaderCandidates(sheet: ExcelJS.Worksheet): number[] {
-  const limit = Math.min(sheet.rowCount || MAX_SCAN_ROWS, 30);
+  const limit = Math.min(sheet.rowCount || MAX_SCAN_ROWS, MAX_HEADER_SCAN_ROWS);
   const scanCols = Math.min(sheet.columnCount || MAX_SCAN_COLS, MAX_SCAN_COLS);
   const candidates: number[] = [];
 
@@ -378,6 +385,8 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
   let totalsRow: unknown[] | undefined;
   let subtotals = 0;
   let hiddenRows = 0;
+  /** Where the rows since the last total begin — what a total restates. */
+  let groupStart = 0;
 
   for (let r = headerRowIndex + 1; r <= last; r++) {
     const repeat = repeats.get(r);
@@ -397,8 +406,16 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
       // A gap and then a title — one cell of words, "Bill of materials" — is
       // the start of another table, not more of this one. Its rows were read
       // as colours called "Jersey fabric" and "Thread".
+      //
+      // Unless the rows under the title fit this table's columns: then it is
+      // a style heading ("ST-200") over more of the same order, and stopping
+      // lost that whole group without a word.
       const next = nextPopulated(sheet, r + 1, Math.min(r + 10, last), columns);
-      if (next && next.populated === 1 && next.firstText && toNumber(next.firstText) == null && !repeats.has(next.row)) break;
+      if (next && next.populated === 1 && next.firstText && toNumber(next.firstText) == null && !repeats.has(next.row)) {
+        const after = nextPopulated(sheet, next.row + 1, Math.min(next.row + 3, last), columns);
+        const continues = after != null && !repeats.has(after.row) && fitsTableColumns(read(sheet.getRow(after.row), mapping), rows);
+        if (!continues) break;
+      }
       continue;
     }
     blankRun = 0;
@@ -417,7 +434,11 @@ export function readTableAt(sheet: ExcelJS.Worksheet, headerRowIndex: number): S
       // With another block of the same table still to come, it is skipped
       // rather than ending the read.
       const firstFilled = values.find(isFilled);
-      if (isTotalsLabel(firstFilled)) {
+      // "Total Orange" is a colour; "Total pieces ordered" over the right sums is a total.
+      const looseTotal = !isTotalsLabel(firstFilled) && startsWithTotalWord(cellText(firstFilled))
+        && restatesRowsAbove(values.map((v) => (v === firstFilled ? null : v)), rows.slice(groupStart));
+      if (isTotalsLabel(firstFilled) || looseTotal) {
+        groupStart = rows.length;
         if (r < lastRepeat) continue;
         // A subtotal with more rows of the table straight after it is one
         // group's total, not the end: ending here lost every colour below it,
@@ -462,11 +483,58 @@ function nextPopulated(sheet: ExcelJS.Worksheet, from: number, to: number, colum
   return null;
 }
 
-/** "Total", "Grand total", "Subtotal", "Sum" — a row that restates the others. */
+/**
+ * "Total", "Grand total", "Subtotal", "Sum", "Total Qty", "Navy Total" — a row
+ * that restates the others. "Total Orange" is a colour (Nike sells it): a word
+ * after "Total" that is not a unit makes the label a name. Such a label is a
+ * total only when its numbers restate the rows above — see `restatesRowsAbove`.
+ */
 function isTotalsLabel(value: unknown): boolean {
-  const text = String(cellText(value)).trim().toLowerCase();
-  // "Navy Total" is Excel's Data→Subtotal row: the colour restated, not another colour.
-  return /^(total|totals|grand total|sum|sub\s*total)\b/.test(text) || /\btotals?$/.test(text);
+  return isTotalsLabelText(cellText(value));
+}
+
+/**
+ * Whether a row's numbers are the column sums of the rows above it: how a
+ * total that is labelled in words ("Total pieces ordered") is told from a
+ * colour that starts with the word ("Total Orange").
+ */
+function restatesRowsAbove(values: readonly unknown[], above: readonly unknown[][]): boolean {
+  if (above.length < 2) return false;
+  let compared = 0;
+  for (let i = 0; i < values.length; i++) {
+    const n = toNumber(values[i]);
+    if (n == null) continue;
+    const sum = above.reduce((a, r) => a + (toNumber(r[i]) ?? 0), 0);
+    if (Math.abs(sum - n) > 1e-6) return false;
+    compared++;
+  }
+  return compared > 0;
+}
+
+/**
+ * Whether a row belongs to this table: its numbers sit in the columns the
+ * rows read so far hold numbers in, and no words sit there instead. A style
+ * heading after a gap is followed by rows like these; another table (a bill
+ * of materials) is followed by rows of its own headings.
+ */
+function fitsTableColumns(candidate: readonly unknown[], rows: readonly unknown[][]): boolean {
+  if (rows.length === 0) return false;
+  const filled = (v: unknown) => v != null && String(cellText(v)).trim() !== '';
+  const numericCols: number[] = [];
+  for (let i = 0; i < candidate.length; i++) {
+    const vals = rows.map((r) => r[i]).filter((v) => filled(v) && !isEmptyCell(v));
+    if (vals.length > 0 && vals.filter((v) => toNumber(v) != null).length >= vals.length / 2) numericCols.push(i);
+  }
+  if (numericCols.length === 0) return false;
+  if (candidate.filter(filled).length < 2) return false;
+  let numbers = 0;
+  for (const i of numericCols) {
+    const v = candidate[i];
+    if (isEmptyCell(v)) continue;
+    if (toNumber(v) == null) return false;
+    numbers++;
+  }
+  return numbers > 0;
 }
 
 /**
@@ -607,6 +675,8 @@ interface BuildContext {
   table: SheetTable;
   analyses: ColumnAnalysis[];
   issues: ImportIssue[];
+  /** Set when some lines were counted in dozens and so read ×12 / ÷12. */
+  perDozen?: boolean;
 }
 
 /** Columns whose value belongs to each line; when they differ, none of them is the order's. */
@@ -614,6 +684,47 @@ const PER_LINE_CONCEPTS = new Set<ImportConcept>([ImportConcept.STYLE, ImportCon
 
 const columnFor = (analyses: readonly ColumnAnalysis[], concept: ImportConcept): number | null =>
   analyses.find((a) => a.concept === concept)?.index ?? null;
+
+/**
+ * One name for each size, however it is spelled: "XXL" and "2XL", "L" and
+ * "LG", are the same size and were two columns of the order. The first
+ * spelling met is kept; a label nobody can rank is kept as written.
+ */
+export function sizeFolder(): (label: string) => string {
+  const byRank = new Map<number, string>();
+  return (label: string) => {
+    const r = sizeRank(label);
+    if (r == null) return label;
+    const seen = byRank.get(r);
+    if (seen != null) return seen;
+    byRank.set(r, label);
+    return label;
+  };
+}
+
+/** "DZ", "Doz", "Dozen": a quantity counted in twelves. */
+const DOZEN_UNIT = /^(?:dz|dzn|doz|dozens?)\.?$/i;
+
+/**
+ * A row whose only content is one cell of words, outside the colour column:
+ * a style heading over the rows below it. A colour with no quantities is
+ * still a colour, so a lone word in the colour column is not a heading.
+ */
+function headingOf(row: readonly unknown[], colorCol: number): string | null {
+  const filled = row.map((v, i) => ({ v, i })).filter(({ v }) => !isEmptyCell(v));
+  if (filled.length !== 1 || filled[0]!.i === colorCol) return null;
+  const text = String(cellText(filled[0]!.v)).trim();
+  if (!text || toNumber(text) != null || isTotalsLabel(text) || isNonColourLabel(text)) return null;
+  return text;
+}
+
+/** The INFO said when a file counts some lines in dozens. */
+function dozenIssue(ctx: BuildContext, lines: number): void {
+  ctx.issues.push({
+    level: 'INFO', field: 'pricePerPieceUsd', sheet: ctx.table.sheetName, cell: null,
+    message: `${lines} line${lines === 1 ? ' is' : 's are'} counted in dozens (Unit DZ): each quantity was read as twelve times as many pieces, and each price as a twelfth, per piece.`,
+  });
+}
 
 /**
  * LONG layout: one row per colour × size × quantity.
@@ -636,13 +747,15 @@ function buildLongMatrix(ctx: BuildContext, opts: { sizeFromColour?: boolean } =
   const qtyCol = columnFor(ctx.analyses, ImportConcept.QUANTITY);
   const styleCol = columnFor(ctx.analyses, ImportConcept.STYLE);
   const priceCol = columnFor(ctx.analyses, ImportConcept.UNIT_PRICE);
+  const unitCol = columnFor(ctx.analyses, ImportConcept.UNIT);
   if (colorCol == null || qtyCol == null) return null;
   if (sizeCol == null && !opts.sizeFromColour) return null;
+  const fold = sizeFolder();
+  let dozenLines = 0;
 
   const styles = new Set(
     styleCol == null ? [] : ctx.table.rows.map((r) => String(cellText(r[styleCol])).trim()).filter(Boolean),
   );
-  const qualify = styles.size > 1;
 
   const byColor = new Map<string, Record<string, number>>();
   // Each colour's rates, so a colour whose lines all carry one rate keeps it.
@@ -656,11 +769,35 @@ function buildLongMatrix(ctx: BuildContext, opts: { sizeFromColour?: boolean } =
   // " — Navy" they pooled the same colour of every style into one row.
   let lastStyle = '';
 
+  // A style heading on a row of its own ("ST-200" over its colours) names
+  // the rows under it as a Style cell would.
+  const headed = !opts.sizeFromColour && ctx.table.rows.some((r) => headingOf(r, colorCol) != null);
+  let lastHeading = '';
+  const rowStyle = (row: readonly unknown[]) => (styleCol == null ? '' : String(cellText(row[styleCol])).trim());
+  const allStyles = new Set<string>();
+  {
+    let carried = '', heading = '';
+    for (const row of ctx.table.rows) {
+      const h = headed ? headingOf(row, colorCol) : null;
+      if (h != null) { heading = h; carried = ''; continue; }
+      carried = rowStyle(row) || carried || heading;
+      if (carried) allStyles.add(carried);
+    }
+  }
+  if (allStyles.size > styles.size) for (const st of allStyles) styles.add(st);
+  const qualifyAll = styles.size > 1;
+
   for (const row of ctx.table.rows) {
+    if (headed) {
+      const h = headingOf(row, colorCol);
+      if (h != null) { lastHeading = h; lastStyle = ''; continue; }
+    }
     const text = String(cellText(row[colorCol])).trim();
-    const qty = toNumber(row[qtyCol]);
-    const style = styleCol == null ? '' : String(cellText(row[styleCol])).trim() || lastStyle;
-    lastStyle = style;
+    let qty = toPieces(row[qtyCol]);
+    const style = rowStyle(row) || lastStyle || lastHeading;
+    lastStyle = rowStyle(row) || lastStyle;
+    // Neither a colour nor part of the order: the pack ratio, a price line.
+    if (text && isNonColourLabel(text)) continue;
 
     // A row with nothing in the colour, size or quantity cells is not a row
     // that was skipped — it is the vendor number, a spacer, a note. Only a
@@ -677,10 +814,14 @@ function buildLongMatrix(ctx: BuildContext, opts: { sizeFromColour?: boolean } =
       color = split.colour ?? '';
       if (!example && split.colour) example = { text, colour: split.colour, size: split.size };
     }
-    if (qualify) color = color ? `${style} — ${color}` : style;
+    if (qualifyAll) color = color ? `${style} — ${color}` : style;
 
     if (!color || !size) { skipped++; continue; }
     if (qty == null || qty <= 0) { skipped++; continue; }
+    size = fold(size);
+    // "10 DZ at $48" is 120 pieces at $4 each.
+    const dozen = unitCol != null && DOZEN_UNIT.test(String(cellText(row[unitCol])).trim());
+    if (dozen) { qty *= 12; dozenLines++; }
 
     if (!sizeOrder.includes(size)) sizeOrder.push(size);
     const cells = byColor.get(color) ?? {};
@@ -688,7 +829,8 @@ function buildLongMatrix(ctx: BuildContext, opts: { sizeFromColour?: boolean } =
     // adding them is what the customer meant.
     cells[size] = (cells[size] ?? 0) + qty;
     byColor.set(color, cells);
-    const price = priceCol == null ? null : toNumber(row[priceCol]);
+    const rawPrice = priceCol == null ? null : toNumber(row[priceCol]);
+    const price = rawPrice != null && dozen ? Math.round((rawPrice / 12) * 10_000) / 10_000 : rawPrice;
     const prices = pricesOf.get(color) ?? new Set<number>();
     prices.add(price != null && price >= 0 ? price : NaN);
     pricesOf.set(color, prices);
@@ -697,6 +839,7 @@ function buildLongMatrix(ctx: BuildContext, opts: { sizeFromColour?: boolean } =
   if (byColor.size === 0) return null;
   // Most rows must carry a size for this reading to be the right one.
   if (opts.sizeFromColour && unsized > ctx.table.rows.length / 2) return null;
+  if (dozenLines > 0) { dozenIssue(ctx, dozenLines); ctx.perDozen = true; }
 
   if (opts.sizeFromColour) {
     ctx.issues.push({
@@ -704,7 +847,7 @@ function buildLongMatrix(ctx: BuildContext, opts: { sizeFromColour?: boolean } =
       message:
         'The file has no Size column, so the size was read from the end of each colour description'
         + (example ? ` — "${example.text}" is colour ${example.colour} in size ${example.size}.` : '.')
-        + (qualify ? ` It lists ${styles.size} styles, so each row is named "Style — Colour".` : ''),
+        + (qualifyAll ? ` It lists ${styles.size} styles, so each row is named "Style — Colour".` : ''),
     });
   }
 
@@ -759,15 +902,41 @@ function columnLetter(n: number): string {
   return out;
 }
 
-function buildWideMatrix(ctx: BuildContext, sizeColumns: Array<{ index: number; name: string }>): ExtractedMatrix | null {
+function buildWideMatrix(ctx: BuildContext, rawSizeColumns: Array<{ index: number; name: string }>): ExtractedMatrix | null {
   const colorCol = columnFor(ctx.analyses, ImportConcept.COLOR);
   if (colorCol == null) return null;
+  // "XXL" and "2XL" over two columns are one size.
+  const fold = sizeFolder();
+  const sizeColumns = rawSizeColumns.map((s) => ({ ...s, name: fold(s.name) }));
+  const sizeIdx = new Set(sizeColumns.map((s) => s.index));
   // Two styles in one grid name their rows "Style — Colour", as the long
   // layout does; read by colour alone, ST-100 Navy and ST-200 Navy became
   // one row and two products became one.
   const styleCol = columnFor(ctx.analyses, ImportConcept.STYLE);
-  const styleOf = (row: unknown[]) => (styleCol == null ? '' : String(cellText(row[styleCol])).trim());
-  const multiStyle = styleCol != null && new Set(ctx.table.rows.map(styleOf).filter(Boolean)).size > 1;
+  const ownStyle = (row: readonly unknown[]) => (styleCol == null ? '' : String(cellText(row[styleCol])).trim());
+  // The style printed once, on the first row of its group, belongs to the
+  // rows under it too (the long layout already carried it): left blank, the
+  // Red of ST-200 merged into the Red of ST-100. A style heading on a row of
+  // its own ("ST-200" over its colours) does the same.
+  const styleByRow = new Map<readonly unknown[], string>();
+  const headingRows = new Set<readonly unknown[]>();
+  {
+    let carried = '', heading = '';
+    for (const row of ctx.table.rows) {
+      const h = headingOf(row, colorCol);
+      if (h != null && sizeColumns.every((s) => isEmptyCell(row[s.index]))) { headingRows.add(row); heading = h; carried = ''; continue; }
+      carried = ownStyle(row) || carried || heading;
+      styleByRow.set(row, carried);
+    }
+  }
+  const styleOf = (row: readonly unknown[]) => styleByRow.get(row) ?? '';
+  const multiStyle = new Set(ctx.table.rows.map(styleOf).filter(Boolean)).size > 1;
+  // A per-row price beside the grid is that colour's rate; a Unit of DZ
+  // makes every figure a dozen.
+  const priceCol = columnFor(ctx.analyses, ImportConcept.UNIT_PRICE);
+  const unitCol = columnFor(ctx.analyses, ImportConcept.UNIT);
+  const hasPrice = priceCol != null && !sizeIdx.has(priceCol);
+  let dozenLines = 0;
 
   // The grid's own "Total" column, to the right of the sizes: each colour's
   // figure as the customer added it up.
@@ -778,12 +947,16 @@ function buildWideMatrix(ctx: BuildContext, sizeColumns: Array<{ index: number; 
   const stated: Array<{ color: string; stated: number | null; read: number }> = [];
   let totalsRow = ctx.table.totalsRow;
   for (const row of ctx.table.rows) {
+    if (headingRows.has(row)) continue;
     const colorText = String(cellText(row[colorCol])).trim();
     if (!colorText) continue;
     // A totals row that survived the table read — labelled in the colour
     // column rather than the first one — is the grid restated, not a colour.
     if (isTotalsLabel(colorText)) { totalsRow ??= row; continue; }
+    // The pack ratio or a price line under the sizes is not a colour.
+    if (isNonColourLabel(colorText)) continue;
     const color = multiStyle && styleOf(row) ? `${styleOf(row)} — ${colorText}` : colorText;
+    const dozen = unitCol != null && !sizeIdx.has(unitCol) && DOZEN_UNIT.test(String(cellText(row[unitCol])).trim());
 
     const cells: Record<string, number> = {};
     let total = 0;
@@ -802,16 +975,22 @@ function buildWideMatrix(ctx: BuildContext, sizeColumns: Array<{ index: number; 
       });
     }
     for (const s of sizeColumns) {
-      const qty = toNumber(row[s.index]);
+      const read = toPieces(row[s.index]);
+      const qty = read != null && dozen ? read * 12 : read;
       // Added, not assigned: a heading written twice ("S M L S M L") is
       // one size, and the second column's pieces are as real as the first's.
       if (qty != null && qty > 0) { cells[s.name] = (cells[s.name] ?? 0) + qty; total += qty; }
     }
     if (total > 0) {
-      rows.push({ color, cells, total });
-      stated.push({ color, stated: totalCol === -1 ? null : toNumber(row[totalCol]), read: total });
+      if (dozen) dozenLines++;
+      const rawPrice = hasPrice ? toNumber(row[priceCol!]) : null;
+      const price = rawPrice == null || rawPrice < 0 ? null : dozen ? Math.round((rawPrice / 12) * 10_000) / 10_000 : rawPrice;
+      const statedTotal = totalCol === -1 ? null : toPieces(row[totalCol]);
+      rows.push({ color, cells, total, ...(hasPrice ? { unitPrice: price } : {}) });
+      stated.push({ color, stated: statedTotal != null && dozen ? statedTotal * 12 : statedTotal, read: total });
     }
   }
+  if (dozenLines > 0) { dozenIssue(ctx, dozenLines); ctx.perDozen = true; }
 
   if (rows.length === 0) return null;
 
@@ -819,7 +998,12 @@ function buildWideMatrix(ctx: BuildContext, sizeColumns: Array<{ index: number; 
   // said so: they may be two sizes the file failed to tell apart.
   const seen = new Map<string, number[]>();
   for (const s of sizeColumns) seen.set(s.name, [...(seen.get(s.name) ?? []), s.index]);
-  const repeated = [...seen].filter(([, at]) => at.length > 1);
+  // Said only for a heading written twice the same way: "XXL" beside "2XL" is
+  // one size spelled two ways, and adding them is plainly right.
+  const sameSpelling = new Map<string, number[]>();
+  for (const s of rawSizeColumns) sameSpelling.set(s.name.toLowerCase(), [...(sameSpelling.get(s.name.toLowerCase()) ?? []), s.index]);
+  const repeated = [...sameSpelling].filter(([, at]) => at.length > 1)
+    .map(([, at]) => [rawSizeColumns.find((s) => s.index === at[0])!.name, at] as [string, number[]]);
   if (repeated.length > 0) {
     const where = repeated.map(([name, at]) => `"${name}" in columns ${at.map((i) => columnLetter(i + 1)).join(' and ')}`);
     ctx.issues.push({
@@ -1261,6 +1445,13 @@ export async function extractTabular(
       meta.type === 'number' ? toNumber(firstValue)
       : meta.type === 'date' ? toDate(firstValue)
       : String(cellText(firstValue)).trim();
+  }
+
+  // Lines counted in dozens: the order's price is per piece, as each colour's now is.
+  if (ctx.perDozen && matrix) {
+    const priced = matrix.rows.filter((r) => r.unitPrice != null);
+    const pieces = priced.reduce((a, r) => a + r.total, 0);
+    if (pieces > 0) fields.pricePerPieceUsd = Math.round((priced.reduce((a, r) => a + r.total * r.unitPrice!, 0) / pieces) * 10_000) / 10_000;
   }
 
   // Read exactly as the commit reads them, so the preview cannot differ from

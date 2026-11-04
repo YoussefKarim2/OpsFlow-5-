@@ -30,7 +30,8 @@ import { createBackup, describeBackup } from './backup-service.js';
 import { sendMail, isGraphConfigured } from '../email/graph-mailer.js';
 
 let timer: NodeJS.Timeout | null = null;
-let running = false;
+/** The backup being taken, shared by the timer and the admin button so two never run at once. */
+let inFlight: Promise<BackupRunSummary> | null = null;
 
 /** The last run's outcome, so the admin screen can show it without a table. */
 export interface BackupRunSummary {
@@ -41,6 +42,8 @@ export interface BackupRunSummary {
   rows?: number;
   tables?: number;
   emailed?: boolean;
+  /** The copy could not be mailed; the backup itself is on disk. */
+  emailError?: string;
   error?: string;
 }
 
@@ -107,7 +110,16 @@ export function backupRecipients(): readonly string[] {
  * Returns the summary rather than throwing, because both callers — the timer
  * and the admin endpoint — want to report a failure, not crash on one.
  */
-export async function runBackup(): Promise<BackupRunSummary> {
+export function runBackup(): Promise<BackupRunSummary> {
+  // A second press, or the timer firing during a run, joins the one under
+  // way: two whole-database dumps in memory at once is how the container runs
+  // out of memory and restarts.
+  if (inFlight) return inFlight;
+  inFlight = takeBackup().finally(() => { inFlight = null; });
+  return inFlight;
+}
+
+async function takeBackup(): Promise<BackupRunSummary> {
   const at = new Date();
   try {
     const { buffer, meta } = await createBackup();
@@ -122,6 +134,7 @@ export async function runBackup(): Promise<BackupRunSummary> {
     await prune(config.BACKUP_RETAIN);
 
     let emailed = false;
+    let emailError: string | undefined;
     const to = backupRecipients();
     if (config.EMAIL_SENDING_ENABLED && config.BACKUP_EMAIL_ENABLED && isGraphConfigured() && to.length > 0) {
       // Base64 inflates by a third and Graph's inline-attachment ceiling is
@@ -137,21 +150,29 @@ export async function runBackup(): Promise<BackupRunSummary> {
         : `<p>Automatic OpsFlow database backup, attached.</p>`
           + `<p><strong>${filename}</strong> — ${size}</p><p>${summary}</p>`
           + `<p>Keep this message. Restoring from it returns the system to this moment.</p>`;
-      await sendMail({
-        to,
-        subject: `OpsFlow backup — ${at.toISOString().slice(0, 16).replace('T', ' ')} UTC`,
-        html: body,
-        text: `OpsFlow backup ${filename} (${size}). ${summary}`,
-        attachments: tooBig ? [] : [{
-          filename, contentType: 'application/gzip', content: buffer,
-        }],
-      });
-      emailed = !tooBig;
+      // The file is written by now: a mail failure is reported as that, not
+      // as a failed backup.
+      try {
+        await sendMail({
+          to,
+          subject: `OpsFlow backup — ${at.toISOString().slice(0, 16).replace('T', ' ')} UTC`,
+          html: body,
+          text: `OpsFlow backup ${filename} (${size}). ${summary}`,
+          attachments: tooBig ? [] : [{
+            filename, contentType: 'application/gzip', content: buffer,
+          }],
+        });
+        emailed = !tooBig;
+      } catch (err) {
+        emailError = err instanceof Error ? err.message : String(err);
+        console.error('[backup] written, but the email copy failed:', emailError);
+      }
     }
 
     lastRun = {
       at: at.toISOString(), ok: true, filename,
       bytes: buffer.byteLength, rows, tables: tableCount, emailed,
+      ...(emailError ? { emailError } : {}),
     };
     console.log(`[backup] ${filename} — ${rows} rows, ${tableCount} tables`
       + `, ${(buffer.byteLength / 1024).toFixed(1)} KB${emailed ? ', emailed' : ''}`);
@@ -170,9 +191,7 @@ export function startBackupWorker(): void {
   const tick = (): void => {
     // A dump holds one transaction open; overlapping runs on a slow database
     // would queue up behind each other for no benefit.
-    if (running) return;
-    running = true;
-    void runBackup().finally(() => { running = false; });
+    void runBackup();
   };
 
   // One at boot, so a fresh deploy has a restore point immediately rather than

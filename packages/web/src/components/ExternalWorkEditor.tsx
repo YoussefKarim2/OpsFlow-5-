@@ -15,6 +15,7 @@
  */
 
 import { useState } from 'react';
+import { readTypedNumber, isTypeableNumber } from '@opsflow/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Lock } from 'lucide-react';
 import { api } from '../lib/api';
@@ -29,6 +30,11 @@ export interface ExternalOpRow {
   externalReference?: string | null;
   qty: number;
   unitPriceUsd: number | null;
+  /**
+   * The price as typed, while it is being edited. Held as text so "1." stays
+   * "1." and the next keystroke makes 1.5 rather than 15; read on save.
+   */
+  unitPriceText?: string;
   expectedReturnDate?: string | null;
   notes?: string | null;
   /** Present on stored rows. Absent on new ones. */
@@ -38,6 +44,15 @@ export interface ExternalOpRow {
 /** Work that has left the building is a record, not a draft. */
 const EDITABLE = new Set(['NOT_SENT']);
 const isLocked = (r: ExternalOpRow) => !!r.status && !EDITABLE.has(r.status);
+
+/** The unit price this row stands for: the typed text when there is one, else the stored figure. */
+const priceOf = (r: ExternalOpRow): number | null => {
+  if (r.unitPriceText == null) return r.unitPriceUsd;
+  const read = readTypedNumber(r.unitPriceText);
+  return read.ok ? read.value : null;
+};
+/** A typed price that is not a whole figure yet ("-", "."). */
+const priceUnreadable = (r: ExternalOpRow) => r.unitPriceText != null && !readTypedNumber(r.unitPriceText).ok;
 
 const blank = (d: { factoryId: string; returnDate: string }): ExternalOpRow => ({
   operationType: '', qty: 0, unitPriceUsd: null,
@@ -83,7 +98,7 @@ export function ExternalWorkEditor({
       externalFactoryId: r.externalFactoryId || null,
       externalReference: r.externalReference?.trim() || null,
       qty: r.qty,
-      unitPriceUsd: r.unitPriceUsd ?? undefined,
+      unitPriceUsd: priceOf(r) ?? undefined,
       expectedReturnDate: r.expectedReturnDate || null,
       notes: r.notes?.trim() || null,
       // The colour is not edited here: left out, it is left as it is. Sent as
@@ -99,8 +114,8 @@ export function ExternalWorkEditor({
   const set = (i: number, patch: Partial<ExternalOpRow>) =>
     setRows((rs) => rs.map((r, n) => (n === i ? { ...r, ...patch } : r)));
 
-  const invalid = rows.some((r) => !r.operationType.trim() || r.qty <= 0);
-  const total = rows.reduce((a, r) => a + r.qty * (r.unitPriceUsd ?? 0), 0);
+  const invalid = rows.some((r) => !r.operationType.trim() || r.qty <= 0 || priceUnreadable(r));
+  const total = rows.reduce((a, r) => a + r.qty * (priceOf(r) ?? 0), 0);
 
   return (
     <div className="space-y-3">
@@ -114,7 +129,7 @@ export function ExternalWorkEditor({
             type="button"
             className="btn-primary btn-sm"
             disabled={save.isPending || invalid}
-            title={invalid ? 'Every operation needs a type and a quantity above zero' : undefined}
+            title={invalid ? 'Every operation needs a type, a quantity above zero, and a unit price that is a number (or blank)' : undefined}
             onClick={() => save.mutate()}
           >
             {save.isPending ? 'Saving…' : 'Save'}
@@ -207,16 +222,22 @@ export function ExternalWorkEditor({
                   <td className="p-1">
                     <input
                       className={clsx('input tnum border-transparent bg-transparent text-right', r.qty <= 0 && !locked && 'ring-1 ring-red-400')}
-                      value={r.qty || ''} disabled={locked}
-                      onChange={(e) => set(i, { qty: Number(e.target.value) || 0 })} />
+                      value={r.qty || ''} disabled={locked} inputMode="numeric"
+                      // Whole pieces only (the API takes an integer): a point or a letter is not typed.
+                      onChange={(e) => { if (/^\d*$/.test(e.target.value)) set(i, { qty: Number(e.target.value) || 0 }); }} />
                   </td>
                   <td className="p-1">
-                    <input className="input tnum border-transparent bg-transparent text-right" disabled={locked}
-                      value={r.unitPriceUsd ?? ''} placeholder="—"
-                      onChange={(e) => set(i, { unitPriceUsd: e.target.value === '' ? null : Number(e.target.value) })} />
+                    <input
+                      className={clsx('input tnum border-transparent bg-transparent text-right', priceUnreadable(r) && !locked && 'ring-1 ring-red-400')}
+                      disabled={locked} inputMode="decimal"
+                      value={r.unitPriceText ?? (r.unitPriceUsd == null ? '' : String(r.unitPriceUsd))} placeholder="—"
+                      onChange={(e) => {
+                        const text = e.target.value;
+                        if (isTypeableNumber(text)) set(i, { unitPriceText: text });
+                      }} />
                   </td>
                   <td className="td tnum text-right font-semibold">
-                    <Num value={r.unitPriceUsd == null ? null : r.qty * r.unitPriceUsd} kind="money" places={2} />
+                    <Num value={priceOf(r) == null ? null : r.qty * priceOf(r)!} kind="money" places={2} />
                   </td>
                   <td className="p-1">
                     <input type="date" className="input border-transparent bg-transparent" disabled={locked}

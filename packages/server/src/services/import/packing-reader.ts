@@ -30,6 +30,8 @@ import { evaluateCell } from './formula-eval.js';
 import { readPdf, groupIntoRows, rowToPositionedCells, findTableBands, type PdfPage } from './pdf-extractor.js';
 import { BadRequestError } from '../../errors.js';
 import { orderSizes as wearingOrder } from './po-lines.js';
+import { parseAmount } from './size-grid.js';
+import { isTotalsLabel } from './row-labels.js';
 
 // ── Output ──────────────────────────────────────────────────────────────────
 
@@ -221,11 +223,15 @@ function pdfToGrid(pages: PdfPage[]): Grid {
   return { name: 'PDF', rows: rows.slice(0, MAX_ROWS), spans: new Map(), uncached: 0 };
 }
 
+/** "1,200", "12.5", and the European "12,5" and "1.234,5" — a number as printed, by where its comma sits. */
+const PRINTED_NUMBER = /^-?[\d,]+(\.\d+)?$|^-?(\d{1,3}(\.\d{3})*|\d+),\d{1,2}$/;
+
 function pdfValue(t: string): Cell {
   const s = t.trim();
   if (s === '') return null;
-  const n = Number(s.replace(/,/g, ''));
-  return /^-?[\d,]+(\.\d+)?$/.test(s) && Number.isFinite(n) ? n : s;
+  // "12,5" kg is twelve and a half: stripping the comma read it as 125.
+  const n = PRINTED_NUMBER.test(s) ? parseAmount(s) : null;
+  return n != null ? n : s;
 }
 
 // ── Reading the cells ───────────────────────────────────────────────────────
@@ -235,9 +241,9 @@ const text = (c: Cell): string => (c == null ? '' : String(c).trim());
 function num(c: Cell): number | null {
   if (c == null) return null;
   if (typeof c === 'number') return c;
-  const s = c.replace(/\s*(kgs?|pcs|pieces|pc|ctns?|cartons?)\.?\s*$/i, '').replace(/,/g, '').trim();
-  if (!/^-?\d+(\.\d+)?$/.test(s)) return null;
-  return Number(s);
+  const s = c.replace(/\s*(kgs?|pcs|pieces|pc|ctns?|cartons?)\.?\s*$/i, '').trim();
+  if (!PRINTED_NUMBER.test(s)) return null;
+  return parseAmount(s);
 }
 
 /** Lower case, punctuation to spaces: "N.W. (Kgs)" → "n w kgs". */
@@ -401,8 +407,20 @@ export function cartonRange(raw: string): [number, number] | null {
   return null;
 }
 
-const isTotalRow = (row: Cell[]): boolean =>
-  row.some((c) => typeof c === 'string' && /^(grand\s*|sub\s*-?\s*)?(total|totals|ttl|sum)\b\s*[:：]?/i.test(c.trim()));
+/**
+ * A TOTAL row. "Total", "Grand Total", "TTL: 240 pcs" anywhere on the row; a
+ * label that only starts with the word ("Total RED", a colour block's total)
+ * counts too, except as the colour of a numbered carton — Nike's "Total
+ * Orange" is a colour, and carton 2 in it was dropped and ended the list.
+ */
+const isTotalRow = (row: Cell[], colourCol?: number, numbered?: (row: Cell[]) => boolean): boolean =>
+  row.some((c, i) => {
+    if (typeof c !== 'string') return false;
+    const t = c.trim();
+    if (isTotalsLabel(t, { trailing: false })) return true;
+    if (!/^(grand\s*|sub\s*-?\s*)?(total|totals|ttl|sum)\b\s*[:：]?/i.test(t)) return false;
+    return !(i === colourCol && numbered?.(row));
+  });
 
 const isGrandTotal = (row: Cell[]): boolean =>
   row.some((c) => typeof c === 'string' && /^grand\s*total/i.test(c.trim()));
@@ -435,6 +453,8 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
     }
     return { text: '', range: null };
   };
+  /** The row names a carton (so a "Total …" in its colour column is a colour). */
+  const hasNumber = (row: Cell[]): boolean => numberOf(row).range != null;
   // A second header repeated further down (a page break in a PDF).
   const isRepeatedHeader = (row: Cell[]): boolean =>
     header.columns.filter((c) => c.role !== 'OTHER' && typeof row[c.index] === 'string' && roleOf(text(row[c.index] ?? null)) === c.role).length >= 2;
@@ -487,7 +507,7 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
     }
     blankRun = 0;
 
-    if (isTotalRow(row)) {
+    if (isTotalRow(row, cColour, hasNumber)) {
       // A TOTAL row ends the table — unless more numbered cartons follow it:
       // then it was the total of one block (one colour, one style), and the
       // reading goes on. Stopped at the first, every block after it was lost.
@@ -502,7 +522,7 @@ function readCartons(grid: Grid, header: HeaderPick, issues: PackingIssue[]) {
         if (isBlank(next)) { if (++blanks >= 3) break; continue; }
         blanks = 0;
         if (isRepeatedHeader(next)) continue;
-        if (isTotalRow(next)) { run.push({ ...readTotal(next, k), grand: isGrandTotal(next) }); rowKinds.set(k, 'TOTAL'); continue; }
+        if (isTotalRow(next, cColour, hasNumber)) { run.push({ ...readTotal(next, k), grand: isGrandTotal(next) }); rowKinds.set(k, 'TOTAL'); continue; }
         break;
       }
       const resumes = numbered && k < grid.rows.length && blanks < 3 && numberOf(grid.rows[k] ?? []).range != null;

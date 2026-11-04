@@ -15,6 +15,7 @@ import {
   safeDate, toIsoDateOrNull, toIsoDayOrNull, isValidDate, parseSpreadsheetDate, ImportConcept, CONCEPT_META,
 } from '@opsflow/shared';
 import { openWorkbook } from './open-workbook.js';
+import { parseAmount } from './size-grid.js';
 import { ValidationError } from '../../errors.js';
 import { assertValidPercentage } from '../rules.js';
 
@@ -230,10 +231,26 @@ function toNumber(value: unknown): number | null {
   // lines that were never short and could never be issued.
   if (typeof value === 'object' && 'error' in (value as Record<string, unknown>)) return null;
   // "275 pcs", "1,200 units", "$4.50": the unit and the currency are not the number.
-  const cleaned = String(cellText(value)).replace(/\s*(pcs|pieces|pc|units?|ea)\.?\s*$/i, '').replace(/[,\s$€£]/g, '');
+  const cleaned = String(cellText(value)).replace(/\s*(pcs|pieces|pc|units?|ea)\.?\s*$/i, '').replace(/[\s$€£]/g, '');
   if (cleaned === '') return null;
+  // A comma is read by where it sits, not thrown away: "1,200" is twelve
+  // hundred, "12,5" kg is twelve and a half (it read as 125).
+  if (/^-?[\d.,]+$/.test(cleaned) && /\d/.test(cleaned) && cleaned.includes(',')) return parseAmount(cleaned);
   const n = Number(cleaned);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * A count of pieces. `toNumber`, except that "1.200" written as text is
+ * twelve hundred: nobody orders 1.2 pieces, so a point followed by groups of
+ * exactly three digits is a thousands separator here (it is not in a price).
+ */
+function toPieces(value: unknown): number | null {
+  if (typeof value === 'string' || (value != null && typeof value === 'object' && 'richText' in (value as object))) {
+    const t = String(cellText(value)).replace(/\s*(pcs|pieces|pc|units?|ea)\.?\s*$/i, '').trim();
+    if (/^-?\d{1,3}(\.\d{3})+$/.test(t)) return Number(t.replace(/\./g, ''));
+  }
+  return toNumber(value);
 }
 
 /**
@@ -409,6 +426,11 @@ function colLetter(n: number): string {
 
 // ── Matrix reader ───────────────────────────────────────────────────────────
 
+/** The most rows under a matrix header that are read, looking for its Totals row. */
+const MATRIX_MAX_ROWS = 2000;
+/** Empty rows in a row that end a matrix with no Totals row: the template keeps about twenty spare. */
+const MATRIX_BLANK_RUN = 60;
+
 /**
  * Read a colour × size matrix.
  *
@@ -450,8 +472,16 @@ function extractMatrix(sheet: ExcelJS.Worksheet, spec: MatrixSpec, issues: Impor
   let sheetTotal: number | null = null;
   let uncached = 0;
 
-  for (let r = header.row + 1; r <= header.row + 60; r++) {
-    const label = String(cellText(cellValue(sheet.getRow(r).getCell(header.col)))).trim();
+  // Read down to the Totals row, however long the order is: a fixed sixty
+  // rows cut a seventy-colour order to sixty with nothing said. A long run
+  // of empty rows with no Totals after it ends the read too, and is reported.
+  const last = Math.min(sheet.rowCount || header.row + MATRIX_MAX_ROWS, header.row + MATRIX_MAX_ROWS);
+  let reachedTerminator = false;
+  let blankRun = 0;
+  let hiddenRows = 0;
+  for (let r = header.row + 1; r <= last; r++) {
+    const sheetRow = sheet.getRow(r);
+    const label = String(cellText(cellValue(sheetRow.getCell(header.col)))).trim();
 
     // "Total", "TOTAL" and "Grand Total" end the grid as "Totals" does; read
     // as a colour, they doubled the order.
@@ -461,22 +491,39 @@ function extractMatrix(sheet: ExcelJS.Worksheet, spec: MatrixSpec, issues: Impor
         const headerText = norm(cellValue(sheet.getRow(header.row).getCell(c)));
         if (headerText === 'total') { sheetTotal = toNumber(cellValue(sheet.getRow(r).getCell(c))); break; }
       }
+      reachedTerminator = true;
       break;
     }
 
-    if (!label) continue; // a spare row, not the end of the data
+    if (!label) { if (++blankRun >= MATRIX_BLANK_RUN) break; continue; } // a spare row, not the end of the data
+    blankRun = 0;
+    // A hidden row is a line taken out of the order without being deleted,
+    // as the generic reader treats it.
+    if (sheetRow.hidden) { hiddenRows++; continue; }
 
     const cells: Record<string, number> = {};
     let rowTotal = 0;
     for (const s of sizes) {
       const cell = sheet.getRow(r).getCell(s.col);
       if (isUncachedFormula(cell.value)) uncached++;
-      const n = toNumber(cellValue(cell));
+      const n = toPieces(cellValue(cell));
       if (n != null && n > 0) { cells[s.name] = n; rowTotal += n; }
     }
     if (rowTotal > 0) rows.push({ color: label, cells, total: rowTotal });
   }
   if (uncached > 0) issues.push({ ...uncachedFormulaIssue(uncached, spec.sheet), field: spec.ledger });
+  if (hiddenRows > 0) {
+    issues.push({
+      level: 'WARNING', field: spec.ledger, sheet: spec.sheet, cell: null,
+      message: `${hiddenRows} hidden row${hiddenRows === 1 ? ' was' : 's were'} left out of ${spec.sheet} — a hidden line is usually cancelled. Unhide ${hiddenRows === 1 ? 'it' : 'them'} in the file and upload again if ${hiddenRows === 1 ? 'it belongs' : 'they belong'} on the order.`,
+    });
+  }
+  if (!reachedTerminator && rows.length > 0) {
+    issues.push({
+      level: 'WARNING', field: spec.ledger, sheet: spec.sheet, cell: null,
+      message: `${spec.sheet}: no "${spec.terminator}" row was found under the "${spec.headerAnchor}" table, so where it ends was guessed — ${rows.length} colour${rows.length === 1 ? '' : 's'} read. Check the grid against the file before confirming.`,
+    });
+  }
 
   const computedTotal = rows.reduce((a, r) => a + r.total, 0);
 
@@ -943,4 +990,4 @@ export async function extractWorkbook(buffer: Buffer, forcedProfile?: ImportProf
   };
 }
 
-export { cellText, toNumber, toDate };
+export { cellText, toNumber, toPieces, toDate };

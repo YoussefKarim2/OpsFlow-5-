@@ -643,8 +643,22 @@ export function applyReviewedMatrix(
  */
 export const MAX_CELL_PIECES = 1_000_000;
 export function refuseUnbelievable(extraction: ExtractionResult): void {
+  // A price is stored to four places under a million (Decimal(10,4)): one
+  // past that, or below nothing, failed the commit as a server error. It is
+  // refused by name instead, so the coordinator can fix the file.
+  const badPrice = (p: unknown): boolean => typeof p === 'number' && Number.isFinite(p) && (p < 0 || p >= MAX_UNIT_PRICE);
+  const priceSaid = (what: string, p: number) => new BadRequestError(`${what} reads as a price of ${p.toLocaleString('en-US')}. A price per piece has to be at least 0 and under ${MAX_UNIT_PRICE.toLocaleString('en-US')} — check the file's price column before importing.`);
+  const orderPrice = extraction.fields.pricePerPieceUsd;
+  const orderPriceN = typeof orderPrice === 'string' && orderPrice.trim() !== '' ? Number(orderPrice) : orderPrice;
+  if (badPrice(orderPriceN)) throw priceSaid('The order', orderPriceN as number);
+  for (const line of extraction.lineItems ?? []) {
+    if (badPrice(line.unitPrice)) throw priceSaid(`Line ${line.rowNumber}${line.description ? ` (${line.description.slice(0, 40)})` : ''}`, line.unitPrice!);
+  }
   const m = extraction.matrices.find((x) => x.ledger === 'ORDER');
   if (!m) return;
+  for (const row of m.rows) {
+    if (badPrice(row.unitPrice)) throw priceSaid(row.color.slice(0, 60), row.unitPrice!);
+  }
   for (const size of m.sizes) {
     if (size.length > 40) throw new BadRequestError(`A size read from the file is ${size.length} characters long ("${size.slice(0, 30)}…"). That is not a size — check the file's columns before importing.`);
   }
@@ -655,6 +669,9 @@ export function refuseUnbelievable(extraction: ExtractionResult): void {
     }
   }
 }
+
+/** The first price a Decimal(10,4) column cannot hold. */
+const MAX_UNIT_PRICE = 1_000_000;
 
 /** Pieces in the Main Order grid an import is about to create. */
 export function orderPieces(extraction: ExtractionResult): number {

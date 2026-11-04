@@ -6,7 +6,7 @@
  * date the order will finish at the current rate — was never in the file.
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine,
@@ -282,6 +282,11 @@ function RecordModal({
   // The local calendar day: the UTC one is still yesterday in Cairo after midnight.
   const [form, setForm] = useState({ date: localToday(), operation: 'SEWING', qty: '', line: defaultLine, team: '', notes: '' });
   const [error, setError] = useState<string | null>(null);
+  // The form is mounted once with the tab, before a line may have been named
+  // on the line plan: on opening, an empty Line takes the plan's name.
+  useEffect(() => {
+    if (open && defaultLine) setForm((f) => (f.line ? f : { ...f, line: defaultLine }));
+  }, [open, defaultLine]);
 
   const save = useMutation({
     mutationFn: () =>

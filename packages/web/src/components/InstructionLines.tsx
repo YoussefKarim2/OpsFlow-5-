@@ -12,7 +12,9 @@
  * sheet the customer actually sent.
  */
 
+import { useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
+import { isTypeableNumber, typedNumberOrNull } from '@opsflow/shared';
 import type { InstructionLineDto } from '../lib/api';
 import { Num } from './ui';
 
@@ -27,6 +29,18 @@ export function InstructionLines({
     onChange?.(lines.map((l, n) => (n === i ? { ...l, ...patch } : l)));
 
   const total = lines.reduce((a, l) => a + (l.qty ?? 0), 0);
+
+  /**
+   * Each quantity as typed. The line holds a number, and a number cannot hold
+   * "1." — rendered back from it the point vanished and 1.5 became 15. The
+   * text is shown only while it still reads as the line's figure, so a list
+   * replaced from outside (an import, a removed row) shows its own numbers.
+   */
+  const [qtyText, setQtyText] = useState<Record<number, string>>({});
+  const qtyShown = (l: InstructionLineDto, i: number) => {
+    const t = qtyText[i];
+    return t != null && typedNumberOrNull(t) === (l.qty ?? null) ? t : (l.qty == null ? '' : String(l.qty));
+  };
 
   if (readOnly && lines.length === 0) return null;
 
@@ -88,8 +102,15 @@ export function InstructionLines({
                           onChange={(e) => set(i, { sizeLabel: e.target.value || null })} />
                       </td>
                       <td className="p-1">
-                        <input className="input tnum border-transparent bg-transparent text-right" value={l.qty ?? ''}
-                          onChange={(e) => set(i, { qty: e.target.value === '' ? null : Number(e.target.value) })} />
+                        <input className="input tnum border-transparent bg-transparent text-right" inputMode="decimal"
+                          value={qtyShown(l, i)}
+                          onChange={(e) => {
+                            const t = e.target.value;
+                            // Pieces: digits and a point only, no minus.
+                            if (!isTypeableNumber(t) || t.includes('-')) return;
+                            setQtyText((m) => ({ ...m, [i]: t }));
+                            set(i, { qty: typedNumberOrNull(t) });
+                          }} />
                       </td>
                       <td className="p-1">
                         <input className="input border-transparent bg-transparent" value={l.note ?? ''}

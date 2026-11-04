@@ -18,6 +18,7 @@
  *   5. Every one of these actions is logged before it returns.
  */
 
+import { clearLoginLocks } from './login-locks.js';
 import { randomBytes } from 'node:crypto';
 import argon2 from 'argon2';
 import type { Department, Prisma, PrismaClient } from '@prisma/client';
@@ -285,6 +286,7 @@ export async function setUserActive(
         : { active: false, disabledAt: new Date(), disabledById: actor.id, disabledReason: reason?.trim() || null },
     });
   });
+  if (active) clearLoginLocks(targetId);
 
   await logActivity({
     actorId: actor.id, actorName: actor.name,
@@ -316,6 +318,7 @@ export async function resetPassword(
       lockedUntil: null,
     },
   });
+  clearLoginLocks(targetId);
 
   await logActivity({
     actorId: actor.id, actorName: actor.name, action: 'USER_PASSWORD_RESET',
@@ -478,6 +481,7 @@ export async function unlockUser(actor: AuthUser, targetId: string): Promise<Use
     where: { id: targetId },
     data: { failedLoginCount: 0, lockedUntil: null },
   });
+  clearLoginLocks(targetId);
   await logActivity({
     actorId: actor.id, actorName: actor.name, action: 'USER_UNLOCKED',
     summary: `cleared the sign-in lockout on ${target.email}`,

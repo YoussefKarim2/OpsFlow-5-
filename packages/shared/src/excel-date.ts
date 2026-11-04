@@ -214,13 +214,25 @@ export function parseDateText(raw: string, dayFirst = true): ParsedDate {
     };
   }
 
-  // Last resort. `Date.parse` accepts a great deal, including things nobody
-  // meant as a date, so anything it returns is LOW confidence and the review
-  // screen shows it for confirmation.
+  // An ISO date inside a label: "ETD 2026-09-15".
+  const embedded = /(?:^|\D)(\d{4})-(\d{1,2})-(\d{1,2})(?!\d)/.exec(text);
+  if (embedded) {
+    const d = utc(Number(embedded[1]), Number(embedded[2]) - 1, Number(embedded[3]));
+    if (d) return { value: d, confidence: 'LOW', interpretation: `read loosely from “${text}”` };
+  }
+
+  // Last resort, and a guarded one. `Date.parse` invents what it is not told:
+  // "Sep-26" became 26 September 2001, "Week 38" 1 January 2038, "Spring
+  // 2027" 1 January 2027, and "1 10 2026" was read month first. A delivery
+  // date that is wrong is worse than one left for somebody to type, so the
+  // loose reading is kept only when the text names its month in words and
+  // writes the year it was read as in full ("Mon 15 Sep 2026").
   const parsed = new Date(text);
   if (isValidDate(parsed)) {
-    const year = parsed.getUTCFullYear();
-    if (year >= 1900 && year <= 2200) {
+    const year = parsed.getFullYear();
+    const yearWritten = new RegExp(`(?:^|\\D)${year}(?:\\D|$)`).test(text);
+    const monthNamed = (text.toLowerCase().match(/[a-z]+/g) ?? []).some((w) => MONTH_NAMES[w] !== undefined);
+    if (year >= 1900 && year <= 2200 && yearWritten && monthNamed) {
       return {
         value: new Date(Date.UTC(parsed.getFullYear(), parsed.getMonth(), parsed.getDate())),
         confidence: 'LOW',

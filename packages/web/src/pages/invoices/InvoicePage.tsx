@@ -15,7 +15,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Ban, FileCheck, FileSpreadsheet, Lock, Plus, Printer, RefreshCw, Send, Trash2, AlertTriangle } from 'lucide-react';
 import {
-  buildSheet, computeInvoiceTotals, defaultSheetTitle, fmtDate, INVOICE_KIND_LABEL, InvoiceStatus, issueBlockers, lineTotal,
+  buildSheet, computeInvoiceTotals, defaultSheetTitle, fmtDate, INVOICE_KIND_LABEL, InvoiceStatus, issueBlockers, isTypeableFigure, lineTotal,
+  readTypedNumber, typedNumberOrNull,
   type InvoiceDto, type InvoiceLineKind as LineKind, type SheetRow,
 } from '@opsflow/shared';
 import { InvoiceStatusChip } from '../../components/InvoiceStatusChip';
@@ -51,12 +52,33 @@ interface Draft {
 }
 
 const day = (iso: string | null | undefined) => (iso ? iso.slice(0, 10) : '');
-const numOrNull = (s: string): number | null => {
-  const t = s.trim();
-  if (t === '') return null;
-  const n = Number(t.replace(/,/g, ''));
-  return Number.isFinite(n) ? n : null;
-};
+/**
+ * A typed figure, by the shared rule. Commas used to be stripped wholesale, so
+ * a comma decimal "7,25" saved as 725 and "12,5" kg as 125; now a comma is read
+ * only between thousands, and anything else is refused by `figureProblem`.
+ */
+const numOrNull = typedNumberOrNull;
+const unreadable = (text: string) => !readTypedNumber(text).ok;
+
+/** The first typed figure that cannot be read, as a sentence; a save waits until there is none. */
+function figureProblem(d: Draft, inv: InvoiceDto): string | null {
+  for (const [i, l] of d.lines.entries()) {
+    const fields = l.kind === 'ITEM' ? [['quantity', l.quantity], ['rate', l.unitPrice]] as const : [['amount', l.amount]] as const;
+    for (const [label, text] of fields) {
+      const r = readTypedNumber(text);
+      if (!r.ok) return `Line ${i + 1}${l.description.trim() ? ` (${l.description.trim()})` : ''}, ${label}: ${r.reason}`;
+    }
+  }
+  if (cartonsTyped(inv)) {
+    for (const c of d.cartons) {
+      for (const [label, text] of [['net kg', c.netKg], ['gross kg', c.grossKg]] as const) {
+        const r = readTypedNumber(text);
+        if (!r.ok) return `Carton ${c.cartonNumber || '(no number)'}, ${label}: ${r.reason}`;
+      }
+    }
+  }
+  return null;
+}
 
 function fromServer(inv: InvoiceDto): Draft {
   return {
@@ -192,7 +214,7 @@ export function InvoicePage() {
 
   const save = useMutation({
     mutationFn: (d: Draft) => {
-      const problem = cartonProblem(d) ?? sheetProblem(d.sheet);
+      const problem = figureProblem(d, inv!) ?? cartonProblem(d) ?? sheetProblem(d.sheet);
       if (problem) throw new Error(problem);
       return api.invoices.update(id, toBody(d, inv!));
     },
@@ -254,7 +276,7 @@ export function InvoicePage() {
     return [r.key, typed.length === 1 ? typed[0]! : ''];
   }));
   const setSheetRate = (r: SheetRow, value: string) =>
-    setDraft({ ...draft, lines: draft.lines.map((l, i) => (r.lineIndexes.includes(i) ? { ...l, unitPrice: value } : l)) });
+    isTypeableFigure(value) && setDraft({ ...draft, lines: draft.lines.map((l, i) => (r.lineIndexes.includes(i) ? { ...l, unitPrice: value } : l)) });
 
   const print = () => {
     document.title = `${inv.number} — ${INVOICE_KIND_LABEL[inv.kind]}`;
@@ -458,14 +480,14 @@ export function InvoicePage() {
                     {l.kind === 'ITEM' ? (
                       <div className="grid grid-cols-[1fr_5rem_6rem_6rem] items-center gap-1.5 text-xs">
                         <input className="input !py-1 text-xs" value={l.size} placeholder="Size" onChange={(e) => setLine(i, { size: e.target.value })} />
-                        <input className="input tnum !py-1 text-right text-xs" value={l.quantity} placeholder="Qty" inputMode="decimal" onChange={(e) => setLine(i, { quantity: e.target.value })} />
-                        <input className="input tnum !py-1 text-right text-xs" value={l.unitPrice} placeholder="Rate" inputMode="decimal" onChange={(e) => setLine(i, { unitPrice: e.target.value })} />
+                        <input className={clsx('input tnum !py-1 text-right text-xs', unreadable(l.quantity) && 'border-red-400')} value={l.quantity} placeholder="Qty" inputMode="decimal" onChange={(e) => { if (isTypeableFigure(e.target.value)) setLine(i, { quantity: e.target.value }); }} />
+                        <input className={clsx('input tnum !py-1 text-right text-xs', unreadable(l.unitPrice) && 'border-red-400')} value={l.unitPrice} placeholder="Rate" inputMode="decimal" onChange={(e) => { if (isTypeableFigure(e.target.value)) setLine(i, { unitPrice: e.target.value }); }} />
                         <span className="tnum text-right font-semibold"><Num value={lineTotal({ kind: 'ITEM', description: '', quantity: numOrNull(l.quantity), unitPrice: numOrNull(l.unitPrice), amount: null })} kind="money" fallback="—" /></span>
                       </div>
                     ) : (
                       <div className="grid grid-cols-[1fr_8rem] items-center gap-1.5 text-xs">
                         <span className="text-2xs text-ink-500">Listed under the subtotal. A negative amount is a discount.</span>
-                        <input className="input tnum !py-1 text-right text-xs" value={l.amount} placeholder="Amount" inputMode="decimal" onChange={(e) => setLine(i, { amount: e.target.value })} />
+                        <input className={clsx('input tnum !py-1 text-right text-xs', unreadable(l.amount) && 'border-red-400')} value={l.amount} placeholder="Amount" inputMode="decimal" onChange={(e) => { if (isTypeableFigure(e.target.value)) setLine(i, { amount: e.target.value }); }} />
                       </div>
                     )}
                   </div>
@@ -522,8 +544,8 @@ export function InvoicePage() {
                         value={c.contents.length > 0 ? String(cartonPieces(c)) : c.pieces} disabled={c.contents.length > 0}
                         title={c.contents.length > 0 ? 'The sum of the sizes in this carton' : undefined}
                         onChange={(e) => setCarton(i, { pieces: e.target.value })} />
-                      <input className="input tnum !py-1 text-right text-xs" inputMode="decimal" aria-label="Net kg" placeholder="Net kg" value={c.netKg} onChange={(e) => setCarton(i, { netKg: e.target.value })} />
-                      <input className="input tnum !py-1 text-right text-xs" inputMode="decimal" aria-label="Gross kg" placeholder="Gross kg" value={c.grossKg} onChange={(e) => setCarton(i, { grossKg: e.target.value })} />
+                      <input className={clsx('input tnum !py-1 text-right text-xs', unreadable(c.netKg) && 'border-red-400')} inputMode="decimal" aria-label="Net kg" placeholder="Net kg" value={c.netKg} onChange={(e) => { if (isTypeableFigure(e.target.value)) setCarton(i, { netKg: e.target.value }); }} />
+                      <input className={clsx('input tnum !py-1 text-right text-xs', unreadable(c.grossKg) && 'border-red-400')} inputMode="decimal" aria-label="Gross kg" placeholder="Gross kg" value={c.grossKg} onChange={(e) => { if (isTypeableFigure(e.target.value)) setCarton(i, { grossKg: e.target.value }); }} />
                     </div>
                   </div>
                 ))}

@@ -103,7 +103,8 @@ referenceRouter.post('/clients', requirePermission('client:manage'), asyncHandle
 
 referenceRouter.patch('/clients/:id', requirePermission('client:manage'), asyncHandler(async (req, res) => {
   const input = clientSchema.partial().parse(req.body);
-  await prisma.client.update({ where: { id: req.params.id }, data: { ...input, email: input.email || undefined } });
+  // Sent empty, the email is cleared; left out, it is kept.
+  await prisma.client.update({ where: { id: req.params.id }, data: { ...input, email: input.email === undefined ? undefined : input.email || null } });
   res.json({ ok: true });
 }));
 

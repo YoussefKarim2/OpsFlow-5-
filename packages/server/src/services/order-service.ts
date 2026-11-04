@@ -936,18 +936,26 @@ export async function listOrders(
  * version and refused their save. Nothing is written when nothing moved.
  */
 export async function refreshOrderCache(orderId: string): Promise<void> {
-  // Tasks whose data has just landed complete themselves first, so the
-  // progress written below already counts them. Loaded here, not at the
-  // top, because the workflow service reads this module.
+  let order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
+  if (!order) return;
+  let d = deriveOrder(order);
+  // Tasks whose data has just landed complete themselves, and the progress
+  // written below counts them. Loaded here, not at the top, because the
+  // workflow service reads this module.
   try {
     const { autoCompleteTasks } = await import('./workflow-service.js');
-    await autoCompleteTasks(orderId);
+    const completed = await autoCompleteTasks(orderId, {
+      layPlanCoversCut: d.markerPlan?.coversRequirement ?? false,
+    });
+    if (completed > 0) {
+      order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
+      if (!order) return;
+      d = deriveOrder(order);
+    }
   } catch (err) {
     console.error('auto-completing tasks', err);
   }
-  const order = await prisma.order.findUnique({ where: { id: orderId }, include: ORDER_INCLUDE });
   if (!order) return;
-  const d = deriveOrder(order);
   if (
     order.cachedProgressPct === d.progressPct
     && order.cachedStatus === d.status

@@ -704,7 +704,8 @@ export const LIST_SELECT = {
   packingListId: true, shipmentId: true, issuedAt: true, sentAt: true, createdAt: true,
   lines: { orderBy: { position: 'asc' as const } },
   orders: INVOICE_INCLUDE.orders,
-  order: INVOICE_INCLUDE.order,
+  // The order's name and client only: its packing lists are for the proforma sheet, which the list never draws.
+  order: { select: { id: true, poNumber: true, orderName: true, styleNumber: true, client: { select: { name: true } } } },
 } satisfies Prisma.InvoiceSelect;
 export type ListedInvoice = Prisma.InvoiceGetPayload<{ select: typeof LIST_SELECT }>;
 
@@ -825,6 +826,7 @@ export function invoiceToDto(raw: LoadedInvoice, stale = false, live?: CompanyPr
     id: inv.order.id, poNumber: inv.order.poNumber, orderName: inv.order.orderName,
     styleNumber: inv.order.styleNumber, clientName: inv.order.client.name,
   };
+  const issuedPacked = (inv.sheet as ProformaSheetSettings | null)?.packedAtIssue ?? null;
   return {
     id: inv.id,
     kind: inv.kind,
@@ -839,7 +841,8 @@ export function invoiceToDto(raw: LoadedInvoice, stale = false, live?: CompanyPr
     // the order whose list that is (the join rows carry ids alone).
     orders: orderRefsOf(inv, ref).map((o) => ({
       ...o,
-      packedByStyle: packedByStyle(
+      // Issued, the document keeps the figures it went out with.
+      packedByStyle: inv.status !== 'DRAFT' && issuedPacked && o.id in issuedPacked ? issuedPacked[o.id] ?? null : packedByStyle(
         o.packingListId != null
           ? [o.packingListId === inv.packingListId ? inv.packingList : null]
           : o.id === inv.order.id ? inv.order.packingLists : [],
@@ -897,9 +900,12 @@ function packedByStyle(lists: ReadonlyArray<PackedList | null | undefined>, orde
   function for_(list: PackedList, li: number) {
   for (const c of list.cartons) {
     const colour = c.orderColor?.color.name ?? '';
-    const style = /\s[—–-]\s/.test(colour) ? colour.split(/\s+[—–-]\s+/)[0]! : orderName;
+    // "STYLE — COLOUR" with the em dash, the one separator `stylesOf` reads.
+    // A plain hyphen is a two-tone colour ("NAVY - WHITE"), not a style.
+    const style = colour.includes(' — ') ? colour.slice(0, colour.lastIndexOf(' — ')).trim() || orderName : orderName;
     const key = sheetRowKey(style, null, false);
-    const e = out[key] ?? (out[key] = { cartons: 0, grossKg: null, netKg: null, numbers: new Set() });
+    const e = out[key] ?? (out[key] = { cartons: 0, grossKg: null, netKg: null, pieces: 0, numbers: new Set() });
+    e.pieces = (e.pieces ?? 0) + (c.qty ?? 0);
     // One carton per number within a list; lists number from 1 each.
     if (!e.numbers.has(`${li}:${c.cartonNumber.trim().toUpperCase()}`)) {
       e.numbers.add(`${li}:${c.cartonNumber.trim().toUpperCase()}`);
@@ -912,7 +918,7 @@ function packedByStyle(lists: ReadonlyArray<PackedList | null | undefined>, orde
   return Object.fromEntries(Object.entries(out).map(([k, { numbers: _n, ...v }]) => [k, v]));
 }
 
-function orderRefsOf(inv: Pick<LoadedInvoice, 'orders' | 'order' | 'packingListId' | 'shipmentId'>, first: OrderRef): InvoiceOrderRefDto[] {
+function orderRefsOf(inv: Pick<LoadedInvoice, 'orders' | 'packingListId' | 'shipmentId'> & { order: { id: string } }, first: OrderRef): InvoiceOrderRefDto[] {
   if (inv.orders.length === 0) {
     return [{ ...first, id: inv.order.id, packingListId: inv.packingListId, shipmentId: inv.shipmentId }];
   }

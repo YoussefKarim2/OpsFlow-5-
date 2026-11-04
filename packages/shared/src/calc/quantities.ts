@@ -401,10 +401,12 @@ export interface CartonLike {
 /** The pieces of a carton the PACKED ledger does not hold. */
 export function unledgeredPieces(c: CartonLike): number {
   if (!c.orderColorId) return c.qty;
-  if (c.orderSizeId) return 0;
-  // Several sizes: the lines with an order size were written to the ledger;
-  // a line for a size the order was not sold in (a sample) was not.
+  // Lines first, as the ledger itself reads a carton (`cartonHolding`): the
+  // lines with an order size were written to the ledger; a line for a size the
+  // order was not sold in (a sample) was not — even when the carton still
+  // carries the single size it was first saved with.
   if (c.lines && c.lines.length > 0) return sum(c.lines.filter((l) => !l.orderSizeId).map((l) => l.qty));
+  if (c.orderSizeId) return 0;
   return c.qty;
 }
 

@@ -17,7 +17,7 @@
  * one would be putting a fabricated legal detail on a customer document.
  */
 
-import { fmtDate } from '@opsflow/shared';
+import { computeInvoiceTotals, fmtDate, InvoiceLineKind, lineTotal as exactLineTotal } from '@opsflow/shared';
 
 export interface PrintLine {
   description: string;
@@ -43,11 +43,26 @@ export interface PrintInvoice {
   sentAt?: string | null;
 }
 
-const money = (n: number | null) =>
-  n == null ? '—' : `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+/** A figure that is not a finite number (NaN from a bad keystroke) prints as a dash, never "$NaN". */
+const money = (n: number | null, maxPlaces = 2) =>
+  n == null || !Number.isFinite(n)
+    ? '—'
+    : `$${n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: maxPlaces })}`;
 
-const lineTotal = (l: PrintLine) =>
-  l.quantity == null || l.unitPrice == null ? null : Math.round(l.quantity * l.unitPrice * 100) / 100;
+/**
+ * A rate prints as it is held, up to four places: printed at two beside an
+ * amount worked from the full rate (7.2535 × 122 = 884.93), the line did not
+ * multiply out on the customer's calculator.
+ */
+const rate = (n: number | null) => money(n, 4);
+
+const finite = (n: number | null) => (n != null && Number.isFinite(n) ? n : null);
+const asInput = (l: PrintLine) => ({
+  kind: InvoiceLineKind.ITEM, description: l.description,
+  quantity: finite(l.quantity), unitPrice: finite(l.unitPrice), amount: null,
+});
+/** The invoice engine's exact cents, so the print, the screen and the Excel file agree. */
+const lineTotal = (l: PrintLine) => exactLineTotal(asInput(l));
 
 /** A labelled value, omitted entirely when empty — blanks are noise on paper. */
 function Row({ label, value }: { label: string; value: string | null | undefined }) {
@@ -67,8 +82,9 @@ export function ProformaPrintView({
   poNumber: string;
   orderName: string;
 }) {
-  const total = invoice.lines.reduce((a, l) => a + (lineTotal(l) ?? 0), 0);
-  const totalQty = invoice.lines.reduce((a, l) => a + (l.quantity ?? 0), 0);
+  const totals = computeInvoiceTotals(invoice.lines.map(asInput));
+  const total = totals.subtotal;
+  const totalQty = totals.totalQty;
   const unpriced = invoice.lines.some((l) => lineTotal(l) == null);
 
   return (
@@ -136,11 +152,11 @@ export function ProformaPrintView({
             <tr key={i} className="border-b border-ink-200">
               <td className="py-1.5 pr-3 text-sm text-ink-900">{l.description}</td>
               <td className="py-1.5 text-right text-sm tabular-nums text-ink-900">
-                {l.quantity == null ? '—' : l.quantity.toLocaleString()}
+                {finite(l.quantity) == null ? '—' : l.quantity!.toLocaleString()}
               </td>
               <td className="py-1.5 pl-3 text-sm text-ink-700">{l.unit}</td>
               <td className="py-1.5 text-right text-sm tabular-nums text-ink-900">
-                {money(l.unitPrice)}
+                {rate(l.unitPrice)}
               </td>
               <td className="py-1.5 text-right text-sm tabular-nums font-medium text-ink-900">
                 {money(lineTotal(l))}

@@ -686,9 +686,18 @@ invoicesRouter.post('/:id/issue', requirePermission('invoice:issue'), asyncHandl
   const existing = await loadInvoice(req.params.id);
   assertDraft(existing);
   const live = await getCompanyProfile();
-  assertIssuable(invoiceToDto(existing, await isStale(existing), live));
+  const shown = invoiceToDto(existing, await isStale(existing), live);
+  assertIssuable(shown);
   // The letterhead the draft was showing is what the record keeps.
   const frozen = fillFromLetterhead(existing, live);
+  // And the packing figures a proforma's sheet showed: cartons and weights
+  // packed afterwards must not change a document that has gone out.
+  if (existing.kind === InvoiceKind.PROFORMA) {
+    frozen.sheet = {
+      ...((frozen.sheet as ProformaSheetSettings | null) ?? {}),
+      packedAtIssue: Object.fromEntries(shown.orders.map((o) => [o.id, o.packedByStyle ?? null])),
+    } as unknown as typeof frozen.sheet;
+  }
 
   const count = await prisma.$transaction(async (tx) => {
     // One issue at a time, so two people issuing invoices for the same goods

@@ -92,6 +92,8 @@ export async function renderCostingPdf(order: CostingPdfOrder, opts: CostingPdfO
 // ── Formatting ───────────────────────────────────────────────────────────────
 
 const money = (v: number | null | undefined, places = 2) => (v == null ? DASH : fmtMoney(v, '$', places));
+/** A per-unit price, as the screen shows it: four decimals below a dollar, where two would print $0.0045 as $0.00. */
+const perUnit = (n: number) => fmtMoney(n, '$', Math.abs(n) < 1 ? 4 : 2);
 const num = (v: number | null | undefined, places = 0) => (v == null ? DASH : fmtNumber(v, { places }));
 const pct = (v: number | null | undefined, places = 2) => (v == null ? DASH : fmtPct(v, places));
 const text = (v: string | null | undefined) => (v == null || v === '' ? DASH : v);
@@ -372,7 +374,7 @@ class Layout {
       planned: DASH,
       actual: l.quantity == null ? DASH : fmtNumber(l.quantity, { places: 2 }),
       unit: l.unit,
-      price: l.unitPriceUsd == null ? DASH : fmtMoney(l.unitPriceUsd),
+      price: l.unitPriceUsd == null ? DASH : perUnit(l.unitPriceUsd),
       cost: money(l.cost),
       pct: countedIn ? `in ${countedIn}` : pct(l.pctOfTotal),
     });
@@ -414,7 +416,7 @@ class Layout {
       item: 'Production — machine cost × machine-days ÷ productivity rate, per piece passed',
       actual: num(c.firstDegreeQty),
       unit: 'PCS',
-      price: cmPerPiece == null ? DASH : fmtMoney(cmPerPiece),
+      price: cmPerPiece == null ? DASH : perUnit(cmPerPiece),
       cost: this.shown(money(c.cmCostUsd), 'cmCostUsd'),
       pct: pct(share(c.cmCostUsd)),
     }, { fill: INK[50] });

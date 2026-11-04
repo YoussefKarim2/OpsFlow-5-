@@ -51,6 +51,8 @@ export interface GridBlock {
   problems: string[];
 }
 
+import { isTotalsLabel, isNonColourLabel } from './row-labels.js';
+
 // ── Numbers ─────────────────────────────────────────────────────────────────
 
 /**
@@ -262,7 +264,11 @@ export function readSizeGrids(lines: readonly GridLine[]): GridBlock[] {
       const line = lines[i]!;
       if (line.page !== page) break;
       const label = line.cells.find((c) => c.end <= firstSizeX + 2)?.text.trim() ?? '';
-      if (ROW_TOTAL.test(label) || PIECES_LINE.test(label)) { totalLine = line; break; }
+      // "Total Orange" is a colour (Nike's): only a label that is a total
+      // and nothing else ends the grid. "Navy Total" restates one colour and
+      // is skipped; "Ratio 1 2 2 1" under the sizes is not a colour.
+      if ((ROW_TOTAL.test(label) && isTotalsLabel(label, { trailing: false })) || PIECES_LINE.test(label)) { totalLine = line; break; }
+      if (isTotalsLabel(label) || isNonColourLabel(label)) continue;
       // A new style title ends the grid.
       if (STYLE_TITLE.test(line.cells.map((c) => c.text).join(' ').trim()) && !line.cells.some((c) => pieces(c.text) != null && c.x >= firstSizeX)) break;
       body.push(line);

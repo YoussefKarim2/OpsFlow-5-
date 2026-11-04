@@ -276,7 +276,13 @@ function AuditModal({
                 <label className="flex-1 truncate text-sm text-ink-700">{DEFECT_LABEL[c]}</label>
                 <input
                   type="number" min={0} value={defects[c] ?? ''}
-                  onChange={(e) => setDefects({ ...defects, [c]: Number(e.target.value) || 0 })}
+                  // A cleared box reads as blank (no defects of this kind), not as a
+                  // typed 0; a count is a whole number, as the API takes it.
+                  onChange={(e) => {
+                    const t = e.target.value.trim();
+                    if (t === '') { const { [c]: _gone, ...rest } = defects; setDefects(rest); return; }
+                    if (/^\d+$/.test(t)) setDefects({ ...defects, [c]: Number(t) });
+                  }}
                   className="input tnum w-20 text-center"
                 />
               </div>

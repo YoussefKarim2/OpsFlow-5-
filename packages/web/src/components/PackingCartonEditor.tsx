@@ -14,18 +14,27 @@ import { Plus, Trash2 } from 'lucide-react';
 import { api, ApiError, type EditedPackingCarton, type PackingFileLayoutDto } from '../lib/api';
 import { ComboSelect } from './ComboSelect';
 import { clsx, useToast } from './ui';
+import { readTypedNumber } from '@opsflow/shared';
 
 interface Line { key: number; colour: string; style: string; bySize: Record<string, string> }
 interface Box { key: number; number: string; count: string; grossKg: string; netKg: string; measurement: string; lines: Line[] }
 
 let nextKey = 1;
 const str = (n: number | null | undefined): string => (n == null ? '' : String(n));
-/** A typed figure: blank is nothing, anything else must be a number of at least 0. */
+/**
+ * A typed figure: blank is nothing, anything else must be a number of at least
+ * 0. Read by the shared rule — a comma only between thousands — so "12,5" kg
+ * is refused instead of saved as 125 (commas used to be stripped wholesale).
+ */
 const figure = (s: string): number | null | 'bad' => {
-  const t = s.trim().replace(/,/g, '');
-  if (t === '') return null;
-  const n = Number(t);
-  return Number.isFinite(n) && n >= 0 ? n : 'bad';
+  const r = readTypedNumber(s);
+  if (!r.ok) return 'bad';
+  return r.value == null || r.value >= 0 ? r.value : 'bad';
+};
+/** Why a typed figure was refused, for the error list. */
+const why = (s: string): string => {
+  const r = readTypedNumber(s);
+  return !r.ok && s.includes(',') ? `: ${r.reason.replace(/\.$/, '')}` : '';
 };
 
 function toBoxes(data: PackingFileLayoutDto): Box[] {
@@ -83,14 +92,14 @@ export function PackingCartonEditor({
       const count = figure(b.count);
       if (count === 'bad' || count == null || count === 0) errors.push(`${name}: the number of cartons must be more than 0.`);
       for (const [label, v] of [['gross weight', b.grossKg], ['net weight', b.netKg]] as const) {
-        if (figure(v) === 'bad') errors.push(`${name}: the ${label} is not a number.`);
+        if (figure(v) === 'bad') errors.push(`${name}: the ${label} is not a number${why(v)}.`);
       }
       const g = figure(b.grossKg); const n = figure(b.netKg);
       if (typeof g === 'number' && typeof n === 'number' && n > g) errors.push(`${name}: the net weight is more than the gross weight.`);
       let perBox = 0;
       for (const l of b.lines) for (const s of sizes) {
         const q = figure(l.bySize[s] ?? '');
-        if (q === 'bad') errors.push(`${name}${l.colour ? `, ${l.colour}` : ''}: ${sizeName(s)} is not a number.`);
+        if (q === 'bad') errors.push(`${name}${l.colour ? `, ${l.colour}` : ''}: ${sizeName(s)} is not a number${why(l.bySize[s] ?? '')}.`);
         else if (q != null) perBox += q;
       }
       const c = typeof count === 'number' ? count : 0;
@@ -171,11 +180,11 @@ export function PackingCartonEditor({
                 </label>
                 <label className="text-2xs font-medium uppercase tracking-wide text-ink-500">
                   G.W. kg
-                  <input className={clsx(input, 'tnum mt-0.5 block w-20')} inputMode="decimal" value={b.grossKg} onChange={(e) => setBox(b.key, { grossKg: e.target.value })} />
+                  <input className={clsx(input, 'tnum mt-0.5 block w-20', figure(b.grossKg) === 'bad' && 'border-red-400')} inputMode="decimal" value={b.grossKg} onChange={(e) => setBox(b.key, { grossKg: e.target.value })} />
                 </label>
                 <label className="text-2xs font-medium uppercase tracking-wide text-ink-500">
                   N.W. kg
-                  <input className={clsx(input, 'tnum mt-0.5 block w-20')} inputMode="decimal" value={b.netKg} onChange={(e) => setBox(b.key, { netKg: e.target.value })} />
+                  <input className={clsx(input, 'tnum mt-0.5 block w-20', figure(b.netKg) === 'bad' && 'border-red-400')} inputMode="decimal" value={b.netKg} onChange={(e) => setBox(b.key, { netKg: e.target.value })} />
                 </label>
                 <label className="text-2xs font-medium uppercase tracking-wide text-ink-500">
                   Measurement

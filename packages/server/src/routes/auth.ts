@@ -1,3 +1,4 @@
+import { pairFailures, pairKey, pairLocks } from '../services/login-locks.js';
 import { Router } from 'express';
 import argon2 from 'argon2';
 import { z } from 'zod';
@@ -47,18 +48,7 @@ const loginSchema = z.object({
   password: z.string().min(1),
 });
 
-/**
- * Failed sign-ins per account AND address. The lock follows the place the
- * guessing comes from, not the account: an account-wide lock let anyone who
- * knew a staff address keep that person, and every super admin, locked out
- * for a day at a time with a handful of requests. Someone guessing from one
- * address is locked out there; the owner signing in from anywhere else is not.
- * In memory on purpose: a restart forgets a lock, and the per-address limiter
- * above still bounds every caller.
- */
-const pairFailures = new Map<string, number>();
-const pairLocks = new Map<string, number>();
-const pairKey = (userId: string, ip: string) => `${userId}|${ip}`;
+// Failed sign-ins and locks per account and address: see login-locks.ts.
 
 authRouter.post('/login', loginLimiter, asyncHandler(async (req, res) => {
   const { email, password } = loginSchema.parse(req.body);
@@ -124,7 +114,13 @@ authRouter.post('/login', loginLimiter, asyncHandler(async (req, res) => {
       const { attempts, locked, lockMinutes } = computeLockout(
         before, config.LOGIN_MAX_ATTEMPTS, config.LOGIN_LOCKOUT_MINUTES,
       );
-      if (locked) pairLocks.set(key, Date.now() + lockMinutes * 60_000);
+      if (locked) {
+        const until = Date.now() + lockMinutes * 60_000;
+        pairLocks.set(key, until);
+        // Written on the account too, so the Users page shows it as locked
+        // and offers Unlock. The lock that is enforced is the one above.
+        await prisma.user.update({ where: { id: user.id }, data: { lockedUntil: new Date(until) } });
+      }
       await logActivity({
         actorId: user.id, actorName: user.name,
         action: locked ? 'LOGIN_LOCKED' : 'LOGIN_FAILED',

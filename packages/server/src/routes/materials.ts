@@ -354,10 +354,17 @@ async function setIssuedQty(
     else await returnFromProduction(actor, { ...movement, qty: -delta });
     await prisma.$transaction(async (tx) => {
       // The stock side converts through the material's unit and back; the
-      // line keeps exactly the figure that was typed.
+      // line keeps exactly the figure that was typed — plus anything the
+      // warehouse issued against it while this correction was moving stock.
+      // Written as an absolute figure from the stale read, a concurrent issue
+      // of 30 moved the stock and vanished from the line.
+      await tx.$queryRaw`SELECT id FROM bom_items WHERE id = ${item.id} FOR UPDATE`;
+      const now = await tx.bomItem.findUniqueOrThrow({ where: { id: item.id }, select: { issuedQty: true } });
+      const meanwhile = Number(now.issuedQty.toString()) - (was + delta);
+      const final = Math.abs(meanwhile) < 0.001 ? issued : Math.round((issued + meanwhile) * 10_000) / 10_000;
       await tx.bomItem.update({
         where: { id: item.id },
-        data: { issuedQty: issued, issuedByName: actor.name, issuedAt: new Date() },
+        data: { issuedQty: final, issuedByName: actor.name, issuedAt: new Date() },
       });
       await tx.materialIssue.create({
         data: { orderId: item.orderId, bomItemId: item.id, qty: delta, unit: item.unit, issuedById: actor.id, notes },
@@ -367,15 +374,22 @@ async function setIssuedQty(
   }
 
   await prisma.$transaction(async (tx) => {
+    // The correction is measured from the figure as it stands now, under the
+    // row's lock, not from the one read before: an issue landing in between
+    // is part of what is being corrected, and the log still adds up.
+    await tx.$queryRaw`SELECT id FROM bom_items WHERE id = ${item.id} FOR UPDATE`;
+    const now = await tx.bomItem.findUniqueOrThrow({ where: { id: item.id }, select: { issuedQty: true } });
+    const current = Number(now.issuedQty.toString());
+    if (issued === current) return;
     await tx.bomItem.update({
       where: { id: item.id },
       data: { issuedQty: issued, issuedByName: actor.name, issuedAt: new Date() },
     });
     await tx.materialIssue.create({
       data: {
-        orderId: item.orderId, bomItemId: item.id, qty: issued - was,
+        orderId: item.orderId, bomItemId: item.id, qty: Math.round((issued - current) * 10_000) / 10_000,
         unit: item.unit, issuedById: actor.id,
-        notes,
+        notes: `Corrected on the bill of materials from ${current.toLocaleString()} to ${issued.toLocaleString()}`,
       },
     });
   });
