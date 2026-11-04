@@ -91,7 +91,7 @@ export function CostField({
   // One note under the label, the most useful one: that the figure was typed,
   // else what it waits for, else where it came from or how it was worked out.
   const [note, noteTone] = overridden
-    ? [`typed · calculated ${calcText}`, 'violet' as const]
+    ? [calculated == null ? 'typed' : `typed · calculated ${calcText}`, 'violet' as const]
     : unknown && waiting ? [waiting, 'amber' as const]
     : from ? [`from ${from}`, 'muted' as const]
     : [hint, 'muted' as const];
