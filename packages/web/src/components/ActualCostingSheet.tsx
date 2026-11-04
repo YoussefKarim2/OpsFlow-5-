@@ -646,11 +646,11 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
 
   /** The cost, split the way the engine adds it up. Shares are of the parts' own sum, so they always close to 100%. */
   const parts = [
-    { key: 'fabric', name: 'Fabric', cost: live.fabricCostUsd, swatch: 'bg-accent-600' },
+    { key: 'fabric', name: 'Fabric', cost: live.fabricCostUsd, swatch: 'bg-accent-500' },
     { key: 'accessory', name: 'Accessories', cost: live.accessoryCostUsd, swatch: 'bg-accent-300' },
-    { key: 'external', name: 'Outside work', cost: live.externalCostUsd, swatch: 'bg-ink-400' },
-    { key: 'cm', name: 'Cut & make', cost: live.cmCostUsd, swatch: 'bg-ink-800' },
-    ...(live.otherCostUsd != null ? [{ key: 'other', name: 'Other', cost: live.otherCostUsd, swatch: 'bg-ink-200' }] : []),
+    { key: 'external', name: 'Outside work', cost: live.externalCostUsd, swatch: 'bg-ink-300' },
+    { key: 'cm', name: 'Cut & make', cost: live.cmCostUsd, swatch: 'bg-ink-500' },
+    ...(live.otherCostUsd != null ? [{ key: 'other', name: 'Other', cost: live.otherCostUsd, swatch: 'bg-ink-600' }] : []),
   ];
   const partsSum = parts.reduce((a, p) => a + (p.cost ?? 0), 0);
 
@@ -733,41 +733,41 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
         </div>
       )}
 
-      {/* ── 1. The answer ───────────────────────────────────────────────
-          Where the sheet is heading, so it comes first: the profit on one
-          piece, in the largest type on the page, with the four figures it is
-          made of and a bar of cost against sell price. Beside it, what the
-          cost is made of. A coordinator should be able to answer "did we
-          make money on this?" without reading anything below. */}
-      <div className="grid gap-4 lg:grid-cols-5">
-        <section className="rounded-lg bg-ink-900 p-5 text-white shadow-card lg:col-span-3">
-          <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-            <div className="min-w-0">
-              <p className="truncate text-2xs font-semibold uppercase tracking-wider text-ink-400">
-                Actual costing{identity && <span className="ml-2 font-normal normal-case tracking-normal text-ink-300">{identity}</span>}
-              </p>
-              <p className="mt-3 text-2xs font-semibold uppercase tracking-wider text-ink-300">Profit per piece</p>
-              <HeroStat
-                big editing={editing} kind="money"
-                value={over.profitPerUnitUsd ?? ''} calculated={calc('profitPerUnitUsd', live.profitPerUnitUsd)}
-                waiting={live.waiting.profitPerUnitUsd} valueClass={profitTone}
-                onChange={setOverride('profitPerUnitUsd')} onRevert={revert('profitPerUnitUsd')}
-                note={live.totalProfitUsd != null && live.shippedQty != null
-                  ? `${fmtMoney(live.totalProfitUsd)} in all, on ${fmtNumber(live.shippedQty)} pieces shipped`
-                  : 'sell price − actual cost per unit, against what shipped'}
-              />
-            </div>
-            <span className={clsx(
-              'shrink-0 rounded-full px-2.5 py-1 text-2xs font-semibold ring-1 ring-inset',
-              live.isProfitable === true && 'bg-emerald-400/15 text-emerald-300 ring-emerald-400/40',
-              live.isProfitable === false && 'bg-red-400/15 text-red-300 ring-red-400/40',
-              live.isProfitable == null && 'bg-white/10 text-ink-300 ring-white/20',
-            )}>
-              {live.isProfitable === true ? 'In profit' : live.isProfitable === false ? 'At a loss' : 'Not calculable yet'}
-            </span>
-          </div>
+      {/* ── The answer ──────────────────────────────────────────────────
+          One dark summary band across the page: the profit on one piece in
+          the largest type, the five figures it is made of beside it, and
+          under both what the cost is made of and how it stands against the
+          sell price. A coordinator should be able to answer "did we make
+          money on this?" without reading anything below. */}
+      <section className="overflow-hidden rounded-lg bg-ink-900 text-white shadow-card">
+        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-white/10 px-5 py-3">
+          <p className="min-w-0 truncate text-2xs font-semibold uppercase tracking-wider text-ink-400">
+            Costing summary{identity && <span className="ml-2 font-normal normal-case tracking-normal text-ink-300">{identity}</span>}
+          </p>
+          <span className={clsx(
+            'shrink-0 rounded-full px-2.5 py-1 text-2xs font-semibold ring-1 ring-inset',
+            live.isProfitable === true && 'bg-emerald-400/15 text-emerald-300 ring-emerald-400/40',
+            live.isProfitable === false && 'bg-red-400/15 text-red-300 ring-red-400/40',
+            live.isProfitable == null && 'bg-white/10 text-ink-300 ring-white/20',
+          )}>
+            {live.isProfitable === true ? 'In profit' : live.isProfitable === false ? 'At a loss' : 'Not calculated yet'}
+          </span>
+        </div>
 
-          <div className="mt-5 grid grid-cols-2 gap-x-6 gap-y-4 border-t border-white/10 pt-4 sm:grid-cols-3 xl:grid-cols-5">
+        <div className="grid lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
+          <div className="border-b border-white/10 px-5 py-5 lg:border-b-0 lg:border-r">
+            <p className="text-2xs font-semibold uppercase tracking-wider text-ink-300">Profit per piece</p>
+            <HeroStat
+              big editing={editing} kind="money"
+              value={over.profitPerUnitUsd ?? ''} calculated={calc('profitPerUnitUsd', live.profitPerUnitUsd)}
+              waiting={live.waiting.profitPerUnitUsd} valueClass={profitTone}
+              onChange={setOverride('profitPerUnitUsd')} onRevert={revert('profitPerUnitUsd')}
+              note={live.totalProfitUsd != null && live.shippedQty != null
+                ? `${fmtMoney(live.totalProfitUsd)} in all, on ${fmtNumber(live.shippedQty)} pieces shipped`
+                : 'sell price − actual cost per unit, against what shipped'}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-px bg-white/10 sm:grid-cols-3 xl:grid-cols-5 [&>*]:bg-ink-900 [&>*]:px-5 [&>*]:py-5 [&>*:last-child]:col-span-2 xl:[&>*:last-child]:col-span-1">
             <HeroStat
               label="Total cost" editing={editing} kind="money"
               value={over.totalCostUsd ?? ''} calculated={calc('totalCostUsd', live.totalCostUsd)} waiting={live.waiting.totalCostUsd}
@@ -795,57 +795,58 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
               note={live.isProfitable === true && over.targetPriceUsd == null ? 'nothing to fix at this price' : 'cost per unit + 20% mark-up'}
             />
           </div>
+        </div>
 
-          {costRatio != null && (
-            <div className="mt-5">
-              <div className="flex items-baseline justify-between text-2xs text-ink-300">
-                <span>Cost per unit <span className="tnum font-semibold text-white">{fmtMoney(live.unitActualCostUsd!)}</span></span>
-                <span>
-                  {costRatio > 1
-                    ? <span className="text-red-300">{fmtPct((costRatio - 1) * 100, 1)} above the sell price</span>
-                    : <>{fmtPct(costRatio * 100, 1)} of the sell price</>}
-                </span>
-                <span>Sell price <span className="tnum font-semibold text-white">{fmtMoney(live.sellPriceUsd!)}</span></span>
-              </div>
-              <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-white/10">
-                <div
-                  className={clsx('h-full rounded-full', costRatio > 1 ? 'bg-red-400' : 'bg-emerald-400')}
-                  style={{ width: `${Math.min(costRatio, 1) * 100}%` }}
-                />
-              </div>
+        <div className="grid gap-x-8 gap-y-5 border-t border-white/10 px-5 py-4 lg:grid-cols-2">
+          <div className="min-w-0">
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="text-2xs font-semibold uppercase tracking-wider text-ink-300">What the cost is made of</p>
+              {over.totalCostUsd != null && <span className="text-2xs text-violet-300">total typed</span>}
             </div>
-          )}
-
-          <MissingNotes live={live} />
-        </section>
-
-        <section className="card flex flex-col p-5 lg:col-span-2">
-          <p className="text-2xs font-semibold uppercase tracking-wider text-ink-500">Cost composition</p>
-          <p className={clsx('tnum mt-1 text-2xl font-semibold leading-tight', live.totalCostUsd == null ? 'text-ink-300' : 'text-ink-900')}>
-            {live.totalCostUsd == null ? '—' : fmtMoney(live.totalCostUsd)}
-          </p>
-          <p className="text-2xs text-ink-400">
-            total actual cost{over.totalCostUsd != null && <span className="text-violet-600"> · typed</span>}
-          </p>
-          <div className="mt-4 flex h-2.5 overflow-hidden rounded-full bg-ink-100" aria-hidden>
-            {partsSum > 0 && parts.map((p) => p.cost ? (
-              <div key={p.key} className={p.swatch} style={{ width: `${(p.cost / partsSum) * 100}%` }} title={`${p.name} ${fmtPct((p.cost / partsSum) * 100, 1)}`} />
-            ) : null)}
+            <div className="mt-2 flex h-2 overflow-hidden rounded-full bg-white/10" aria-hidden>
+              {partsSum > 0 && parts.map((p) => p.cost ? (
+                <div key={p.key} className={p.swatch} style={{ width: `${(p.cost / partsSum) * 100}%` }} title={`${p.name} ${fmtPct((p.cost / partsSum) * 100, 1)}`} />
+              ) : null)}
+            </div>
+            <ul className="mt-2.5 flex flex-wrap gap-x-5 gap-y-1.5">
+              {parts.map((p) => (
+                <li key={p.key} className="flex items-center gap-1.5 text-xs">
+                  <span className={clsx('h-2 w-2 shrink-0 rounded-sm', p.swatch)} />
+                  <span className="text-ink-300">{p.name}</span>
+                  <span className={clsx('tnum font-semibold', p.cost == null ? 'text-ink-500' : 'text-white')}>{p.cost == null ? '—' : fmtMoney(p.cost)}</span>
+                  {p.cost != null && partsSum > 0 && <span className="tnum text-ink-400">{fmtPct((p.cost / partsSum) * 100, 1)}</span>}
+                </li>
+              ))}
+            </ul>
           </div>
-          <ul className="mt-3 divide-y divide-ink-100">
-            {parts.map((p) => (
-              <li key={p.key} className="flex items-center gap-2.5 py-1.5 text-sm">
-                <span className={clsx('h-2.5 w-2.5 shrink-0 rounded-sm', p.swatch)} />
-                <span className="min-w-0 flex-1 truncate text-ink-700">{p.name}</span>
-                <span className={clsx('tnum', p.cost == null ? 'text-ink-300' : 'text-ink-900')}>{p.cost == null ? '—' : fmtMoney(p.cost)}</span>
-                <span className="tnum w-14 text-right text-xs text-ink-500">
-                  {p.cost != null && partsSum > 0 ? fmtPct((p.cost / partsSum) * 100, 1) : ''}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      </div>
+          <div className="min-w-0">
+            <p className="text-2xs font-semibold uppercase tracking-wider text-ink-300">Cost against the sell price</p>
+            {costRatio != null ? (
+              <>
+                <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className={clsx('h-full rounded-full', costRatio > 1 ? 'bg-red-400' : 'bg-emerald-400')}
+                    style={{ width: `${Math.min(costRatio, 1) * 100}%` }}
+                  />
+                </div>
+                <div className="mt-2.5 flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-xs text-ink-300">
+                  <span>Cost per unit <span className="tnum font-semibold text-white">{fmtMoney(live.unitActualCostUsd!)}</span></span>
+                  <span>
+                    {costRatio > 1
+                      ? <span className="text-red-300">{fmtPct((costRatio - 1) * 100, 1)} above the sell price</span>
+                      : <>{fmtPct(costRatio * 100, 1)} of the sell price</>}
+                  </span>
+                  <span>Sell price <span className="tnum font-semibold text-white">{fmtMoney(live.sellPriceUsd!)}</span></span>
+                </div>
+              </>
+            ) : (
+              <p className="mt-2 text-xs text-ink-400">Shown once the cost per unit and the sell price are both known.</p>
+            )}
+          </div>
+        </div>
+
+        <MissingNotes live={live} />
+      </section>
 
       {/* ── 2. The figures ──────────────────────────────────────────────
           Two sheets of label and value, side by side: what the order is and
@@ -854,7 +855,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
           came from, so nothing has to be taken on trust. */}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="overflow-hidden">
-          <CardHeader title="Order & quantities" subtitle="Read from the order and its ledgers." />
+          <CardHeader title={<Numbered n={1}>Order &amp; quantities</Numbered>} subtitle="Read from the order and its ledgers." />
           <Band>Order</Band>
           <div className="divide-y divide-ink-100">
             {field('Customer', 'customer', live.source.customer, 'text')}
@@ -875,7 +876,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
         </Card>
 
         <Card className="overflow-hidden">
-          <CardHeader title="Production figures" subtitle="The factory's own figures, in dollars, and what OpsFlow works out from them." />
+          <CardHeader title={<Numbered n={2}>Production figures</Numbered>} subtitle="The factory's own figures, in dollars, and what OpsFlow works out from them." />
           <Band>
             Entered here
             <span className="ml-2 font-normal normal-case tracking-normal text-ink-400">left blank, a figure is taken from where OpsFlow already holds it</span>
@@ -941,7 +942,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
           forty accessory rows do not stand between the reader and the total. */}
       <Card>
         <CardHeader
-          title="Cost breakdown"
+          title={<Numbered n={3}>Cost breakdown</Numbered>}
           subtitle="Materials from the bill of materials, outside work from the External Order section. Rows can be edited, added and removed here without changing either."
           action={editable && (
             <button
@@ -977,7 +978,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
             </thead>
             <tbody className="[&>tr]:border-t [&>tr]:border-ink-100">
               <SectionRow
-                cols={cols} title="Fabric" note="UsedFabric · bill of materials" count={fabricRows.length}
+                cols={cols} swatch="bg-accent-500" title="Fabric" note="UsedFabric · bill of materials" count={fabricRows.length}
                 open={isOpen('fabric')} onToggle={() => toggle('fabric')} share={pctCell(pctOf(liveFabric, total))}
                 subtotal={
                   <CostCell
@@ -994,7 +995,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
               />
 
               <SectionRow
-                cols={cols} title="Accessories" note="UsedAcc · bill of materials" count={accessoryRows.length}
+                cols={cols} swatch="bg-accent-300" title="Accessories" note="UsedAcc · bill of materials" count={accessoryRows.length}
                 open={isOpen('accessory')} onToggle={() => toggle('accessory')} share={pctCell(pctOf(liveAccessory, total))}
                 subtotal={
                   <CostCell
@@ -1011,7 +1012,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
               />
 
               <SectionRow
-                cols={cols} title="Outside work" note="External Order section" count={2 + otherRows.length}
+                cols={cols} swatch="bg-ink-300" title="Outside work" note="External Order section" count={2 + otherRows.length}
                 open={isOpen('external')} onToggle={() => toggle('external')} share={pctCell(pctOf(live.externalCostUsd, total))}
                 subtotal={<span className="tnum font-semibold text-ink-900">{live.externalCostUsd == null ? '—' : fmtMoney(live.externalCostUsd)}</span>}
               />
@@ -1040,7 +1041,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
                   end-line inspection. The consumption and unit price columns
                   show that quantity and the cost per piece, so the row
                   multiplies out to its own total like every other row. */}
-              <SectionRow cols={cols} title="Cut & make" note="production figures" />
+              <SectionRow cols={cols} swatch="bg-ink-500" title="Cut & make" note="production figures" />
               <tr>
                 <td className={clsx(TD, 'pl-4')}>
                   <span className="font-medium text-ink-900">C.M</span>
@@ -1084,7 +1085,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
       </Card>
 
       <Card>
-        <CardHeader title="Notes" subtitle="Anything about this costing that the numbers do not say." />
+        <CardHeader title={<Numbered n={4}>Notes</Numbered>} subtitle="Anything about this costing that the numbers do not say." />
         <div className="p-4">
           {editing ? (
             <textarea
@@ -1164,6 +1165,16 @@ const TD = 'whitespace-nowrap px-3 py-2 text-sm text-ink-700';
 /** The slim last column that holds a row's remove button while editing. */
 const TDX = 'px-1 py-2';
 
+/** A card title with its place on the page, so the sheet reads as one numbered document. */
+function Numbered({ n, children }: { n: number; children: ReactNode }) {
+  return (
+    <span className="flex items-center gap-2.5">
+      <span className="tnum grid h-5 w-5 shrink-0 place-items-center rounded bg-ink-900 text-2xs font-semibold text-white">{n}</span>
+      {children}
+    </span>
+  );
+}
+
 /** A thin caption across a card, splitting one group of rows from the next. */
 function Band({ children, className }: { children: ReactNode; className?: string }) {
   return (
@@ -1239,14 +1250,15 @@ function HeroStat({
  * when it is folded away.
  */
 function SectionRow({
-  cols, title, note, count, open, onToggle, subtotal, share,
+  cols, swatch, title, note, count, open, onToggle, subtotal, share,
 }: {
-  cols: number; title: string; note?: string; count?: number;
+  cols: number; swatch?: string; title: string; note?: string; count?: number;
   open?: boolean; onToggle?: () => void; subtotal?: ReactNode; share?: ReactNode;
 }) {
   const foldable = onToggle != null;
   const label = (
     <>
+      {swatch && <span className={clsx('mr-2 inline-block h-2.5 w-2.5 rounded-sm align-[-1px]', swatch)} />}
       <span className="text-xs font-semibold uppercase tracking-wider text-ink-800">{title}</span>
       {(note || count != null) && (
         <span className="ml-2 text-2xs text-ink-400">
@@ -1367,7 +1379,7 @@ function EditableRow({
     : 'Added by hand';
 
   return (
-    <tr className={clsx(edited && 'bg-violet-50/40', foldClass(hidden))}>
+    <tr className={clsx(edited && 'bg-violet-50/40', !editing && cost == null && !countedIn && 'text-ink-400 [&_*]:!text-ink-400', foldClass(hidden))}>
       <td className={clsx(TD, 'pl-4')} title={origin}>
         <TextCell
           editing={editing} value={row.label} placeholder="Item"
@@ -1499,7 +1511,7 @@ function MissingNotes({ live }: { live: CostingResult }) {
 
   if (missing.length === 0) return null;
   return (
-    <div className="no-print mt-5 flex flex-wrap items-baseline gap-x-2 gap-y-1 border-t border-white/10 pt-3 text-xs text-ink-300">
+    <div className="no-print flex flex-wrap items-baseline gap-x-2 gap-y-1 border-t border-white/10 bg-white/[0.03] px-5 py-3 text-xs text-ink-300">
       <span className="font-medium text-amber-300">Not calculated yet.</span>
       <span>Record what is missing, or type the figure straight into its field:</span>
       {missing.map((m) => (
