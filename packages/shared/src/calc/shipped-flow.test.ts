@@ -182,9 +182,13 @@ describe('packed pieces', () => {
       { qty: 200, orderColorId: 'c1', orderSizeId: 's1' },   // already in the ledger
       { qty: 500, orderColorId: null, orderSizeId: null },    // "mixed / not specified"
       { qty: 50, orderColorId: 'c1', orderSizeId: null },
+      // Several sizes as lines: the sized lines are in the ledger already
+      // (counted twice, Packed read 405 for a list of 312); the sample is not.
+      { qty: 93, orderColorId: 'c1', orderSizeId: null, lines: [{ orderSizeId: 's1', qty: 46 }, { orderSizeId: 's2', qty: 47 }] },
+      { qty: 12, orderColorId: 'c1', orderSizeId: null, lines: [{ orderSizeId: 's1', qty: 10 }, { orderSizeId: null, qty: 2 }] },
     ];
-    assert.equal(resolvePackedQty(cells, cartons), 750);
-    assert.equal(computeFunnel(cells, [], cartons).find((f) => f.ledger === QtyLedger.PACKED)!.qty, 750);
+    assert.equal(resolvePackedQty(cells, cartons), 752);
+    assert.equal(computeFunnel(cells, [], cartons).find((f) => f.ledger === QtyLedger.PACKED)!.qty, 752);
     assert.equal(computeFunnel(cells, []).find((f) => f.ledger === QtyLedger.PACKED)!.qty, 200);
   });
 });

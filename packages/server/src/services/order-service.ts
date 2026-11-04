@@ -85,7 +85,7 @@ const ORDER_INCLUDE = {
   externalOperations: { include: { externalFactory: true } },
   productionRecords: { orderBy: { date: 'asc' } },
   qualityAudits: { include: { defects: true } },
-  packingLists: { include: { cartons: true }, orderBy: { createdAt: 'asc' } },
+  packingLists: { include: { cartons: { include: { lines: { select: { orderSizeId: true, qty: true } } } } }, orderBy: { createdAt: 'asc' } },
   shipments: { orderBy: { createdAt: 'asc' } },
   costing: { include: { lines: { orderBy: { position: 'asc' } } } },
   markers: { orderBy: { position: 'asc' } },

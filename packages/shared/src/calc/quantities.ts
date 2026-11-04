@@ -394,6 +394,18 @@ export interface CartonLike {
   qty: number;
   orderColorId: string | null;
   orderSizeId: string | null;
+  /** A carton of several sizes keeps them as lines; a line with an order size is in the ledger. */
+  lines?: ReadonlyArray<{ orderSizeId: string | null; qty: number }>;
+}
+
+/** The pieces of a carton the PACKED ledger does not hold. */
+export function unledgeredPieces(c: CartonLike): number {
+  if (!c.orderColorId) return c.qty;
+  if (c.orderSizeId) return 0;
+  // Several sizes: the lines with an order size were written to the ledger;
+  // a line for a size the order was not sold in (a sample) was not.
+  if (c.lines && c.lines.length > 0) return sum(c.lines.filter((l) => !l.orderSizeId).map((l) => l.qty));
+  return c.qty;
 }
 
 /**
@@ -405,8 +417,7 @@ export interface CartonLike {
  * all of them: the ledger, plus every carton the ledger could not hold.
  */
 export function resolvePackedQty(cells: readonly QtyCell[], cartons: readonly CartonLike[] = []): number {
-  const unledgered = cartons.filter((c) => !c.orderColorId || !c.orderSizeId);
-  return ledgerTotal(cells, QtyLedger.PACKED) + sum(unledgered.map((c) => c.qty));
+  return ledgerTotal(cells, QtyLedger.PACKED) + sum(cartons.map(unledgeredPieces));
 }
 
 export function computeFunnel(

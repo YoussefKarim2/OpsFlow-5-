@@ -484,7 +484,7 @@ ordersRouter.get('/:id/matrix', requirePermission('order:read'), asyncHandler(as
     // (`resolveShippedQty`): consignments recorded on Packing & Shipping count
     // even before they are split by colour and size. The Quantity tab's
     // "Shipped 0" beside a header saying 50 shipped was this figure.
-    totals: { ...d.totals, [QtyLedger.SHIPPED]: d.shippedQty },
+    totals: { ...d.totals, [QtyLedger.SHIPPED]: d.shippedQty, [QtyLedger.PACKED]: d.packedQty },
   });
 }));
 
