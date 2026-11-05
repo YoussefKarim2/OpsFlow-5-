@@ -711,15 +711,8 @@ stepsRouter.put('/:id/proforma', requirePermission('invoice:write'), asyncHandle
   const existing = await prisma.proformaInvoice.findFirst({
     where: { orderId },
     orderBy: { createdAt: 'desc' },
-    select: { id: true, sentAt: true },
+    select: { id: true },
   });
-
-  if (existing?.sentAt) {
-    throw new ConflictError(
-      'This proforma invoice has already been sent to the customer. ' +
-      'Editing the copy they hold is not possible — create a revision instead.',
-    );
-  }
 
   const scalars = {
     number: body.number ?? null,
@@ -741,17 +734,17 @@ stepsRouter.put('/:id/proforma', requirePermission('invoice:write'), asyncHandle
   const invoice = await prisma.$transaction(async (tx) => {
     let inv: { id: string };
     if (existing) {
-      // Written only over the copy the person edited, and only while it is
-      // still unsent: a save from a stale tab used to replace every line.
+      // Written only over the copy the person edited: a save from a stale tab
+      // used to replace every line. A sent proforma stays editable.
       const hit = await tx.proformaInvoice.updateMany({
         where: {
-          id: existing.id, sentAt: null,
+          id: existing.id,
           ...(body.updatedAt ? { updatedAt: new Date(body.updatedAt) } : {}),
         },
         data: scalars,
       });
       if (hit.count !== 1) {
-        throw new ConflictError('This proforma was changed by someone else (or sent) while you were editing. Reload to see the latest copy — your changes were not saved.');
+        throw new ConflictError('This proforma was changed by someone else while you were editing. Reload to see the latest copy — your changes were not saved.');
       }
       inv = existing;
     } else {

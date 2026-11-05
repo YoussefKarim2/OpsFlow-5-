@@ -12,10 +12,8 @@ import { NotFoundError } from '../errors.js';
 import { ORDER_INCLUDE, deriveOrder, refreshOrderCache } from '../services/order-service.js';
 import { logAndNotify, logActivity } from '../services/activity-service.js';
 import {
-  assertValidQuantity, assertProductionWithinReason, assertProducedCoversShipped,
-  producedAfterChange, shipmentTotalAfter,
+  assertValidQuantity, assertProductionWithinReason,
 } from '../services/rules.js';
-import { getRequestContext } from '../request-context.js';
 
 export const productionRouter = Router();
 productionRouter.use(authenticate);
@@ -198,10 +196,6 @@ productionRouter.post('/:orderId', requirePermission('production:write'), asyncH
  * same checks as recording one, with the entry's own old figure taken out of
  * the order's total first, so correcting 450 to 405 is never refused for
  * "exceeding" what it replaces.
- *
- * A correction that lowers produced below what is already on shipments is held
- * to the shipping rule's override (see assertProducedCoversShipped), as is
- * removing an entry below.
  */
 const recordPatchSchema = recordSchema.partial().extend({
   line: z.string().nullable().optional(),
@@ -225,20 +219,10 @@ productionRouter.patch('/record/:id', requirePermission('production:write'), asy
     const d = deriveOrder(order);
     before = { order, d };
     const removedSewing = record.operation === 'SEWING' ? record.qty : 0;
-    const addedSewing = operation === 'SEWING' ? qty : 0;
     if (operation === 'SEWING') {
       const without = d.production.producedQty - removedSewing;
       assertProductionWithinReason(without + qty, d.totals[QtyLedger.ORDER] ?? 0, d.totals[QtyLedger.CUT] ?? 0);
     }
-    assertProducedCoversShipped({
-      producedBefore: d.producedQty,
-      producedAfter: producedAfterChange({
-        inLineQty: d.totals[QtyLedger.IN_LINE] ?? 0, sewingQty: d.production.producedQty, removedSewing, addedSewing,
-      }),
-      shippedQty: shipmentTotalAfter(order.shipments, 0),
-      hasOverridePermission: actor.permissions.includes('shipment:override'),
-      overrideReason: getRequestContext()?.reason ?? null,
-    });
   }
 
   const updated = await prisma.productionRecord.update({
@@ -273,23 +257,11 @@ productionRouter.delete('/record/:id', requirePermission('production:write'), as
   const record = await prisma.productionRecord.findUnique({ where: { id: req.params.id } });
   if (!record) throw new NotFoundError('Production record');
 
-  // Taking out a sewing entry lowers produced; it may not drop below what has
-  // already gone on shipments without the same override shipping needs.
   let before: { order: { id: string; poNumber: string }; d: ReturnType<typeof deriveOrder> } | null = null;
   if (record.operation === 'SEWING') {
     const order = await prisma.order.findUniqueOrThrow({ where: { id: record.orderId }, include: ORDER_INCLUDE });
     const d = deriveOrder(order);
     before = { order, d };
-    assertProducedCoversShipped({
-      producedBefore: d.producedQty,
-      producedAfter: producedAfterChange({
-        inLineQty: d.totals[QtyLedger.IN_LINE] ?? 0, sewingQty: d.production.producedQty,
-        removedSewing: record.qty, addedSewing: 0,
-      }),
-      shippedQty: shipmentTotalAfter(order.shipments, 0),
-      hasOverridePermission: actor.permissions.includes('shipment:override'),
-      overrideReason: getRequestContext()?.reason ?? null,
-    });
   }
 
   await prisma.productionRecord.delete({ where: { id: record.id } });

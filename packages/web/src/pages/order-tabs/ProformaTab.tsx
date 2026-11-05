@@ -13,15 +13,14 @@
  * `#VALUE!` in the same situation; a confident zero on a customer's document is
  * worse than either.
  *
- * **It does not let a sent invoice be edited.** Once it has gone to the
- * customer, the copy they hold is the document. The API refuses; this screen
- * says so before you type.
+ * **A sent invoice stays editable.** "Mark as sent" records the day it went
+ * to the customer; the factory can still correct it afterwards.
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { ProformaPrintView } from '../../components/ProformaPrintView';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Send, Lock, Upload, Download, Info, Printer } from 'lucide-react';
+import { Plus, Trash2, Send, Upload, Download, Info, Printer } from 'lucide-react';
 import {
   computeInvoiceTotals, fmtDate, InvoiceLineKind, isTypeableFigure, lineTotal as exactLineTotal,
   readTypedNumber, typedNumberOrNull, type OrderDetailDto,
@@ -308,19 +307,6 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
       />
 
       <div className="screen-only space-y-4">
-      {sent && (
-        <div className="flex items-start gap-2 rounded-md border border-ink-300 bg-ink-100 px-4 py-3">
-          <Lock className="mt-0.5 h-4 w-4 shrink-0 text-ink-500" />
-          <div className="text-sm text-ink-700">
-            <p className="font-semibold">Sent to the customer on {fmtDate(invoice!.sentAt)}.</p>
-            <p className="mt-0.5 text-xs">
-              The customer holds this version, so it can no longer be edited. If the quotation has
-              changed, the factory issues a revision with its own number.
-            </p>
-          </div>
-        </div>
-      )}
-
       {importNote && (
         <div className="rounded-md border border-blue-200 bg-blue-50 px-4 py-3">
           <div className="flex items-start gap-2.5">
@@ -350,7 +336,7 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
           <div className="flex gap-2">
             <button
               className="btn-ghost btn-sm"
-              disabled={sent || save.isPending || problems.length > 0}
+              disabled={save.isPending || problems.length > 0}
               title={problems[0]}
               onClick={() => save.mutate(draft)}
             >
@@ -400,12 +386,12 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
               onClick={() => setConfirmSend(true)}
               title={!invoice ? 'Save the invoice first' : undefined}
             >
-              <Send className="h-3.5 w-3.5" /> Mark as sent
+              <Send className="h-3.5 w-3.5" /> {sent ? `Sent ${fmtDate(invoice!.sentAt)}` : 'Mark as sent'}
             </button>
           </div>
         </div>
 
-        <fieldset disabled={sent} className={clsx('space-y-4 p-4', sent && 'opacity-70')}>
+        <fieldset className="space-y-4 p-4">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <Field label="Proforma invoice no." hint="The factory's own numbering.">
               <input className="input" value={draft.number} onChange={(e) => set('number', e.target.value)} />
@@ -580,8 +566,8 @@ export function ProformaTab({ order }: { order: OrderDetailDto }) {
         body={
           <>
             <p>
-              This records that the customer now holds this quotation. It cannot be edited
-              afterwards — a changed quotation is a new revision with its own number.
+              This records the day the customer received this quotation. It can still be
+              edited afterwards.
             </p>
             <p className="mt-2">
               OpsFlow does not email it. Send it however you normally do, then record it here.
