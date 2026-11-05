@@ -1,8 +1,9 @@
 /**
- * Expected costing — what the order should cost, from the plan, before the
+ * Planned costing — what the order should cost, from the plan, before the
  * floor has made a piece.
  *
- * Sits under the actual costing and runs the same engine (see
+ * Its own page beside the actual costing (a switch at the top of the Actual
+ * Costing step), and runs the same engine (see
  * `computeExpectedCosting`). Every figure the order already holds is filled in
  * and marked "auto": the Main Order quantity, the PO price, the factory's daily
  * cost and machines, the Production step's line plan and target per day, the
@@ -43,7 +44,7 @@ function plannedLines(planned: CostLineDto[]): ExpectedSourceLine[] {
   }));
 }
 
-export function ExpectedCostingCard({ order, c }: { order: OrderDetailDto; c: CostingResult }) {
+export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: CostingResult }) {
   const { can } = useAuth();
   const qc = useQueryClient();
   const costing = useQuery({ queryKey: ['costing', order.id], queryFn: () => api.steps.costing(order.id) });
@@ -125,33 +126,28 @@ export function ExpectedCostingCard({ order, c }: { order: OrderDetailDto; c: Co
   const profit = e.profitPerUnitUsd;
 
   return (
-    <div className="screen-only px-5 pb-5">
+    <div className="screen-only">
       <Card className="overflow-hidden">
         <CardHeader
-          title={
-            <span className="flex items-center gap-2.5">
-              <span className="tnum grid h-5 w-5 shrink-0 place-items-center rounded bg-ink-900 text-2xs font-semibold text-white">5</span>
-              Expected costing
-            </span>
-          }
-          subtitle="What this order should cost, worked out from the plan. Filled from the order where it can be; type what it cannot."
+          title="Planned costing"
+          subtitle="What this order should cost, worked out from the plan before production. Filled from the order where it can be; type what it cannot."
           action={editable ? <SaveNote state={save} /> : undefined}
         />
 
         {/* The answer first, as on the actual costing. */}
         <div className="grid grid-cols-2 gap-px border-b border-ink-100 bg-ink-100 sm:grid-cols-3 xl:grid-cols-5">
-          <Stat label="Expected cost / piece" value={price(e.unitCostUsd)} strong />
+          <Stat label="Planned cost / piece" value={price(e.unitCostUsd)} strong />
           <Stat label="Selling price" value={price(e.sellPriceUsd.value)} />
           <Stat
-            label="Expected profit / piece"
+            label="Planned profit / piece"
             value={price(profit)}
             tone={profit == null ? undefined : profit < 0 ? 'bad' : 'good'}
           />
-          <Stat label="Expected margin" value={e.profitPct == null ? '—' : fmtPct(e.profitPct, 1)} tone={e.profitPct == null ? undefined : e.profitPct < 0 ? 'bad' : 'good'} />
+          <Stat label="Planned margin" value={e.profitPct == null ? '—' : fmtPct(e.profitPct, 1)} tone={e.profitPct == null ? undefined : e.profitPct < 0 ? 'bad' : 'good'} />
           <Stat
             label="Actual cost / piece"
             value={price(actualUnit)}
-            note={diff == null ? 'Once production is costed' : `${diff > 0 ? '+' : diff < 0 ? '−' : ''}${price(Math.abs(diff))} against expected`}
+            note={diff == null ? 'Once production is costed' : `${diff > 0 ? '+' : diff < 0 ? '−' : ''}${price(Math.abs(diff))} against planned`}
             tone={diff == null ? undefined : diff > 0.00005 ? 'bad' : 'good'}
             className="col-span-2 sm:col-span-1"
           />
@@ -230,7 +226,7 @@ export function ExpectedCostingCard({ order, c }: { order: OrderDetailDto; c: Co
             </tbody>
             <tfoot>
               <tr className="bg-ink-900 text-white">
-                <td className="px-4 py-2.5 font-semibold" colSpan={3}>Expected total</td>
+                <td className="px-4 py-2.5 font-semibold" colSpan={3}>Planned total</td>
                 <td className="px-4 py-2.5 text-right text-xs text-ink-300">{e.orderQty.value != null ? `${fmtNumber(e.orderQty.value)} pcs` : ''}</td>
                 <td className="tnum px-4 py-2.5 text-right font-semibold">{money(e.totalCostUsd)}</td>
               </tr>

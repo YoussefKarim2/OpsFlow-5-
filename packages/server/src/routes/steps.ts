@@ -1108,7 +1108,7 @@ stepsRouter.put('/:id/costing/expected', requirePermission('costing:read'), requ
     await prisma.$executeRaw`UPDATE "orders" SET "expectedCosting" = ${JSON.stringify(typed)}::jsonb WHERE "id" = ${orderId}`;
     await logActivity({
       orderId, actorId: user.id, actorName: user.name,
-      action: 'costing.expected', summary: 'Updated the expected costing',
+      action: 'costing.expected', summary: 'Updated the planned costing',
       entityType: 'Order', entityId: orderId,
     });
   }
