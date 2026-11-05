@@ -20,6 +20,7 @@ export * from './calc/progress.js';
 export * from './calc/materials.js';
 export * from './calc/costing.js';
 export * from './calc/costing-derive.js';
+export * from './calc/expected-costing.js';
 export * from './calc/costing-overrides.js';
 export * from './calc/costing-format.js';
 export * from './calc/typed-number.js';

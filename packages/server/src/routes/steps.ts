@@ -18,7 +18,7 @@ import multer from 'multer';
 import ExcelJS from 'exceljs';
 import { z } from 'zod';
 import { Prisma } from '@prisma/client';
-import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines, sanitiseOverrides, sourceRefCovers, stepOverridePermission, visibleDerivedLines } from '@opsflow/shared';
+import { StageKey, StageStatus, STEP_BY_KEY, deriveCostLines, sanitiseExpectedTyped, sanitiseOverrides, sourceRefCovers, stepOverridePermission, visibleDerivedLines } from '@opsflow/shared';
 import { computeInvoiceTotals, InvoiceLineKind, lineTotal as exactLineTotal } from '@opsflow/shared';
 import { detectFileKind, FILE_KIND_LABEL } from '../services/import/file-kind.js';
 import { isUnsafeUploadName } from '../services/import/upload-guard.js';
@@ -1080,7 +1080,39 @@ stepsRouter.get('/:id/costing', requirePermission('costing:read'), asyncHandler(
     // The rows removed from this costing, so "Take all from the BOM" can show
     // what it would put back and put it back at once.
     removed: allDerived.filter((d) => (record?.hiddenCostRefs ?? []).some((h) => sourceRefCovers(h, d.sourceRef ?? ''))),
+    // The Expected costing: every planned row (removed ones too — removing a
+    // row from the actual costing says nothing about the plan), and the
+    // figures typed where the order had none.
+    planned: allDerived,
+    expectedTyped: sanitiseExpectedTyped(
+      (await prisma.order.findUnique({ where: { id: orderId }, select: { expectedCosting: true } }))?.expectedCosting,
+    ),
   });
+}));
+
+/**
+ * Save the figures typed on the Expected costing. The whole map is sent each
+ * time; anything that is not a known figure or not a number is dropped.
+ */
+stepsRouter.put('/:id/costing/expected', requirePermission('costing:read'), requirePermission('costing:write'), asyncHandler(async (req, res) => {
+  const orderId = await resolveOrderId(req.params.id);
+  const body = z.object({ typed: z.record(z.string().max(200), z.union([z.number(), z.null()])) }).parse(req.body ?? {});
+  const typed = sanitiseExpectedTyped(body.typed);
+  if (Object.keys(typed).length > 2000) throw new ValidationError('Too many figures.');
+  const user = currentUser(req);
+  const before = await prisma.order.findUnique({ where: { id: orderId }, select: { expectedCosting: true } });
+  if (!before) throw new NotFoundError('Order');
+  if (JSON.stringify(sanitiseExpectedTyped(before.expectedCosting)) !== JSON.stringify(typed)) {
+    // Raw, so the order's updatedAt does not move: a costing figure is not an
+    // edit of the order's details, and would refuse a save open on that tab.
+    await prisma.$executeRaw`UPDATE "orders" SET "expectedCosting" = ${JSON.stringify(typed)}::jsonb WHERE "id" = ${orderId}`;
+    await logActivity({
+      orderId, actorId: user.id, actorName: user.name,
+      action: 'costing.expected', summary: 'Updated the expected costing',
+      entityType: 'Order', entityId: orderId,
+    });
+  }
+  res.json({ typed });
 }));
 
 

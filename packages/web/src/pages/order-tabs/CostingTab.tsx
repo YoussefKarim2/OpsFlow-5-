@@ -9,7 +9,16 @@
 
 import type { OrderDetailDto } from '@opsflow/shared';
 import { ActualCostingSheet } from '../../components/ActualCostingSheet';
+import { ExpectedCostingCard } from '../../components/ExpectedCostingCard';
+import { useAuth } from '../../lib/auth';
 
 export function CostingTab({ order }: { order: OrderDetailDto }) {
-  return <ActualCostingSheet order={order} />;
+  const { can } = useAuth();
+  return (
+    <>
+      <ActualCostingSheet order={order} />
+      {/* What the order should cost, from the plan — under the actual costing. */}
+      {can('costing:read') && order.costing && <ExpectedCostingCard order={order} c={order.costing} />}
+    </>
+  );
 }

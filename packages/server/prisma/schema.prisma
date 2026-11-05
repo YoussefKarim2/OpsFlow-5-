@@ -260,6 +260,10 @@ model Order {
   externalFactoryId        String?
   coordinatorId            String?
   outsideWorkManagerId     String?
+  /// Figures typed on the Expected costing for what the order could not fill
+  /// itself (a price not on the BOM yet, a target not set), keyed by figure.
+  /// Only a stand-in: the order's own figure is used once it has one.
+  expectedCosting          Json?
   createdAt                DateTime              @default(now())
   updatedAt                DateTime              @updatedAt
   activityLogs             ActivityLog[]

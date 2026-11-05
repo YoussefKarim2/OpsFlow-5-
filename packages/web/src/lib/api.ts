@@ -1014,7 +1014,12 @@ export const api = {
     removeStock: (orderId: string, recordId: string) => del(`/orders/${orderId}/stock/${recordId}`),
 
     costing: (orderId: string) =>
-      get<{ data: CostingDto | null; derived: CostLineDto[]; removed?: CostLineDto[] }>(`/orders/${orderId}/costing`),
+      get<{
+        data: CostingDto | null; derived: CostLineDto[]; removed?: CostLineDto[];
+        planned?: CostLineDto[]; expectedTyped?: Record<string, number>;
+      }>(`/orders/${orderId}/costing`),
+    saveExpectedCosting: (orderId: string, typed: Record<string, number | null>) =>
+      put<{ typed: Record<string, number> }>(`/orders/${orderId}/costing/expected`, { typed }),
     saveCosting: (orderId: string, body: unknown) =>
       put<{ ok: true; derived: number; manual: number; updatedAt: string }>(`/orders/${orderId}/costing`, body),
     downloadCostingPdf: (orderId: string) =>

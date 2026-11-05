@@ -18,7 +18,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import {
   Upload, FileSpreadsheet, CheckCircle2, XCircle, AlertTriangle, Info,
-  ArrowRight, ArrowLeft, Save, Loader2,
+  ArrowRight, ArrowLeft, Save, Loader2, Plus, Trash2, RotateCcw,
 } from 'lucide-react';
 import {
   CONCEPT_META, ImportConcept, fmtNumber, fieldLabel,
@@ -31,6 +31,43 @@ import {
 import { ComboSelect } from '../components/ComboSelect';
 
 type Step = 'upload' | 'analyse' | 'map' | 'review';
+
+/**
+ * A model (row) of the Main Order grid on the review screen. Rows read from the
+ * file can be removed; rows added by hand carry a typed name and quantities.
+ * Quantities are kept as the text typed, so a half-typed figure is not lost.
+ */
+interface GridRow {
+  key: string;
+  color: string;
+  cells: Record<string, string>;
+  added: boolean;
+}
+
+function rowsFromPreview(p: ImportAnalysisDto['preview']): GridRow[] {
+  return p.matrixRows.map((r, i) => ({
+    key: `read-${i}`,
+    color: r.color,
+    cells: Object.fromEntries(Object.entries(r.cells).map(([k, v]) => [k, String(v)])),
+    added: false,
+  }));
+}
+
+const pieces = (v: string | undefined): number => {
+  const n = Number((v ?? '').trim());
+  return Number.isInteger(n) && n > 0 ? n : 0;
+};
+
+/** Why the edited grid cannot be imported yet, or null when it can. */
+function gridProblem(rows: GridRow[]): string | null {
+  const names = rows.map((r) => r.color.trim().toLowerCase());
+  if (names.some((n) => n === '')) return 'Give every added model a name.';
+  const dup = names.find((n, i) => names.indexOf(n) !== i);
+  if (dup) return `"${rows[names.indexOf(dup)].color.trim()}" is listed twice. Each model needs its own name.`;
+  const empty = rows.find((r) => r.added && Object.values(r.cells).every((v) => pieces(v) === 0));
+  if (empty) return `Enter the quantities for ${empty.color.trim()}.`;
+  return null;
+}
 
 const STEPS: Array<{ key: Step; label: string }> = [
   { key: 'upload', label: 'Upload' },
@@ -51,19 +88,22 @@ export function ImportWizardPage() {
   const [columnMapping, setColumnMapping] = useState<Record<string, string>>({});
   const [fieldOverrides, setFieldOverrides] = useState<Record<string, string>>({});
   const [reserveMaterials, setReserveMaterials] = useState(true);
+  // The review grid as edited: null while it is exactly as read from the file.
+  // A re-read of the file (another sheet, a remapped column) starts it over.
+  const [grid, setGrid] = useState<GridRow[] | null>(null);
 
   const { data: lookups } = useQuery({ queryKey: ['lookups'], queryFn: api.reference.lookups });
 
   const upload = useMutation({
     mutationFn: (f: File) => api.import.upload(f),
-    onSuccess: (r) => { setResult(r); setError(null); setStep('analyse'); },
+    onSuccess: (r) => { setResult(r); setGrid(null); setError(null); setStep('analyse'); },
     onError: (e) => { setError(e); setFile(null); },
   });
 
   const remap = useMutation({
     mutationFn: (body: { sheetName?: string; columnMapping?: Record<string, string>; fieldOverrides?: Record<string, string | number | null> }) =>
       api.import.remap(result!.jobId, body),
-    onSuccess: (r) => { setResult(r); setError(null); },
+    onSuccess: (r) => { setResult(r); setGrid(null); setError(null); },
     onError: setError,
   });
 
@@ -73,6 +113,15 @@ export function ImportWizardPage() {
       overrides: Object.keys(fieldOverrides).length > 0 ? fieldOverrides : undefined,
       sheetName: result?.analysis?.sheetName,
       reserveMaterials,
+      // Only when models were added or removed; otherwise the file's own grid
+      // (with its prices) is used as read.
+      matrix: grid ? {
+        sizes: result!.preview.sizes,
+        rows: grid.map((r) => ({
+          color: r.color.trim(),
+          cells: Object.fromEntries(result!.preview.sizes.map((sz) => [sz, pieces(r.cells[sz])]).filter(([, q]) => (q as number) > 0)),
+        })),
+      } : undefined,
     }),
     onSuccess: (r) => {
       qc.invalidateQueries();
@@ -95,7 +144,7 @@ export function ImportWizardPage() {
 
   const reset = () => {
     setStep('upload'); setFile(null); setResult(null); setError(null);
-    setColumnMapping({}); setFieldOverrides({});
+    setColumnMapping({}); setFieldOverrides({}); setGrid(null);
   };
 
   const analysis = result?.analysis ?? null;
@@ -186,6 +235,10 @@ export function ImportWizardPage() {
             remap.mutate({ fieldOverrides: next, columnMapping, sheetName: analysis?.sheetName });
           }}
           applying={remap.isPending}
+          rows={grid ?? rowsFromPreview(result.preview)}
+          edited={grid != null}
+          onRows={setGrid}
+          onResetRows={() => setGrid(null)}
           reserveMaterials={reserveMaterials}
           onReserveChange={setReserveMaterials}
           onBack={() => setStep(analysis ? 'map' : 'analyse')}
@@ -696,13 +749,17 @@ function DetectedPanel({
 }
 
 function ReviewStep({
-  result, fieldOverrides, onField, applying,
+  result, fieldOverrides, onField, applying, rows, edited, onRows, onResetRows,
   reserveMaterials, onReserveChange, onBack, onConfirm, committing,
 }: {
   result: ImportAnalysisDto;
   fieldOverrides: Record<string, string>;
   onField: (field: string, value: string) => void;
   applying: boolean;
+  rows: GridRow[];
+  edited: boolean;
+  onRows: (rows: GridRow[]) => void;
+  onResetRows: () => void;
   reserveMaterials: boolean;
   onReserveChange: (v: boolean) => void;
   onBack: () => void;
@@ -710,7 +767,13 @@ function ReviewStep({
   committing: boolean;
 }) {
   const p = result.preview;
-  const total = p.matrixTotal;
+  const rowTotal = (r: GridRow) => p.sizes.reduce((a, sz) => a + pieces(r.cells[sz]), 0);
+  const total = rows.reduce((a, r) => a + rowTotal(r), 0);
+  const problem = gridProblem(rows);
+  const removeRow = (key: string) => onRows(rows.filter((r) => r.key !== key));
+  const addRow = () => onRows([...rows, { key: `added-${Date.now()}`, color: '', cells: {}, added: true }]);
+  const editRow = (key: string, patch: Partial<GridRow>) =>
+    onRows(rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   const errors = result.issues.filter((i) => i.level === 'ERROR');
   // What the readers want checked before anything is created: a file that
   // holds twenty orders, rows that are measurements rather than colours, a
@@ -729,7 +792,7 @@ function ReviewStep({
         <div className="grid gap-4 p-4 sm:grid-cols-3 lg:grid-cols-6">
           <Summary label="Order" value={String(p.order.poNumber ?? '—')} mono />
           <Summary label="Customer" value={String(p.order.clientName ?? '—')} />
-          <Summary label="Colours" value={String(p.colors.length)} />
+          <Summary label="Models" value={String(rows.length)} />
           <Summary label="Sizes" value={String(p.sizes.length)} />
           <Summary label="Total quantity" value={fmtNumber(total, { places: 0 })} strong />
           <Summary label="Rows read" value={String(result.analysis?.rowsDetected ?? p.matrixRows.length)} />
@@ -764,26 +827,70 @@ function ReviewStep({
 
       {p.matrixRows.length > 0 ? (
         <Card>
-          <CardHeader title="Main Order quantities" subtitle="As read from the file. The Cut Order is calculated from this grid." />
+          <CardHeader
+            title="Main Order quantities"
+            subtitle={edited
+              ? 'Changed from what the file read. The Cut Order is calculated from this grid.'
+              : 'As read from the file. Remove a model, or add one the file did not carry. The Cut Order is calculated from this grid.'}
+            action={edited ? (
+              <button type="button" className="btn-ghost btn-sm" onClick={onResetRows}>
+                <RotateCcw className="h-3.5 w-3.5" /> Back to the file
+              </button>
+            ) : undefined}
+          />
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="border-b border-ink-200 bg-ink-50">
                 <tr>
-                  <th className="th">Colour</th>
+                  <th className="th">Model / colour</th>
                   {p.sizes.map((s) => <th key={s} className="th text-right">{s}</th>)}
                   <th className="th text-right">Total</th>
+                  <th className="th w-10"><span className="sr-only">Remove</span></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-100">
-                {p.matrixRows.map((r) => (
-                  <tr key={r.color}>
-                    <td className="td font-medium">{r.color}</td>
+                {rows.map((r) => (
+                  <tr key={r.key} className={r.added ? 'bg-blue-50/40' : undefined}>
+                    <td className="td font-medium">
+                      {r.added ? (
+                        <input
+                          className="input h-8 min-w-48"
+                          placeholder="e.g. Pants — Navy"
+                          value={r.color}
+                          maxLength={120}
+                          autoFocus={r.color === ''}
+                          onChange={(e) => editRow(r.key, { color: e.target.value })}
+                        />
+                      ) : r.color}
+                    </td>
                     {p.sizes.map((s) => (
                       <td key={s} className="td tnum text-right text-ink-700">
-                        {r.cells[s] ? r.cells[s].toLocaleString() : <span className="text-ink-300">—</span>}
+                        {r.added ? (
+                          <input
+                            className="input h-8 w-20 text-right tnum"
+                            inputMode="numeric"
+                            placeholder="0"
+                            value={r.cells[s] ?? ''}
+                            onChange={(e) => {
+                              const v = e.target.value.replace(/[\s,]/g, '');
+                              if (/^\d{0,7}$/.test(v)) editRow(r.key, { cells: { ...r.cells, [s]: v } });
+                            }}
+                          />
+                        ) : pieces(r.cells[s]) ? pieces(r.cells[s]).toLocaleString() : <span className="text-ink-300">—</span>}
                       </td>
                     ))}
-                    <td className="td tnum text-right font-semibold">{r.total.toLocaleString()}</td>
+                    <td className="td tnum text-right font-semibold">{rowTotal(r).toLocaleString()}</td>
+                    <td className="td text-right">
+                      <button
+                        type="button"
+                        className="rounded p-1 text-ink-400 hover:bg-red-50 hover:text-red-600"
+                        title={`Remove ${r.color.trim() || 'this model'}`}
+                        aria-label={`Remove ${r.color.trim() || 'this model'}`}
+                        onClick={() => removeRow(r.key)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -792,13 +899,20 @@ function ReviewStep({
                   <td className="td font-semibold">Total</td>
                   {p.sizes.map((s) => (
                     <td key={s} className="td tnum text-right font-semibold">
-                      {p.matrixRows.reduce((a, r) => a + (r.cells[s] ?? 0), 0).toLocaleString()}
+                      {rows.reduce((a, r) => a + pieces(r.cells[s]), 0).toLocaleString()}
                     </td>
                   ))}
-                  <td className="td tnum text-right font-bold">{p.matrixTotal.toLocaleString()}</td>
+                  <td className="td tnum text-right font-bold">{total.toLocaleString()}</td>
+                  <td className="td" />
                 </tr>
               </tfoot>
             </table>
+          </div>
+          <div className="flex items-center justify-between gap-3 border-t border-ink-100 px-4 py-2.5">
+            <button type="button" className="btn-secondary btn-sm" onClick={addRow}>
+              <Plus className="h-3.5 w-3.5" /> Add a model
+            </button>
+            {problem && <span className="text-sm text-red-700">{problem}</span>}
           </div>
         </Card>
       ) : (
@@ -853,9 +967,11 @@ function ReviewStep({
         */}
         <div className="flex items-center gap-3">
           {total === 0 && (
-            <span className="text-sm text-red-700">Nothing to import: the file holds no quantities.</span>
+            <span className="text-sm text-red-700">
+              {p.matrixRows.length > 0 ? 'Nothing to import: the grid holds no quantities.' : 'Nothing to import: the file holds no quantities.'}
+            </span>
           )}
-          <button className="btn-primary" onClick={onConfirm} disabled={committing || total === 0 || applying}>
+          <button className="btn-primary" onClick={onConfirm} disabled={committing || total === 0 || applying || problem != null}>
             {committing ? 'Creating the order…' : 'Confirm import'}
           </button>
         </div>
