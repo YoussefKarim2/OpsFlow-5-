@@ -21,7 +21,7 @@
 
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { INVOICE_LINE_LAYOUTS, InvoiceKind, InvoiceLineKind, InvoiceStatus, SHEET_DEFAULTS, computeInvoiceTotals, isCalendarDay, resolveShippedQty, type InvoiceCandidateDto, type ProformaSheetSettings } from '@opsflow/shared';
+import { INVOICE_LINE_LAYOUTS, InvoiceKind, InvoiceLineKind, InvoiceStatus, SHEET_DEFAULTS, buildSheet, computeInvoiceTotals, isCalendarDay, resolveShippedQty, type InvoiceCandidateDto, type ProformaSheetSettings } from '@opsflow/shared';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../db.js';
 import { authenticate, currentUser, requirePermission } from '../middleware/auth.js';
@@ -297,7 +297,47 @@ async function buildFor(kind: InvoiceKind, choices: SourceChoice[]) {
  * A new proforma's sheet fields: the customer's last proforma sheet without
  * its dates and title, or the factory's defaults with the letterhead as exporter.
  */
-async function seedSheet(clientId: string, seller: { name?: string; address?: string | null; qizRef?: string | null; signatory?: string | null }): Promise<ProformaSheetSettings> {
+async function seedSheet(
+  clientId: string,
+  seller: { name?: string; address?: string | null; qizRef?: string | null; signatory?: string | null },
+  invoiceOf?: string[],
+  /** The invoice's own style rows, by key: a proforma style that does not appear by name still lends what all its styles share. */
+  invoiceKeys: string[] = [],
+): Promise<ProformaSheetSettings> {
+  // An invoice follows the proforma already made for its own order: the same
+  // styles, with the same PO, part numbers, HTS codes, units and wording, and
+  // the same shipment details. Cartons and weights are left to the packing.
+  if (invoiceOf && invoiceOf.length > 0) {
+    const own = await prisma.invoice.findFirst({
+      where: {
+        kind: InvoiceKind.PROFORMA, sheet: { not: Prisma.DbNull }, status: { not: InvoiceStatus.VOID },
+        OR: [{ orderId: { in: invoiceOf } }, { orders: { some: { orderId: { in: invoiceOf } } } }],
+      },
+      orderBy: { updatedAt: 'desc' }, select: { sheet: true },
+    });
+    if (own?.sheet) {
+      const { title: _t, exporterName: _n, exporterAddress: _a, qizRef: _q, signatory: _s, packedAtIssue: _p, rows, ...kept } = own.sheet as ProformaSheetSettings;
+      const carried: NonNullable<ProformaSheetSettings['rows']> = {};
+      for (const [key, r] of Object.entries(rows ?? {})) {
+        const { cartons: _c, nw: _w, gw: _g, ...row } = r as Record<string, unknown>;
+        if (Object.values(row).some((v) => v != null)) carried[key] = row as NonNullable<ProformaSheetSettings['rows']>[string];
+      }
+      // The invoice may name its goods differently from the proforma (lines
+      // from the packing list rather than the order). A style it names that
+      // the proforma does not still takes the HTS code, part number, unit and
+      // pieces per carton when every proforma style agrees on them.
+      const typedRows = Object.values(carried);
+      const shared: Record<string, unknown> = {};
+      for (const f of ['hts', 'partNo', 'unit', 'perCarton'] as const) {
+        const vals = [...new Set(typedRows.map((r) => (r as Record<string, unknown>)[f]).filter((v) => v != null && v !== ''))];
+        if (vals.length === 1 && typedRows.every((r) => (r as Record<string, unknown>)[f] != null)) shared[f] = vals[0];
+      }
+      if (Object.keys(shared).length > 0) {
+        for (const k of invoiceKeys) if (!carried[k]) carried[k] = shared as NonNullable<ProformaSheetSettings['rows']>[string];
+      }
+      return { ...kept, rows: carried };
+    }
+  }
   // The customer's most recently worked-on document, not a draft raised a
   // minute ago by mistake; a voided one is not a model.
   const last = await prisma.invoice.findFirst({
@@ -359,7 +399,14 @@ invoicesRouter.post('/', requirePermission('invoice:write'), asyncHandler(async 
   // Every document carries the exporter block and signature; a proforma is
   // also laid out as the factory's own sheet. Typed fields carry over from
   // the customer's last document.
-  const sheet = await seedSheet(first.loaded.clientId, doc.seller as { name?: string; address?: string | null; qizRef?: string | null; signatory?: string | null });
+  const sheet = await seedSheet(
+    first.loaded.clientId,
+    doc.seller as { name?: string; address?: string | null; qizRef?: string | null; signatory?: string | null },
+    body.kind === InvoiceKind.INVOICE ? parts.map((p) => p.loaded.id) : undefined,
+    body.kind === InvoiceKind.INVOICE
+      ? buildSheet(doc.lines, parts.map((p) => ({ poNumber: p.loaded.poNumber, orderName: p.loaded.orderName, styleNumber: p.loaded.styleNumber })), {}).rows.map((r) => r.key)
+      : [],
+  );
 
   const created = await withAllocatedNumber(body.kind, year, async (tx, number, sequence) =>
     tx.invoice.create({
@@ -690,9 +737,10 @@ invoicesRouter.post('/:id/issue', requirePermission('invoice:issue'), asyncHandl
   assertIssuable(shown);
   // The letterhead the draft was showing is what the record keeps.
   const frozen = fillFromLetterhead(existing, live);
-  // And the packing figures a proforma's sheet showed: cartons and weights
-  // packed afterwards must not change a document that has gone out.
-  if (existing.kind === InvoiceKind.PROFORMA) {
+  // And the packing figures the sheet showed: cartons and weights packed
+  // afterwards must not change a document that has gone out — a proforma or
+  // an invoice alike, since both carry the sheet.
+  {
     frozen.sheet = {
       ...((frozen.sheet as ProformaSheetSettings | null) ?? {}),
       packedAtIssue: Object.fromEntries(shown.orders.map((o) => [o.id, o.packedByStyle ?? null])),

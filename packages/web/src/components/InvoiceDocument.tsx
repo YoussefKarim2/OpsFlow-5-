@@ -55,11 +55,11 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
   // "Total only": one line per style (or order), its pieces, rate and amount. The lines
   // themselves and every total below are the same as the detailed listing.
   const summary = doc.lineLayout === 'SUMMARY' ? summariseGoods(doc.lines, orders) : null;
-  // A proforma carries the factory sheet's details: the shipment block, each
-  // style's PO, part number, HTS code, cartons and share of the container,
-  // the exporter block and the signature — in either listing.
+  // A proforma and an invoice both carry the factory sheet's details: the
+  // shipment block, each style's PO, part number, HTS code, cartons and share
+  // of the container, the exporter block and the signature — in either listing.
   const s = doc.sheet ?? {};
-  const sheet = !isInvoice ? buildSheet(doc.lines, orders, s) : null;
+  const sheet = buildSheet(doc.lines, orders, s);
   const lead = s.leadDays ?? SHEET_DEFAULTS.leadDays;
   const eta = sheetEta(s.etd, lead);
   const dayOf = (d: string | null | undefined) => (d ? fmtDate(`${d.slice(0, 10)}T00:00:00.000Z`) : '');

@@ -1144,8 +1144,8 @@ export const api = {
     update: (id: string, body: InvoiceEditBody) => put<{ data: InvoiceDto }>(`/invoices/${id}`, body),
     rebuild: (id: string) => post<{ data: InvoiceDto }>(`/invoices/${id}/rebuild`),
     /** The document as the factory's Excel proforma: the invoice sheet and a sheet per style, with formulas. */
-    downloadXlsx: (id: string, number: string) =>
-      downloadFile(`/invoices/${id}/export.xlsx`, `${number} Proforma.xlsx`, 'Could not create the Excel file.'),
+    downloadXlsx: (id: string, number: string, kind: InvoiceKind = 'PROFORMA' as InvoiceKind) =>
+      downloadFile(`/invoices/${id}/export.xlsx`, `${number} ${kind === 'INVOICE' ? 'Invoice' : 'Proforma'}.xlsx`, 'Could not create the Excel file.'),
     cartonsFromPacking: (id: string) => post<{ data: InvoiceDto['manifest'] }>(`/invoices/${id}/cartons-from-packing`),
     issue: (id: string) => post<{ data: InvoiceDto }>(`/invoices/${id}/issue`),
     markSent: (id: string) => post<{ data: InvoiceDto }>(`/invoices/${id}/sent`),

@@ -11,7 +11,7 @@
 
 import ExcelJS from 'exceljs';
 import {
-  InvoiceLineKind, SHEET_DEFAULTS, buildSheet, sheetRowKey, styleText, stylesOf,
+  InvoiceKind, InvoiceLineKind, SHEET_DEFAULTS, buildSheet, sheetRowKey, styleText, stylesOf,
   type InvoiceDto, type SheetRow,
 } from '@opsflow/shared';
 import { productLabel, type BuildOrder } from './invoice-service.js';
@@ -123,7 +123,7 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
     c.alignment = { horizontal: 'center' };
     ws.getRow(n).height = 33.75;
   };
-  title(3, s.title?.trim() || `${inv.order.clientName} Proforma invoice No.${inv.number}`);
+  title(3, s.title?.trim() || `${inv.order.clientName} ${inv.kind === InvoiceKind.INVOICE ? 'Invoice' : 'Proforma invoice'} No.${inv.number}`);
   title(4, s.statement ?? SHEET_DEFAULTS.statement);
 
   // ── Shipment block ───────────────────────────────────────────────────────

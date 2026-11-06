@@ -25,7 +25,7 @@ import { useAuth } from '../../lib/auth';
 import { Card, ConfirmDialog, ErrorNote, Field, Num, Spinner, clsx, useToast } from '../../components/ui';
 import { InvoiceDocument } from '../../components/InvoiceDocument';
 import { ComboSelect } from '../../components/ComboSelect';
-import { ExporterEditor, ShipmentEditor, StylesEditor, hasSheetValues, sheetDraftFrom, sheetProblem, sheetSettingsFrom, type SheetDraft } from './SheetEditor';
+import { ExporterEditor, ShipmentEditor, StylesEditor, sheetDraftFrom, sheetProblem, sheetSettingsFrom, type SheetDraft } from './SheetEditor';
 
 interface LineDraft { kind: LineKind; description: string; size: string; quantity: string; unitPrice: string; amount: string }
 /**
@@ -132,9 +132,8 @@ function toBody(d: Draft, inv: InvoiceDto): InvoiceEditBody {
     customerReference: nn(d.customerReference), shipmentRef: nn(d.shipmentRef), shippedOn: d.shippedOn || null,
     coverNote: nn(d.coverNote), terms: nn(d.terms), bankDetails: nn(d.bankDetails), notes: nn(d.notes),
     lineLayout: d.lineLayout,
-    // An invoice with nothing typed in its exporter block keeps no settings
-    // at all, so the customer's next proforma is seeded from a proforma.
-    sheet: inv.kind === 'PROFORMA' ? sheetSettingsFrom(d.sheet) : (hasSheetValues(d.sheet) ? sheetSettingsFrom(d.sheet) : null),
+    // A proforma and an invoice both carry the factory sheet's details.
+    sheet: sheetSettingsFrom(d.sheet),
     updatedAt: inv.updatedAt,
     cartons: !cartonsTyped(inv) ? undefined : d.cartons.map((c) => ({
       cartonNumber: c.cartonNumber.trim(), cartonSize: nn(c.cartonSize), product: c.product.trim(), poNumber: c.poNumber,
@@ -235,7 +234,7 @@ export function InvoicePage() {
     onError: (e) => toast.error(e),
   });
   const rebuild = useMutation({ mutationFn: () => api.invoices.rebuild(id), onSuccess: after('Rebuilt from the order'), onError: (e) => toast.error(e) });
-  const downloadXlsx = useMutation({ mutationFn: () => api.invoices.downloadXlsx(id, inv?.number ?? 'proforma'), onError: (e) => toast.error(e) });
+  const downloadXlsx = useMutation({ mutationFn: () => api.invoices.downloadXlsx(id, inv?.number ?? 'document', inv?.kind), onError: (e) => toast.error(e) });
   const issue = useMutation({ mutationFn: () => api.invoices.issue(id), onSuccess: after('Issued. The document is now the record.'), onError: (e) => toast.error(e) });
   const markSent = useMutation({ mutationFn: () => api.invoices.markSent(id), onSuccess: after('Marked as sent'), onError: (e) => toast.error(e) });
   const voidIt = useMutation({ mutationFn: () => api.invoices.void(id, voidReason), onSuccess: after('Voided. The number is kept for the record.'), onError: (e) => toast.error(e) });
@@ -268,8 +267,7 @@ export function InvoicePage() {
   }] });
   const addLine = (kind: LineKind) => setDraft({ ...draft, lines: [...draft.lines, { kind, description: '', size: '', quantity: '', unitPrice: '', amount: '' }] });
 
-  const isProforma = inv.kind === 'PROFORMA';
-  const sheetRows: SheetRow[] = isProforma ? buildSheet(shown.lines, shown.orders, shown.sheet).rows : [];
+  const sheetRows: SheetRow[] = buildSheet(shown.lines, shown.orders, shown.sheet).rows;
   // A row's rate as its goods lines have it, when they agree; blank when they differ.
   const sheetRates = Object.fromEntries(sheetRows.map((r) => {
     const typed = [...new Set(r.lineIndexes.map((i) => draft.lines[i]?.unitPrice ?? ''))];
@@ -311,12 +309,10 @@ export function InvoicePage() {
               </button>
             </>
           )}
-          {isProforma && (
-            <button className="btn-secondary btn-sm" disabled={dirty || downloadXlsx.isPending} onClick={() => downloadXlsx.mutate()}
-              title={dirty ? 'Save the draft first: the Excel file is made from the saved document' : 'The proforma as Excel: one row per style, and a sheet per style with its colours and sizes, with formulas'}>
-              <FileSpreadsheet className="h-3.5 w-3.5" /> {downloadXlsx.isPending ? 'Preparing…' : 'Excel'}
-            </button>
-          )}
+          <button className="btn-secondary btn-sm" disabled={dirty || downloadXlsx.isPending} onClick={() => downloadXlsx.mutate()}
+            title={dirty ? 'Save the draft first: the Excel file is made from the saved document' : `The ${inv.kind === 'INVOICE' ? 'invoice' : 'proforma'} as Excel: one row per style, and a sheet per style with its colours and sizes, with formulas`}>
+            <FileSpreadsheet className="h-3.5 w-3.5" /> {downloadXlsx.isPending ? 'Preparing…' : 'Excel'}
+          </button>
           <button className="btn-secondary btn-sm" onClick={print} title="Opens the browser's print dialog — choose “Save as PDF” there">
             <Printer className="h-3.5 w-3.5" /> Print / PDF
           </button>
@@ -406,8 +402,8 @@ export function InvoicePage() {
                 </div>
                 <p className="text-2xs text-ink-500">
                   {draft.lineLayout === 'SUMMARY'
-                    ? `One line per style (per order when it is a single style): total pieces, rate and amount, without colours or sizes.${isProforma ? ' Each line carries its PO, part no., HTS code, cartons and share of the container.' : ' The lines below and the totals are unchanged.'}`
-                    : `Every colour with its sizes, pieces, rate and amount${isProforma ? ', under a heading for its style with PO, part no., HTS code and cartons.' : '.'}`}
+                    ? 'One line per style (per order when it is a single style): total pieces, rate and amount, without colours or sizes. Each line carries its PO, part no., HTS code, cartons and share of the container.'
+                    : 'Every colour with its sizes, pieces, rate and amount, under a heading for its style with PO, part no., HTS code and cartons.'}
                 </p>
               </div>
             </Card>
@@ -439,8 +435,8 @@ export function InvoicePage() {
               </div>
             </Card>
 
-            {isProforma && <ShipmentEditor draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} />}
-            <ExporterEditor draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} defaultTitle={defaultSheetTitle(inv.order.clientName, inv.number, shown.date)} letterhead={inv.seller} wording={isProforma} />
+            <ShipmentEditor draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} />
+            <ExporterEditor draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} defaultTitle={defaultSheetTitle(inv.order.clientName, inv.number, shown.date, inv.kind)} letterhead={inv.seller} wording />
 
             <Card>
               <div className="card-header"><h3 className="card-title">Text</h3></div>
@@ -452,9 +448,7 @@ export function InvoicePage() {
               </div>
             </Card>
             <div className="md:col-span-2 xl:col-span-3">
-            {isProforma && (
-              <StylesEditor draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} rows={sheetRows} rates={sheetRates} onRate={setSheetRate} />
-            )}
+            <StylesEditor draft={draft.sheet} onChange={(sheet) => set('sheet', sheet)} rows={sheetRows} rates={sheetRates} onRate={setSheetRate} />
 
             </div>
             <div className="md:col-span-2 xl:col-span-3">

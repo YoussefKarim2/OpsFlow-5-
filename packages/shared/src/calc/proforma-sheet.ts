@@ -256,9 +256,9 @@ export function buildSheet(
 
 /** The sheet's title when none is typed: "Xara Proforma invoice No.PI-2026-0001 on 21 Oct. 26". */
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-export function defaultSheetTitle(clientName: string, number: string, dateIso: string): string {
+export function defaultSheetTitle(clientName: string, number: string, dateIso: string, kind: 'PROFORMA' | 'INVOICE' = 'PROFORMA'): string {
   const d = new Date(dateIso);
   const month = Number.isNaN(d.getTime()) ? '' : MONTHS[d.getUTCMonth()]!;
   const on = Number.isNaN(d.getTime()) ? '' : ` on ${d.getUTCDate()} ${month}${month === 'May' ? '' : '.'} ${String(d.getUTCFullYear()).slice(2)}`;
-  return `${clientName ? `${clientName} ` : ''}Proforma invoice No.${number}${on}`;
+  return `${clientName ? `${clientName} ` : ''}${kind === 'INVOICE' ? 'Invoice' : 'Proforma invoice'} No.${number}${on}`;
 }
