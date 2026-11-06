@@ -12,6 +12,12 @@ import { applyRowEdit, rowCost, type RowState } from './costing-rows.js';
  * link being broken — a total that stops following its rows is a costing that
  * quietly lies.
  */
+/**
+ * A costing with its C.M known (here typed as $0), so the verdict on profit is
+ * given: an incomplete costing gets none. Leaves every other figure as it was.
+ */
+const CM_KNOWN = { overrides: { cmCostUsd: 0 } };
+
 const BASE: CostingInput = {
   orderQty: 1000, cutQty: 1050, shippedQty: 1000,
   dailyCostUsd: 1867, machineCount: 38,
@@ -71,8 +77,8 @@ describe('one value in, the whole chain moves', () => {
   test('the sell price moves profit and the margin, and nothing else', () => {
     // 100 × $5 over 1,000 pieces is barely half a dollar each, so "cheap" has
     // to be genuinely below that to be a loss.
-    const cheap = computeCosting({ ...BASE, sellPriceUsd: 0.1, lines: [fabric(100, 5)] });
-    const dear = computeCosting({ ...BASE, sellPriceUsd: 20, lines: [fabric(100, 5)] });
+    const cheap = computeCosting({ ...BASE, ...CM_KNOWN, sellPriceUsd: 0.1, lines: [fabric(100, 5)] });
+    const dear = computeCosting({ ...BASE, ...CM_KNOWN, sellPriceUsd: 20, lines: [fabric(100, 5)] });
     assert.equal(cheap.totalCostUsd, dear.totalCostUsd, 'cost does not depend on price');
     assert.equal(cheap.unitActualCostUsd, dear.unitActualCostUsd);
     assert.ok(cheap.profitPerUnitUsd! < dear.profitPerUnitUsd!);
@@ -81,9 +87,9 @@ describe('one value in, the whole chain moves', () => {
   });
 
   test('a loss produces the price that would fix it, and profit withdraws it', () => {
-    const loss = computeCosting({ ...BASE, sellPriceUsd: 0.1, lines: [fabric(100, 5)] });
+    const loss = computeCosting({ ...BASE, ...CM_KNOWN, sellPriceUsd: 0.1, lines: [fabric(100, 5)] });
     assert.ok(Math.abs(loss.targetPriceUsd! - loss.unitActualCostUsd! * 1.2) < 1e-9);
-    const fixed = computeCosting({ ...BASE, sellPriceUsd: loss.targetPriceUsd!, lines: [fabric(100, 5)] });
+    const fixed = computeCosting({ ...BASE, ...CM_KNOWN, sellPriceUsd: loss.targetPriceUsd!, lines: [fabric(100, 5)] });
     assert.equal(fixed.isProfitable, true);
     assert.equal(fixed.targetPriceUsd, null, 'nothing left to fix');
     assert.ok(Math.abs(fixed.profitPct! - 100 / 6) < 1e-6, 'a 20% mark-up is a 16.7% margin');
@@ -179,5 +185,37 @@ describe('what a missing figure says instead of an error code', () => {
     for (const text of Object.values(r.waiting)) {
       assert.doesNotMatch(text!, /NaN|Infinity|#DIV|#VALUE|undefined|null/);
     }
+  });
+});
+
+describe('no verdict on an incomplete costing', () => {
+  test('a missing C.M or an unpriced row withholds "in profit", but keeps the figures', () => {
+    const noCm = computeCosting({ ...BASE, sellPriceUsd: 20, lines: [fabric(100, 5)] });
+    assert.ok(noCm.profitPerUnitUsd != null, 'the figure is still worked out');
+    assert.equal(noCm.isProfitable, null);
+    assert.ok(noCm.incomplete.includes('the cut & make (C.M)'), noCm.incomplete.join('; '));
+
+    const unpriced = computeCosting({
+      ...BASE, ...CM_KNOWN, sellPriceUsd: 20,
+      lines: [fabric(100, 5), { group: 'ACCESSORY', label: 'Label', quantity: null, unit: 'Pcs', unitPriceUsd: 0.1 }],
+    });
+    assert.equal(unpriced.isProfitable, null);
+    assert.deepEqual(unpriced.incomplete, ['1 row of accessories not issued or not priced']);
+
+    const noFabric = computeCosting({ ...BASE, ...CM_KNOWN, sellPriceUsd: 20, lines: [] });
+    assert.deepEqual(noFabric.incomplete, ['the fabric (none on the bill of materials)']);
+  });
+
+  test('a typed total, unit cost or profit is taken as vouched for', () => {
+    const r = computeCosting({ ...BASE, sellPriceUsd: 20, lines: [fabric(100, 5)], overrides: { totalCostUsd: 900 } });
+    assert.deepEqual(r.incomplete, []);
+    assert.equal(r.isProfitable, true);
+  });
+
+  test('a typed daily cost or machine count of 0 is "not entered" and the factory figure is used', () => {
+    const r = computeCosting({ ...BASE, dailyCostUsd: 0, machineCount: 0, defaultDailyCostUsd: 3800, defaultMachineCount: 38 });
+    assert.equal(r.dailyCostUsd, 3800);
+    assert.equal(r.dailyCostSource, 'factory');
+    assert.equal(r.machineCount, 38);
   });
 });

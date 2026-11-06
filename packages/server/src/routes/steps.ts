@@ -47,6 +47,7 @@ import { NotFoundError, BadRequestError, ValidationError, ConflictError, Forbidd
 import { storage } from '../services/storage/index.js';
 import { logActivity } from '../services/activity-service.js';
 import { sanitiseHtml } from '../util/sanitise-html.js';
+import { isPlausibleDate } from '../util/form-input.js';
 import { getOrderSteps, setStepStatus, markStepStarted } from '../services/step-service.js';
 import { refreshCutOrder } from '../services/cut-order.js';
 import { getOrderDetail, refreshOrderCache } from '../services/order-service.js';
@@ -1009,8 +1010,10 @@ async function deriveFor(orderId: string) {
       where: { orderId },
       select: { id: true, category: true, item: true, requiredQty: true, issuedQty: true, unit: true, unitPriceUsd: true },
     }),
+    // A cancelled job was never done, so it is not a cost — the order's own
+    // costing (order-service costingLines) leaves it out the same way.
     prisma.externalOperation.findMany({
-      where: { orderId },
+      where: { orderId, status: { not: 'CANCELLED' } },
       select: { operationType: true, qty: true, unitPriceUsd: true },
     }),
   ]);
@@ -1091,28 +1094,55 @@ stepsRouter.get('/:id/costing', requirePermission('costing:read'), asyncHandler(
 }));
 
 /**
- * Save the figures typed on the Expected costing. The whole map is sent each
- * time; anything that is not a known figure or not a number is dropped.
+ * Save the figures typed on the Planned costing. Anything that is not a known
+ * figure or not a number is dropped.
  */
 stepsRouter.put('/:id/costing/expected', requirePermission('costing:read'), requirePermission('costing:write'), asyncHandler(async (req, res) => {
   const orderId = await resolveOrderId(req.params.id);
-  const body = z.object({ typed: z.record(z.string().max(200), z.union([z.number(), z.null()])) }).parse(req.body ?? {});
-  const typed = sanitiseExpectedTyped(body.typed);
-  if (Object.keys(typed).length > 2000) throw new ValidationError('Too many figures.');
+  const figure = z.union([z.number(), z.null()]);
+  const body = z.object({
+    /** Figures typed or changed since this screen's last save. */
+    set: z.record(z.string().max(200), figure).optional(),
+    /** Figures cleared since this screen's last save. */
+    remove: z.array(z.string().max(200)).max(2000).optional(),
+    /** The whole map, replacing what is stored (older screens). */
+    typed: z.record(z.string().max(200), figure).optional(),
+  }).parse(req.body ?? {});
   const user = currentUser(req);
-  const before = await prisma.order.findUnique({ where: { id: orderId }, select: { expectedCosting: true } });
-  if (!before) throw new NotFoundError('Order');
-  if (JSON.stringify(sanitiseExpectedTyped(before.expectedCosting)) !== JSON.stringify(typed)) {
-    // Raw, so the order's updatedAt does not move: a costing figure is not an
-    // edit of the order's details, and would refuse a save open on that tab.
-    await prisma.$executeRaw`UPDATE "orders" SET "expectedCosting" = ${JSON.stringify(typed)}::jsonb WHERE "id" = ${orderId}`;
+
+  // Only what this screen changed is applied, onto the stored map read under
+  // a row lock: two people typing different prices at once both keep theirs,
+  // where sending the whole map let the later save wipe the other's figures.
+  const result = await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<Array<{ expectedCosting: unknown }>>`SELECT "expectedCosting" FROM "orders" WHERE "id" = ${orderId} FOR UPDATE`;
+    if (rows.length === 0) throw new NotFoundError('Order');
+    const before = sanitiseExpectedTyped(rows[0]!.expectedCosting);
+    let next: Record<string, number>;
+    if (body.typed) {
+      next = sanitiseExpectedTyped(body.typed);
+    } else {
+      next = { ...before };
+      for (const k of body.remove ?? []) delete next[k];
+      for (const k of Object.keys(body.set ?? {})) if (body.set![k] == null) delete next[k];
+      Object.assign(next, sanitiseExpectedTyped(body.set ?? {}));
+    }
+    if (Object.keys(next).length > 2000) throw new ValidationError('Too many figures.');
+    const changed = JSON.stringify(before) !== JSON.stringify(next);
+    if (changed) {
+      // Raw, so the order's updatedAt does not move: a costing figure is not an
+      // edit of the order's details, and would refuse a save open on that tab.
+      await tx.$executeRaw`UPDATE "orders" SET "expectedCosting" = ${JSON.stringify(next)}::jsonb WHERE "id" = ${orderId}`;
+    }
+    return { next, changed };
+  });
+  if (result.changed) {
     await logActivity({
       orderId, actorId: user.id, actorName: user.name,
       action: 'costing.expected', summary: 'Updated the planned costing',
       entityType: 'Order', entityId: orderId,
     });
   }
-  res.json({ typed });
+  res.json({ typed: result.next });
 }));
 
 
@@ -1140,9 +1170,11 @@ stepsRouter.get('/:id/costing/export.pdf', requirePermission('costing:read'), as
 const costLineSchema = z.object({
   group: z.enum(['FABRIC', 'ACCESSORY', 'EXTERNAL', 'LABOUR', 'OTHER']),
   label: z.string().trim().min(1, 'Give the cost a name'),
-  quantity: z.number().nonnegative().max(1e12).optional().nullable(),
+  // Bounded by the columns (Decimal(14,4) and Decimal(14,6)): one past them
+  // failed the whole save in the database, and every autosave after it.
+  quantity: z.number().nonnegative().max(9_999_999_999, 'That quantity is too large').optional().nullable(),
   unit: z.string().trim().min(1).max(40).default('LOT'),
-  unitPriceUsd: z.number().min(-1e12).max(1e12).optional().nullable(),
+  unitPriceUsd: z.number().nonnegative('A price cannot be negative').max(99_999_999, 'That price is too large').optional().nullable(),
   note: z.string().trim().max(2000).optional().nullable(),
   /**
    * Set when this row is an edited copy of a derived one. The derived line it
@@ -1153,7 +1185,8 @@ const costLineSchema = z.object({
 });
 
 const costingSchema = z.object({
-  costingDate: z.string().optional().nullable(),
+  // A real calendar day: "2026-02-31" used to be stored as 3 March.
+  costingDate: z.string().refine((v) => v === '' || isPlausibleDate(v), 'That is not a real date').optional().nullable(),
   dailyCostUsd: z.number().nonnegative().max(99_999_999).optional().nullable(),
   machineCount: z.number().int().nonnegative().max(100_000).optional().nullable(),
   machineDaysUsed: z.number().int().nonnegative().max(1_000_000).optional().nullable(),

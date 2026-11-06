@@ -48,3 +48,20 @@ describe('costing overview totals', () => {
     assert.equal(costingHeadlineReason({}), null);
   });
 });
+
+describe('costing list totals', () => {
+  test('cost and profit are totalled over the same complete orders', () => {
+    const s = summariseCostingOverview([
+      row({ profitPerUnitUsd: 5, profitPct: 50, totalProfitUsd: 500, totalCostUsd: 500, sellPriceUsd: 10, shippedQty: 100, isProfitable: true }),
+      // Unit cost typed on an unshipped order: a profit per unit but no totals.
+      row({ profitPerUnitUsd: 5, profitPct: 50, totalProfitUsd: null, totalCostUsd: 500, sellPriceUsd: 10, shippedQty: null, isProfitable: true }),
+      // A profit from an incomplete costing: not costed.
+      row({ profitPerUnitUsd: 9, profitPct: 90, totalProfitUsd: 900, totalCostUsd: 100, sellPriceUsd: 10, shippedQty: 100, isProfitable: null }),
+    ]);
+    assert.equal(s.totalCostUsd, 500);
+    assert.equal(s.totalProfitUsd, 500);
+    assert.equal(s.costed, 2);
+    assert.equal(s.waiting, 1);
+    assert.equal(s.profitable, 2);
+  });
+});

@@ -20,8 +20,18 @@
 import { useState, type ReactNode } from 'react';
 import { RotateCcw } from 'lucide-react';
 import { fitWidth } from '../lib/fit-width';
-import { editableText, fmtMoney, formatCell, isTypeableNumber, NOT_CALCULATED, type CellKind } from '@opsflow/shared';
+import { editableText, fmtMoney, formatCell, isTypeableFigure, NOT_CALCULATED, typedNumberOrNull, type CellKind } from '@opsflow/shared';
 import { clsx } from './ui';
+
+/**
+ * Whether a figure box should take this keystroke. Thousands commas are taken
+ * ("1,250.00" pastes), read by the same `readTypedNumber` the sheet saves
+ * with. A minus only where the figure may be negative: a stored amount or a
+ * row's consumption, price or cost cannot be, and the server refused the
+ * whole save over one.
+ */
+const typeable = (text: string, nonNegative?: boolean) =>
+  isTypeableFigure(text) && !(nonNegative && text.includes('-'));
 
 /**
  * One row of a figures sheet: the name on the left with a note under it —
@@ -84,7 +94,7 @@ export function CostField({
   const overridden = value.trim() !== '';
   const unknown = !overridden && calculated == null;
   const shown = overridden
-    ? formatCell(kind === 'text' ? value : Number(value), kind, places)
+    ? formatCell(kind === 'text' ? value : typedNumberOrNull(value), kind, places)
     : formatCell(calculated, kind, places);
   const calcText = formatCell(calculated, kind, places);
 
@@ -119,7 +129,7 @@ export function CostField({
             placeholder={unknown ? NOT_CALCULATED : ''}
             onChange={(e) => {
               const next = e.target.value;
-              if (kind !== 'text' && !isTypeableNumber(next)) return;
+              if (kind !== 'text' && !typeable(next)) return;
               onChange(next);
             }}
           />
@@ -172,7 +182,7 @@ export function StoredField({
   const blank = value.trim() === '';
   const display = blank
     ? (fallback?.value ?? '—')
-    : kind === 'money' && Number.isFinite(Number(value)) ? fmtMoney(Number(value)) : value;
+    : kind === 'money' && typedNumberOrNull(value) != null ? fmtMoney(typedNumberOrNull(value)) : value;
   const [note, noteTone] = invalid
     ? [invalid, 'red' as const]
     : blank && fallback
@@ -194,7 +204,8 @@ export function StoredField({
             value={value}
             placeholder={fallback?.value}
             aria-invalid={invalid ? true : undefined}
-            onChange={(e) => { if (isTypeableNumber(e.target.value)) onChange(e.target.value); }}
+            // Every stored figure is a count or an amount: none can be negative.
+            onChange={(e) => { if (typeable(e.target.value, true)) onChange(e.target.value); }}
           />
         )
       ) : (
@@ -229,7 +240,7 @@ export function CostCell({
   const [focused, setFocused] = useState(false);
   const overridden = value.trim() !== '';
   const shown = overridden
-    ? formatCell(kind === 'text' ? value : Number(value), kind, places)
+    ? formatCell(kind === 'text' ? value : typedNumberOrNull(value), kind, places)
     : formatCell(calculated, kind, places);
 
   if (!editing) {
@@ -258,7 +269,7 @@ export function CostCell({
         // A dash, with the words on hover: "Not calculated" does not fit a figure's box.
         placeholder={shown === NOT_CALCULATED ? '—' : ''}
         title={shown === NOT_CALCULATED ? NOT_CALCULATED : undefined}
-        onChange={(e) => { if (isTypeableNumber(e.target.value)) onChange(e.target.value); }}
+        onChange={(e) => { if (typeable(e.target.value)) onChange(e.target.value); }}
       />
       {overridden && (
         <button
@@ -309,11 +320,19 @@ export function TextCell({
  * is shown differently, so nobody has to wonder which number was theirs.
  */
 export function NumberCell({
-  editing, value, onChange, placeholder, display, derived,
+  editing, value, onChange, placeholder, display, derived, nonNegative, fine,
 }: {
   editing: boolean; value: string; onChange: (v: string) => void;
   placeholder?: string; display?: string; derived?: boolean;
+  /** The figure cannot be negative (an amount, a consumption, a price): a minus is not taken. */
+  nonNegative?: boolean;
+  /** Four decimals below 1 when worked out, as a unit price reads at rest ($0.0280, not $0.03). */
+  fine?: boolean;
 }) {
+  const n = typedNumberOrNull(value);
+  const workedOut = derived && value !== ''
+    ? editableText(n, 'number', fine && n != null && Math.abs(n) < 1 ? 4 : 2)
+    : null;
   if (!editing) {
     return (
       <span
@@ -332,11 +351,11 @@ export function NumberCell({
       inputMode="decimal"
       // A figure the row worked out is shown to two decimals, like everything
       // else on the sheet; a figure the person typed is shown as they typed it.
-      value={derived && value !== '' ? editableText(value, 'number', 2) : value}
-      style={fitWidth(derived && value !== '' ? editableText(value, 'number', 2) : value || placeholder || '')}
+      value={workedOut ?? value}
+      style={fitWidth(workedOut ?? (value || placeholder || ''))}
       placeholder={placeholder}
       title={derived ? 'Calculated from the other two figures on this row — type here to set it yourself' : undefined}
-      onChange={(e) => { if (isTypeableNumber(e.target.value)) onChange(e.target.value); }}
+      onChange={(e) => { if (typeable(e.target.value, nonNegative)) onChange(e.target.value); }}
     />
   );
 }

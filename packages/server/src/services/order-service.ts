@@ -347,7 +347,8 @@ function costingLines(order: FullOrder): CostLineInput[] {
       unit: b.unit,
       unitPriceUsd: dec(b.unitPriceUsd),
     })),
-    external: order.externalOperations.map((e) => ({
+    // A cancelled job was never done, so it is not a cost (as in deriveFor).
+    external: order.externalOperations.filter((e) => e.status !== 'CANCELLED').map((e) => ({
       operationType: e.operationType,
       qty: e.qty,
       unitPriceUsd: dec(e.unitPriceUsd),
@@ -358,6 +359,7 @@ function costingLines(order: FullOrder): CostLineInput[] {
     ...derived.map<CostLineInput>((l) => ({
       group: l.group, label: l.label, quantity: l.quantity,
       unit: l.unit, unitPriceUsd: l.unitPriceUsd, sourceRef: l.sourceRef,
+      estimatedQty: l.estimatedQty ?? null,
     })),
     ...manual.map<CostLineInput>((l) => ({
       group: l.group, label: l.label, quantity: dec(l.quantity),

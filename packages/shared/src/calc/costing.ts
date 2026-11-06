@@ -30,6 +30,8 @@ export interface CostLineInput {
   unitPriceUsd: number | null;
   /** `section:grouping` — what the line was derived from, where it was. */
   sourceRef?: string | null;
+  /** What the bill of materials planned, shown beside the actual. Never costed. */
+  estimatedQty?: number | null;
 }
 
 export type CostGroup = 'FABRIC' | 'ACCESSORY' | 'EXTERNAL' | 'LABOUR' | 'OTHER';
@@ -267,7 +269,19 @@ export interface CostingResult {
    * own rule. A 20% mark-up is a 16.7% margin on the new price, not 20%.
    */
   targetPriceUsd: number | null;
+  /**
+   * Null while the costing is incomplete (see `incomplete`): a total missing
+   * its fabric or its C.M is too low, and calling that order "in profit" is
+   * the wrong answer stated with confidence.
+   */
   isProfitable: boolean | null;
+  /**
+   * The parts of the cost not known yet, in words. The figures are still
+   * added up — the factory's sheet sums what it has — but no verdict is given
+   * on profit until this is empty. Empty when a person has typed the total,
+   * the cost per unit or the profit over the calculation.
+   */
+  incomplete: string[];
 }
 
 export function computeCosting(input: CostingInput): CostingResult {
@@ -318,10 +332,14 @@ export function computeCosting(input: CostingInput): CostingResult {
 
   // --- Machine economics -------------------------------------------------
   // The factory's figures: this costing's, else as last entered on any costing.
-  const dailyCostUsd = dailyCostTyped ?? defaultDailyCostUsd;
-  const machineCount = machineCountTyped ?? defaultMachineCount;
-  const dailyCostSource: CostingResult['dailyCostSource'] = dailyCostTyped != null ? 'typed' : dailyCostUsd != null ? 'factory' : null;
-  const machineCountSource: CostingResult['machineCountSource'] = machineCountTyped != null ? 'typed' : machineCount != null ? 'factory' : null;
+  // A typed 0 is "not entered", as a $0 selling price is: a factory that
+  // costs nothing a day would make the C.M $0 and the order look free to sew.
+  const typedDaily = dailyCostTyped != null && dailyCostTyped > 0 ? dailyCostTyped : null;
+  const typedMachines = machineCountTyped != null && machineCountTyped > 0 ? machineCountTyped : null;
+  const dailyCostUsd = typedDaily ?? defaultDailyCostUsd;
+  const machineCount = typedMachines ?? defaultMachineCount;
+  const dailyCostSource: CostingResult['dailyCostSource'] = typedDaily != null ? 'typed' : dailyCostUsd != null ? 'factory' : null;
+  const machineCountSource: CostingResult['machineCountSource'] = typedMachines != null ? 'typed' : machineCount != null ? 'factory' : null;
   // Actual Costing!D16/D17/D18: cost per machine-day, the factory days this
   // order consumed, and pieces cut per factory day.
   const machineCostPerDay = pick('machineCostPerDay', safeDiv(dailyCostUsd, machineCount));
@@ -486,7 +504,25 @@ export function computeCosting(input: CostingInput): CostingResult {
   const totalProfitUsd =
     profitPerUnitUsd != null && shippedQty != null ? profitPerUnitUsd * shippedQty : null;
 
-  const isProfitable = profitPerUnitUsd == null ? null : profitPerUnitUsd > 0;
+  const vouched = overridden.includes('totalCostUsd') || overridden.includes('unitActualCostUsd') || overridden.includes('profitPerUnitUsd');
+  const incomplete: string[] = [];
+  if (!vouched) {
+    const open = (rows: readonly { cost: number | null }[]) => rows.filter((l) => l.cost == null).length;
+    const rowsWord = (n: number) => `${n} row${n === 1 ? '' : 's'}`;
+    if (!overridden.includes('fabricCostUsd')) {
+      if (fabricLines.length === 0) incomplete.push('the fabric (none on the bill of materials)');
+      else if (open(fabricLines) > 0) incomplete.push(`${rowsWord(open(fabricLines))} of fabric not issued or not priced`);
+    }
+    if (!overridden.includes('accessoryCostUsd') && open(accessoryLines) > 0) {
+      incomplete.push(`${rowsWord(open(accessoryLines))} of accessories not issued or not priced`);
+    }
+    const outsideOpen = (sublimationCostUsd == null ? open(sublimationLines) : 0)
+      + (embroideryCostUsd == null ? open(embroideryLines) : 0) + open(otherExternalLines);
+    if (outsideOpen > 0) incomplete.push(`${rowsWord(outsideOpen)} of outside work not priced`);
+    if (open(otherLines) > 0) incomplete.push(`${rowsWord(open(otherLines))} of other costs not priced`);
+    if (cmCostUsd == null) incomplete.push('the cut & make (C.M)');
+  }
+  const isProfitable = profitPerUnitUsd == null || incomplete.length > 0 ? null : profitPerUnitUsd > 0;
   const targetPriceUsd = pick(
     'targetPriceUsd',
     profitPerUnitUsd != null && profitPerUnitUsd <= 0 && unitActualCostUsd != null
@@ -529,8 +565,8 @@ export function computeCosting(input: CostingInput): CostingResult {
   needs('productivityRate', productivityRate, 'Waiting for the target production per day on the Production step');
   if (productivityRate === 0 && waiting.productivityRate == null) waiting.productivityRate = 'Waiting for a productivity rate above zero';
   needs('cmCostUsd', cmCostUsd,
-    noDaily ? `Waiting for ${noDaily}`
-      : noMachines ? `Waiting for ${noMachines}`
+    machineCostPerDay == null && noDaily ? `Waiting for ${noDaily}`
+      : machineCostPerDay == null && noMachines ? `Waiting for ${noMachines}`
       : machineDaysUsed == null ? 'Waiting for the line machines and days in line'
       : productivityRate == null ? 'Waiting for the target production per day on the Production step'
       : productivityRate === 0 ? 'Waiting for a productivity rate above zero'
@@ -605,7 +641,7 @@ export function computeCosting(input: CostingInput): CostingResult {
     embroideryCostUsd: resolvedEmbroidery,
     cmCostUsd, otherCostUsd, totalCostUsd,
     unitActualCostUsd, sellPriceUsd,
-    profitPerUnitUsd, profitPct, totalProfitUsd, targetPriceUsd, isProfitable,
+    profitPerUnitUsd, profitPct, totalProfitUsd, targetPriceUsd, isProfitable, incomplete,
   };
 }
 

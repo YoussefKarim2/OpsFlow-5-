@@ -1018,8 +1018,8 @@ export const api = {
         data: CostingDto | null; derived: CostLineDto[]; removed?: CostLineDto[];
         planned?: CostLineDto[]; expectedTyped?: Record<string, number>;
       }>(`/orders/${orderId}/costing`),
-    saveExpectedCosting: (orderId: string, typed: Record<string, number | null>) =>
-      put<{ typed: Record<string, number> }>(`/orders/${orderId}/costing/expected`, { typed }),
+    saveExpectedCosting: (orderId: string, change: { set: Record<string, number>; remove: string[] }) =>
+      put<{ typed: Record<string, number> }>(`/orders/${orderId}/costing/expected`, change),
     saveCosting: (orderId: string, body: unknown) =>
       put<{ ok: true; derived: number; manual: number; updatedAt: string }>(`/orders/${orderId}/costing`, body),
     downloadCostingPdf: (orderId: string) =>

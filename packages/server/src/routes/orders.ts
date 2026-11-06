@@ -10,6 +10,7 @@ import {
   clearableText, clearableMoney, clearableDate,
 } from '../util/form-input.js';
 import { storage } from '../services/storage/index.js';
+import { refreshFactoryDefaults } from '../services/factory-defaults.js';
 import { authenticate, requirePermission, requireSuperAdmin, currentUser } from '../middleware/auth.js';
 import { asyncHandler } from '../util/async-handler.js';
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from '../errors.js';
@@ -918,6 +919,8 @@ ordersRouter.delete('/:id', requireSuperAdmin, asyncHandler(async (req, res) => 
   for (const f of files) await storage.delete(f.storageKey).catch(() => undefined);
 
   await prisma.order.delete({ where: { id: order.id } });
+  // Its costing may have been where the factory's daily cost came from.
+  await refreshFactoryDefaults().catch(() => undefined);
 
   // Logged against no order, because there is no longer an order to log against
   // — the audit trail has to outlive the thing it describes.

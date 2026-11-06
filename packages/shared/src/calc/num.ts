@@ -43,7 +43,9 @@ export function clamp(value: number, min: number, max: number): number {
 export function round(value: number | null, places = 2): number | null {
   if (value == null || !Number.isFinite(value)) return null;
   const f = 10 ** places;
-  return Math.round((value + Number.EPSILON) * f) / f;
+  // Half away from zero, as the money formatter (Intl) rounds: half-up toward
+  // +∞ showed −1.005 as −1 in an input and −$1.01 beside it.
+  return (Math.sign(value) * Math.round(Math.abs(value) * f + 1e-9)) / f || 0;
 }
 
 /**

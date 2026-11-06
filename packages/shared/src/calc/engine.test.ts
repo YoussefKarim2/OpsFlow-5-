@@ -519,7 +519,7 @@ describe('costing — the #DIV/0! cells become "Not calculated"', () => {
 
   test('a shipped order produces a real unit cost and profit', () => {
     const r = computeCosting({
-      ...base, shippedQty: 1950,
+      ...base, shippedQty: 1950, overrides: { cmCostUsd: 0 },
       lines: [
         { group: 'FABRIC', label: 'Rosetta', quantity: 1194, unit: 'met.', unitPriceUsd: 2.10 },
         { group: 'ACCESSORY', label: 'Poly Bag', quantity: 2084, unit: 'Pcs', unitPriceUsd: 0.25 / 48.5 },
@@ -540,7 +540,7 @@ describe('costing — the #DIV/0! cells become "Not calculated"', () => {
 
   test('target price appears only when the order is loss-making', () => {
     const loss = computeCosting({
-      ...base, shippedQty: 10, sellPriceUsd: 1,
+      ...base, shippedQty: 10, sellPriceUsd: 1, overrides: { cmCostUsd: 0 },
       lines: [{ group: 'FABRIC', label: 'F', quantity: 100, unit: 'm', unitPriceUsd: 5 }],
     });
     assert.equal(loss.isProfitable, false);

@@ -240,11 +240,13 @@ describe('actual costing — the money', () => {
   });
 
   test('"Perfect price" appears only when the order is losing money', () => {
-    const profitable = computeCosting(shipped);
+    // C.M known (typed $0) so the costing is complete and a verdict is given.
+    const complete = { ...shipped, overrides: { cmCostUsd: 0 } };
+    const profitable = computeCosting(complete);
     assert.equal(profitable.isProfitable, true);
     assert.equal(profitable.targetPriceUsd, null);   // the sheet prints "Perfect"
 
-    const loss = computeCosting({ ...shipped, sellPriceUsd: 0.5 });
+    const loss = computeCosting({ ...complete, sellPriceUsd: 0.5 });
     assert.equal(loss.isProfitable, false);
     assert.ok(Math.abs(loss.targetPriceUsd! - loss.unitActualCostUsd! * 1.2) < 1e-9);
   });

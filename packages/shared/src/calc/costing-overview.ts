@@ -39,7 +39,7 @@ export interface CostingOverviewRow {
 
 export interface CostingOverviewSummary {
   orders: number;
-  /** Orders with a profit per unit — the ones the totals are over. */
+  /** Orders with a complete costing and a profit per unit — the ones the totals are over. */
   costed: number;
   waiting: number;
   profitable: number;
@@ -64,11 +64,14 @@ export function costingHeadlineReason(waiting: Partial<Record<string, string>>):
 }
 
 export function summariseCostingOverview(rows: readonly CostingOverviewRow[]): CostingOverviewSummary {
-  const costed = rows.filter((r) => r.profitPerUnitUsd != null);
+  // Costed means a complete costing with a verdict: a profit worked out with
+  // the fabric or the C.M still missing would flatter every total below.
+  const costed = rows.filter((r) => r.profitPerUnitUsd != null && r.isProfitable != null);
   const withTotals = costed.filter((r) => r.totalProfitUsd != null && r.sellPriceUsd != null && r.shippedQty != null);
   const revenue = sum(withTotals.map((r) => r.sellPriceUsd! * r.shippedQty!));
   const profit = withTotals.length > 0 ? sum(withTotals.map((r) => r.totalProfitUsd)) : null;
-  const cost = costed.some((r) => r.totalCostUsd != null) ? sum(costed.map((r) => r.totalCostUsd)) : null;
+  // Over the same orders as the profit, so the two totals can be read together.
+  const cost = withTotals.some((r) => r.totalCostUsd != null) ? sum(withTotals.map((r) => r.totalCostUsd)) : null;
   return {
     orders: rows.length,
     costed: costed.length,

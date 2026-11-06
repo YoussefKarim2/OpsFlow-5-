@@ -116,7 +116,8 @@ const opSchema = z.object({
    */
   qty: z.number().int().nonnegative().default(0),
   unitRate: z.number().nonnegative().optional(),
-  unitPriceUsd: z.number().nonnegative().optional(),
+  // Bounded by the column (Decimal(14,6)).
+  unitPriceUsd: z.number().nonnegative().max(99_999_999).optional(),
   expectedReturnDate: z.string().optional(),
   colorIds: z.array(z.string()).default([]),
   notes: z.string().optional(),
@@ -255,7 +256,8 @@ const bulkRowSchema = z.object({
   operationSort: z.string().optional(),
   qty: z.number().int().nonnegative().optional(),
   unitRate: z.number().nonnegative().optional(),
-  unitPriceUsd: z.number().nonnegative().optional(),
+  // Bounded by the column (Decimal(14,6)).
+  unitPriceUsd: z.number().nonnegative().max(99_999_999).optional(),
   expectedReturnDate: z.string().nullable().optional(),
   colorIds: z.array(z.string()).optional(),
   notes: z.string().nullable().optional(),

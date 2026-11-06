@@ -878,7 +878,7 @@ model ExternalOperation {
   qty                Int
   /// Per-piece rate, e.g. 0.035 met. of colour area on this order.
   unitRate           Decimal?         @db.Decimal(12, 6)
-  unitPriceUsd       Decimal?         @db.Decimal(12, 4)
+  unitPriceUsd       Decimal?         @db.Decimal(14, 6)
   sentDate           DateTime?
   expectedReturnDate DateTime?
   actualReturnDate   DateTime?

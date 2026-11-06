@@ -29,7 +29,7 @@ export function CostingOverviewPage() {
     const all = data?.rows ?? [];
     const q = search.trim().toLowerCase();
     const filtered = all.filter((r) =>
-      (show === 'all' || (show === 'costed' && r.profitPerUnitUsd != null) || (show === 'waiting' && r.profitPerUnitUsd == null) || (show === 'losing' && r.isProfitable === false))
+      (show === 'all' || (show === 'costed' && r.isProfitable != null) || (show === 'waiting' && r.isProfitable == null) || (show === 'losing' && r.isProfitable === false))
       && (!q || [r.poNumber, r.orderName, r.clientName].some((v) => v.toLowerCase().includes(q))));
     const val = (r: CostingOverviewRow) => r[sort.key];
     return [...filtered].sort((a, b) => {
@@ -65,7 +65,7 @@ export function CostingOverviewPage() {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         <StatTile label="Orders costed" value={<>{s.costed}<span className="text-base font-normal text-ink-400"> / {s.orders}</span></>}
-          sub={s.waiting > 0 ? `${s.waiting} still waiting for a price, a shipment or a cost` : 'Every open order has a figure'} onClick={() => setShow('costed')} />
+          sub={s.waiting > 0 ? `${s.waiting} still waiting for a price, a shipment or a missing cost` : 'Every open order has a figure'} onClick={() => setShow('costed')} />
         <StatTile label="Total profit" tone={s.totalProfitUsd == null ? 'neutral' : s.totalProfitUsd >= 0 ? 'emerald' : 'red'}
           value={<Num value={s.totalProfitUsd} kind="money" places={0} fallback="Not yet" />} sub="Over the costed orders, at the shipped quantity" />
         <StatTile label="Total actual cost" value={<Num value={s.totalCostUsd} kind="money" places={0} fallback="Not yet" />} sub="Fabric, accessories, outside work and cut-and-make" />
@@ -136,7 +136,7 @@ export function CostingOverviewPage() {
                     <td className="td text-right"><Num value={r.totalCostUsd} kind="money" places={0} fallback="—" /></td>
                     <td className="td text-right"><Num value={r.totalProfitUsd} kind="money" places={0} fallback="—" /></td>
                     <td className="td text-xs">
-                      {r.profitPerUnitUsd != null
+                      {r.isProfitable != null
                         ? <span className="text-ink-600">{r.hasRecord ? (r.costingDate ? `Saved ${fmtDate(r.costingDate)}` : 'Saved') : 'Live from the order'}</span>
                         : <span className="italic text-amber-700" title={r.waitingFor ?? undefined}>{r.waitingFor ?? 'Waiting'}</span>}
                     </td>

@@ -34,7 +34,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Check, ChevronDown, Cloud, CloudOff, Download, Lock, Pencil, Plus, Printer, RotateCcw, Trash2 } from 'lucide-react';
 import {
   computeCosting, rowCost, applyRowEdit, sanitiseOverrides, visibleDerivedLines, outsideWorkKind, editableText, sourceRefCovers,
-  bomRefItemId,
+  bomRefItemId, isOverrideKey, isTextOverride, typedNumberOrNull,
   fmtMoney, fmtNumber, fmtPct, formatCell, NOT_CALCULATED,
   type CostLineInput, type CostingResult, type OrderDetailDto,
   type OverrideKey, type RowField,
@@ -102,13 +102,12 @@ type SaveState = 'clean' | 'pending' | 'saving' | 'saved' | 'error' | 'conflict'
 
 const numText = (v: number | null | undefined): string => (v == null ? '' : String(v));
 
-/** Empty means "nobody has said", which is not the same as zero. */
-const asNumber = (s: string): number | null => {
-  const t = s.trim();
-  if (t === '') return null;
-  const n = Number(t);
-  return Number.isFinite(n) ? n : null;
-};
+/**
+ * Empty means "nobody has said", which is not the same as zero. Read the one
+ * way every OpsFlow figure is read (`readTypedNumber`), so "1,250.00" is 1250
+ * in the calculation and in the save alike; an unreadable figure is null.
+ */
+const asNumber = (s: string): number | null => typedNumberOrNull(s);
 
 /**
  * The stored figures that are counts — machines and days — and are kept as
@@ -127,6 +126,85 @@ const asWhole = (s: string): number | null | undefined => {
   if (n == null) return s.trim() === '' ? null : undefined;
   return Number.isInteger(n) && n >= 0 ? n : undefined;
 };
+
+/** The stored amounts, which the server keeps between nothing and this. */
+const MONEY_FIELDS = ['dailyCostUsd', 'sublimationCostUsd', 'embroideryCostUsd', 'externalOpCostUsd'] as const;
+const MAX_AMOUNT = 99_999_999;
+/** The columns a row's consumption and price are stored in. */
+const MAX_QUANTITY = 9_999_999_999;
+/** The bound the server puts on a figure typed over a calculation. */
+const MAX_OVERRIDE = 1e12;
+
+/**
+ * An amount that cannot be negative, as typed: the number, null when blank,
+ * or undefined when it cannot be stored (negative, too large, unreadable).
+ * Undefined is left out of the save, as `asWhole` leaves out a fraction, so
+ * one bad figure no longer fails every save after it.
+ */
+const asAmount = (s: string, max: number): number | null | undefined => {
+  const n = asNumber(s);
+  if (n == null) return s.trim() === '' ? null : undefined;
+  return n >= 0 && n <= max ? n : undefined;
+};
+
+/**
+ * The typed overrides as the engine and the server read them: a figure parsed
+ * the sheet's one way (so "1,250" is 1250, not dropped), identity text as
+ * typed. An override may be negative — a loss typed over the profit is real.
+ */
+function overrideValues(over: Record<string, string>): Record<string, number | string> {
+  const out: Record<string, number | string> = {};
+  for (const [k, v] of Object.entries(over)) {
+    if (!isOverrideKey(k)) continue;
+    if (isTextOverride(k)) { out[k] = v; continue; }
+    const n = asNumber(v);
+    if (n != null && Math.abs(n) <= MAX_OVERRIDE) out[k] = n;
+  }
+  return out;
+}
+
+/**
+ * A row nobody has named yet. The server needs a name for every row, so it is
+ * not sent — and it is kept on screen across re-seeds, left out of the live
+ * total so the total on screen is the one stored, and marked until named.
+ */
+const isUnsent = (r: RowDraft) => !r.derived && r.label.trim() === '';
+
+/**
+ * The server's rows, taken over the draft's without disturbing what is on
+ * screen.
+ *
+ * The server recreates every line on save, with new ids, so its copy came
+ * back with new React keys: the input being typed in was remounted and lost
+ * its focus, and an edited derived row jumped to the end of its section. Each
+ * server row takes the key of the draft row it is (matched by where it came
+ * from, else by section and name), and when every one matched, the draft's
+ * order is kept. Rows not sent — no name yet — are kept, and the derived row
+ * the server re-created in place of an unnamed edited one is not shown beside
+ * it.
+ */
+function adoptRows(prev: RowDraft[], server: RowDraft[]): RowDraft[] {
+  const unsent = prev.filter(isUnsent);
+  const unsentRefs = new Set(unsent.flatMap((r) => (r.sourceRef ? [r.sourceRef] : [])));
+  const incoming = server.filter((r) => r.sourceRef == null || !unsentRefs.has(r.sourceRef));
+  const used = new Set<number>();
+  const take = (match: (r: RowDraft) => boolean): number | undefined => {
+    const i = prev.findIndex((r, j) => !used.has(j) && !isUnsent(r) && match(r));
+    if (i < 0) return undefined;
+    used.add(i);
+    return i;
+  };
+  const placed = incoming.map((s) => {
+    const at = s.sourceRef != null
+      ? take((r) => r.sourceRef === s.sourceRef)
+      : take((r) => r.sourceRef == null && r.group === s.group && r.label.trim() === s.label.trim());
+    return { row: at == null ? s : { ...s, key: prev[at].key }, at };
+  });
+  const kept = unsent.map((r) => ({ row: r, at: prev.indexOf(r) as number | undefined }));
+  const all = [...placed, ...kept];
+  if (all.every((x) => x.at != null)) return all.sort((a, b) => a.at! - b.at!).map((x) => x.row);
+  return all.map((x) => x.row);
+}
 
 function storedFrom(record: CostingDto | null): Stored {
   return {
@@ -249,7 +327,9 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
   // otherwise autosave a blank draft, and the server would replace the notes,
   // the figures and every hand-added row with it.
   const mayWrite = can('costing:read') && can('costing:write');
-  const editable = mayWrite && costing.isSuccess;
+  // On the data, not the query's status: a background refetch that fails
+  // flipped isSuccess off and took the form away mid-edit.
+  const editable = mayWrite && costing.data != null;
   const toast = useToast();
 
   const record = costing.data?.data ?? null;
@@ -294,11 +374,24 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
     order.id, storedFrom(record), overridesFrom(record),
     rowsFrom(record, derivedLines), record?.hiddenCostRefs ?? [], record?.updatedAt ?? null,
   ]);
+  /** The draft as last rendered, for the re-seed below to merge into. */
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const storedRef = useRef(stored);
+  storedRef.current = stored;
+  /** The order whose copy the draft last took; another order's draft is never merged in. */
+  const seededOrderRef = useRef<string | null>(null);
   useEffect(() => {
-    const [, s, o, r, h, version] = JSON.parse(serverState) as
+    const [orderId, s, o, r, h, version] = JSON.parse(serverState) as
       [string, Stored, Record<string, string>, RowDraft[], string[], string | null];
+    const sameOrder = seededOrderRef.current === orderId;
+    // A copy fetched while a save is on its way, or one older than the copy
+    // this draft already holds, is behind what is on screen: adopted, it was
+    // then autosaved over the newer save. The save's own refetch follows.
+    if (sameOrder && inFlightRef.current) return;
+    if (sameOrder && version != null && versionRef.current != null
+      && Date.parse(version) < Date.parse(versionRef.current)) return;
     const fromServer = JSON.stringify([s, o, r, h]);
-    setBaseline(fromServer);
 
     // Take the server's copy when nothing would be lost by it: either nobody
     // is editing, or they are but have typed nothing since the last save
@@ -310,20 +403,27 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
     // the server's spelling the moment the person pauses settles it, and
     // cannot interrupt them, because by definition they have stopped typing.
     const idle = currentRef.current === sentRef.current;
-    if (editingRef.current && !idle) return;
+    if (editingRef.current && !idle) { setBaseline(fromServer); return; }
     // The draft is now the server's copy, so its version is the server's too.
     // Not before: a draft kept over a newer copy must still name the old one,
     // so its save is refused instead of overwriting the newer copy.
     versionRef.current = version;
-    // A count that is not a whole number was never sent, so the server's copy
-    // still holds the old one. Keep what was typed on screen, marked, rather
-    // than silently putting the old figure back under the person's cursor.
-    setStored((prev) => {
-      const next = { ...s };
-      for (const k of WHOLE_FIELDS) if (asWhole(prev[k]) === undefined) next[k] = prev[k];
-      return next;
-    });
-    setOver(o); setRows(r); setHidden(h);
+    seededOrderRef.current = orderId;
+    // A count that is not a whole number, or an amount that cannot be stored,
+    // was never sent, so the server's copy still holds the old one. Keep what
+    // was typed on screen, marked, rather than silently putting the old figure
+    // back under the person's cursor.
+    const nextStored = { ...s };
+    const nextRows = sameOrder ? adoptRows(rowsRef.current, r) : r;
+    if (sameOrder) {
+      const prev = storedRef.current;
+      for (const k of WHOLE_FIELDS) if (asWhole(prev[k]) === undefined) nextStored[k] = prev[k];
+      for (const k of MONEY_FIELDS) if (asAmount(prev[k], MAX_AMOUNT) === undefined) nextStored[k] = prev[k];
+    }
+    // The baseline is the draft as adopted: what was kept on screen because it
+    // could not be sent is not "unsaved", or it would be sent again for ever.
+    setBaseline(JSON.stringify([nextStored, o, nextRows, h]));
+    setStored(nextStored); setOver(o); setRows(nextRows); setHidden(h);
   }, [serverState]);
 
   /** The draft, as one comparable string. Changing it is what "unsaved" means. */
@@ -335,31 +435,31 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
   const save = useMutation({
     mutationFn: () => api.steps.saveCosting(order.id, {
       costingDate: stored.costingDate || null,
-      dailyCostUsd: asNumber(stored.dailyCostUsd),
-      // Undefined — a count that is not a whole number — is dropped from the
-      // request, so the rest of the draft still saves.
+      // Undefined — a count that is not a whole number, an amount below zero
+      // — is dropped from the request, so the rest of the draft still saves.
+      dailyCostUsd: asAmount(stored.dailyCostUsd, MAX_AMOUNT),
       machineCount: asWhole(stored.machineCount),
       lineMachineQty: asWhole(stored.lineMachineQty),
       daysInLine: asWhole(stored.daysInLine),
       machineDaysUsed: asWhole(stored.machineDaysUsed),
-      sublimationCostUsd: asNumber(stored.sublimationCostUsd),
-      embroideryCostUsd: asNumber(stored.embroideryCostUsd),
-      externalOpCostUsd: asNumber(stored.externalOpCostUsd),
+      sublimationCostUsd: asAmount(stored.sublimationCostUsd, MAX_AMOUNT),
+      embroideryCostUsd: asAmount(stored.embroideryCostUsd, MAX_AMOUNT),
+      externalOpCostUsd: asAmount(stored.externalOpCostUsd, MAX_AMOUNT),
       notes: stored.notes || null,
-      overrides: over,
+      overrides: overrideValues(over),
       hiddenCostRefs: hidden,
       expectedUpdatedAt: versionRef.current,
       // Rows the derivation should stop producing: everything somebody has
       // touched or added. A row still marked derived is left to it, so it goes
       // on following the bill of materials.
       manualLines: rows
-        .filter((r) => !r.derived && r.label.trim() !== '')
+        .filter((r) => !r.derived && !isUnsent(r))
         .map((r) => ({
           group: r.group,
           label: r.label.trim(),
-          quantity: asNumber(r.quantity),
+          quantity: asAmount(r.quantity, MAX_QUANTITY),
           unit: r.unit.trim() || 'LOT',
-          unitPriceUsd: asNumber(r.unitPrice),
+          unitPriceUsd: asAmount(r.unitPrice, MAX_AMOUNT),
           sourceRef: r.sourceRef,
         })),
     }),
@@ -448,22 +548,23 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
     hasRecord: c.hasRecord,
     costingDate: stored.costingDate || null,
     notes: stored.notes || null,
-    dailyCostUsd: asNumber(stored.dailyCostUsd),
     // Only what would be saved, so the figures on screen are the ones stored.
+    dailyCostUsd: asAmount(stored.dailyCostUsd, MAX_AMOUNT) ?? null,
     machineCount: asWhole(stored.machineCount) ?? null,
     machineDaysUsed: asWhole(stored.machineDaysUsed) ?? null,
     daysInLine: asWhole(stored.daysInLine) ?? null,
     lineMachineQty: asWhole(stored.lineMachineQty) ?? null,
-    sublimationCostUsd: asNumber(stored.sublimationCostUsd),
-    embroideryCostUsd: asNumber(stored.embroideryCostUsd),
-    externalOpCostUsd: asNumber(stored.externalOpCostUsd),
-    overrides: sanitiseOverrides(over),
-    lines: rows.map<CostLineInput>((r) => ({
+    sublimationCostUsd: asAmount(stored.sublimationCostUsd, MAX_AMOUNT) ?? null,
+    embroideryCostUsd: asAmount(stored.embroideryCostUsd, MAX_AMOUNT) ?? null,
+    externalOpCostUsd: asAmount(stored.externalOpCostUsd, MAX_AMOUNT) ?? null,
+    overrides: sanitiseOverrides(overrideValues(over)),
+    // A row with no name is not saved, so it is not in the total either.
+    lines: rows.filter((r) => !isUnsent(r)).map<CostLineInput>((r) => ({
       group: r.group,
       label: r.label,
-      quantity: asNumber(r.quantity),
+      quantity: r.derived ? asNumber(r.quantity) : asAmount(r.quantity, MAX_QUANTITY) ?? null,
       unit: r.unit,
-      unitPriceUsd: asNumber(r.unitPrice),
+      unitPriceUsd: r.derived ? asNumber(r.unitPrice) : asAmount(r.unitPrice, MAX_AMOUNT) ?? null,
       sourceRef: r.sourceRef,
     })),
   }), [c.source, c.hasRecord, stored, over, rows]);
@@ -530,7 +631,9 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
         fallback={opts.fallback ?? undefined}
         invalid={whole && asWhole(stored[key]) === undefined
           ? 'A whole number — this one is not saved until it is'
-          : undefined}
+          : (MONEY_FIELDS as readonly string[]).includes(key) && asAmount(stored[key], MAX_AMOUNT) === undefined
+            ? 'Not a figure that can be stored — this one is not saved until it is'
+            : undefined}
         onChange={setField(key)}
       />
     );
@@ -629,6 +732,15 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
     r.group === 'EXTERNAL' ? outsideWorkKind({ label: r.label, sourceRef: r.sourceRef }) : null;
   const otherRows = rows.filter((r) =>
     r.group !== 'FABRIC' && r.group !== 'ACCESSORY' && !(r.derived && kindOf(r) != null));
+  /**
+   * Labour and other costs are listed in this section too, so its subtotal
+   * counts them: it was the outside work alone, and the rows under it did not
+   * add up to it.
+   */
+  const hasOther = otherRows.some((r) => r.group === 'OTHER' || r.group === 'LABOUR');
+  const outsideSubtotal = hasOther && live.otherCostUsd != null
+    ? (live.externalCostUsd ?? 0) + live.otherCostUsd
+    : live.externalCostUsd;
 
   /** What a row currently costs, from the same helper the engine uses. */
   const costOf = (r: RowDraft): number | null =>
@@ -664,6 +776,8 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
   // Cost per unit against the sell price, as a bar: the one picture that says
   // "did we make money" without a number being read.
   const costRatio = live.unitActualCostUsd != null && live.sellPriceUsd ? live.unitActualCostUsd / live.sellPriceUsd : null;
+  /** A profit figure exists, but parts of the cost are not known yet, so no verdict is given on it. */
+  const incomplete = live.isProfitable == null && live.profitPerUnitUsd != null && live.incomplete.length > 0;
   const profitTone = live.isProfitable === true ? 'text-emerald-300' : live.isProfitable === false ? 'text-red-300' : 'text-white';
   const identity = [live.identity.customer, live.identity.orderName, live.identity.poNumber && `PO ${live.identity.poNumber}`, live.identity.styleNumber && `Style ${live.identity.styleNumber}`]
     .filter(Boolean).join(' · ');
@@ -755,9 +869,10 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
             'shrink-0 rounded-full px-2.5 py-1 text-2xs font-semibold ring-1 ring-inset',
             live.isProfitable === true && 'bg-emerald-400/15 text-emerald-300 ring-emerald-400/40',
             live.isProfitable === false && 'bg-red-400/15 text-red-300 ring-red-400/40',
-            live.isProfitable == null && 'bg-white/10 text-ink-300 ring-white/20',
+            live.isProfitable == null && incomplete && 'bg-amber-400/15 text-amber-300 ring-amber-400/40',
+            live.isProfitable == null && !incomplete && 'bg-white/10 text-ink-300 ring-white/20',
           )}>
-            {live.isProfitable === true ? 'In profit' : live.isProfitable === false ? 'At a loss' : 'Not calculated yet'}
+            {live.isProfitable === true ? 'In profit' : live.isProfitable === false ? 'At a loss' : incomplete ? 'Incomplete' : 'Not calculated yet'}
           </span>
         </div>
 
@@ -832,7 +947,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
               <>
                 <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/10">
                   <div
-                    className={clsx('h-full rounded-full', costRatio > 1 ? 'bg-red-400' : 'bg-emerald-400')}
+                    className={clsx('h-full rounded-full', live.incomplete.length > 0 ? 'bg-ink-400' : costRatio > 1 ? 'bg-red-400' : 'bg-emerald-400')}
                     style={{ width: `${Math.min(costRatio, 1) * 100}%` }}
                   />
                 </div>
@@ -989,7 +1104,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
                 open={isOpen('fabric')} onToggle={() => toggle('fabric')} share={pctCell(pctOf(liveFabric, total))}
                 subtotal={
                   <CostCell
-                    editing={editing} value={over.fabricCostUsd ?? ''} calculated={live.groups.fabric.total} kind="money"
+                    editing={editing} value={over.fabricCostUsd ?? ''} calculated={calc('fabricCostUsd', live.groups.fabric.total)} kind="money"
                     className="font-semibold" onChange={setOverride('fabricCostUsd')} onRevert={revert('fabricCostUsd')}
                   />
                 }
@@ -1006,7 +1121,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
                 open={isOpen('accessory')} onToggle={() => toggle('accessory')} share={pctCell(pctOf(liveAccessory, total))}
                 subtotal={
                   <CostCell
-                    editing={editing} value={over.accessoryCostUsd ?? ''} calculated={live.groups.accessory.total} kind="money"
+                    editing={editing} value={over.accessoryCostUsd ?? ''} calculated={calc('accessoryCostUsd', live.groups.accessory.total)} kind="money"
                     className="font-semibold" onChange={setOverride('accessoryCostUsd')} onRevert={revert('accessoryCostUsd')}
                   />
                 }
@@ -1019,9 +1134,9 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
               />
 
               <SectionRow
-                cols={cols} swatch="bg-ink-300" title="Outside work" note="External Order section" count={2 + otherRows.length}
-                open={isOpen('external')} onToggle={() => toggle('external')} share={pctCell(pctOf(live.externalCostUsd, total))}
-                subtotal={<span className="tnum font-semibold text-ink-900">{live.externalCostUsd == null ? '—' : fmtMoney(live.externalCostUsd)}</span>}
+                cols={cols} swatch="bg-ink-300" title={hasOther ? 'Outside work & other' : 'Outside work'} note="External Order section" count={2 + otherRows.length}
+                open={isOpen('external')} onToggle={() => toggle('external')} share={pctCell(pctOf(outsideSubtotal, total))}
+                subtotal={<span className="tnum font-semibold text-ink-900">{outsideSubtotal == null ? '—' : fmtMoney(outsideSubtotal)}</span>}
               />
               <OutsideRow
                 label="Sublimation" cost={live.sublimationCostUsd} total={total} editing={editing} hidden={!isOpen('external')}
@@ -1073,7 +1188,7 @@ function CostingSheet({ order, c, onReload }: { order: OrderDetailDto; c: Costin
                 </td>
                 <td className={clsx(TD, 'text-right')}>
                   <CostCell
-                    editing={editing} value={over.cmCostUsd ?? ''} calculated={live.cmCostUsd}
+                    editing={editing} value={over.cmCostUsd ?? ''} calculated={calc('cmCostUsd', live.cmCostUsd)}
                     kind="money" onChange={setOverride('cmCostUsd')} onRevert={revert('cmCostUsd')}
                   />
                 </td>
@@ -1231,7 +1346,7 @@ function HeroStat({
 }) {
   const overridden = value.trim() !== '';
   const unknown = !overridden && calculated == null;
-  const shown = overridden ? formatCell(Number(value), kind) : formatCell(calculated, kind);
+  const shown = overridden ? formatCell(asNumber(value), kind) : formatCell(calculated, kind);
   const under = overridden
     ? <span className="text-violet-300">typed · calculated {formatCell(calculated, kind)}</span>
     : unknown && waiting ? <span className="text-amber-300">{waiting}</span>
@@ -1402,6 +1517,7 @@ function EditableRow({
           onChange={(v) => onEdit(row.key, { label: v })}
         />
         {!editing && edited && <span className="ml-2 text-2xs text-violet-600">edited</span>}
+        {isUnsent(row) && <span className="block text-2xs text-red-600">Name this row to save it</span>}
       </td>
       <td className={clsx(TD, 'tnum text-right text-2xs text-ink-400')}>
         {row.estimatedQty == null ? '—' : fmtNumber(row.estimatedQty, { places: 2 })}
@@ -1409,8 +1525,8 @@ function EditableRow({
       <td className={clsx(TD, 'text-right')}>
         <NumberCell
           editing={editing} value={row.quantity}
-          derived={row.derivedField === 'quantity'}
-          display={row.quantity === '' ? '—' : fmtNumber(Number(row.quantity), { places: 2 })}
+          derived={row.derivedField === 'quantity'} nonNegative
+          display={row.quantity === '' ? '—' : fmtNumber(asNumber(row.quantity), { places: 2 })}
           onChange={(v) => onEditNumber(row.key, 'quantity', v)}
         />
       </td>
@@ -1423,15 +1539,15 @@ function EditableRow({
       <td className={clsx(TD, 'text-right')}>
         <NumberCell
           editing={editing} value={row.unitPrice}
-          derived={row.derivedField === 'unitPrice'}
-          display={row.unitPrice === '' ? '—' : perPiece(Number(row.unitPrice))}
+          derived={row.derivedField === 'unitPrice'} nonNegative fine
+          display={asNumber(row.unitPrice) == null ? '—' : perPiece(asNumber(row.unitPrice)!)}
           onChange={(v) => onEditNumber(row.key, 'unitPrice', v)}
         />
       </td>
       <td className={clsx(TD, 'text-right')}>
         <NumberCell
           editing={editing} value={row.cost}
-          derived={row.derivedField === 'cost'}
+          derived={row.derivedField === 'cost'} nonNegative
           display={cost == null ? '—' : fmtMoney(cost)}
           onChange={(v) => onEditNumber(row.key, 'cost', v)}
         />
@@ -1497,7 +1613,7 @@ function OutsideRow({
       <td className={TD} colSpan={4} />
       <td className={clsx(TD, 'text-right')}>
         <NumberCell
-          editing={editing} value={value}
+          editing={editing} value={value} nonNegative
           display={cost == null ? '—' : fmtMoney(cost)}
           placeholder={cost == null ? '' : editableText(cost, 'money')}
           onChange={onChange}
@@ -1525,14 +1641,31 @@ function MissingNotes({ live }: { live: CostingResult }) {
     .map((k) => live.waiting[k])
     .filter((m): m is string => !!m && !seen.has(m) && (seen.add(m), true));
 
-  if (missing.length === 0) return null;
+  // A profit figure with parts of the cost unknown: the engine gives no
+  // verdict on it, and this says why.
+  const incomplete = live.isProfitable == null && live.profitPerUnitUsd != null ? live.incomplete : [];
+
+  if (missing.length === 0 && incomplete.length === 0) return null;
   return (
-    <div className="no-print flex flex-wrap items-baseline gap-x-2 gap-y-1 border-t border-white/10 bg-white/[0.03] px-5 py-3 text-xs text-ink-300">
-      <span className="font-medium text-amber-300">Not calculated yet.</span>
-      <span>Record what is missing, or type the figure straight into its field:</span>
-      {missing.map((m) => (
-        <span key={m} className="rounded bg-white/10 px-1.5 py-0.5 text-2xs text-amber-100">{m}</span>
-      ))}
+    <div className="no-print space-y-1.5 border-t border-white/10 bg-white/[0.03] px-5 py-3 text-xs text-ink-300">
+      {missing.length > 0 && (
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="font-medium text-amber-300">Not calculated yet.</span>
+          <span>Record what is missing, or type the figure straight into its field:</span>
+          {missing.map((m) => (
+            <span key={m} className="rounded bg-white/10 px-1.5 py-0.5 text-2xs text-amber-100">{m}</span>
+          ))}
+        </div>
+      )}
+      {incomplete.length > 0 && (
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="font-medium text-amber-300">Not complete yet:</span>
+          {incomplete.map((m) => (
+            <span key={m} className="rounded bg-white/10 px-1.5 py-0.5 text-2xs text-amber-100">{m}</span>
+          ))}
+          <span>— no verdict on the profit until these are in.</span>
+        </div>
+      )}
     </div>
   );
 }

@@ -371,7 +371,7 @@ class Layout {
     this.tableRow({
       section,
       item: l.label,
-      planned: DASH,
+      planned: l.estimatedQty == null ? DASH : fmtNumber(l.estimatedQty, { places: 2 }),
       actual: l.quantity == null ? DASH : fmtNumber(l.quantity, { places: 2 }),
       unit: l.unit,
       price: l.unitPriceUsd == null ? DASH : perUnit(l.unitPriceUsd),
@@ -405,6 +405,11 @@ class Layout {
     const share = (v: number | null) => (v == null || total == null || total === 0 ? null : (v / total) * 100);
     this.tableRow({ section: 'Outside work', item: 'Sublimation', cost: money(c.sublimationCostUsd), pct: pct(share(c.sublimationCostUsd)) });
     this.tableRow({ item: 'Embroidery', cost: money(c.embroideryCostUsd), pct: pct(share(c.embroideryCostUsd)) });
+    // Typed on the sheet and counted in the total, so it is printed too —
+    // otherwise the total exceeds the rows above it with nothing to say why.
+    if (c.source.externalOpCostUsd != null) {
+      this.tableRow({ item: 'Other outside work', cost: money(c.source.externalOpCostUsd), pct: pct(share(c.source.externalOpCostUsd)) });
+    }
     for (const l of c.groups.external.lines) this.lineRow('', l);
     for (const l of c.groups.other.lines) this.lineRow('', l);
 
@@ -441,7 +446,10 @@ class Layout {
       .fillAndStroke(tone?.bg ?? INK[50], tone?.line ?? INK[200]).restore();
 
     // The verdict, top right, as the screen's pill.
-    const verdict = c.isProfitable === true ? 'IN PROFIT' : c.isProfitable === false ? 'AT A LOSS' : 'NOT CALCULABLE YET';
+    // A profit from an incomplete costing is not a result: no verdict, and the
+    // footnote says what is missing.
+    const verdict = c.isProfitable === true ? 'IN PROFIT' : c.isProfitable === false ? 'AT A LOSS'
+      : c.profitPerUnitUsd != null && c.incomplete.length > 0 ? 'INCOMPLETE' : 'NOT CALCULABLE YET';
     doc.font(BOLD).fontSize(8).fillColor(tone?.fg ?? INK[500]);
     const vw = doc.widthOfString(verdict) + 16;
     const vx = MARGIN.left + CONTENT_W - 12 - vw;
@@ -527,6 +535,9 @@ class Layout {
       .filter((m): m is string => !!m && !seen.has(m) && (seen.add(m), true));
     if (waiting.length > 0) {
       notes.push(`Figures shown as "${DASH}" are not calculated yet: ${waiting.map((w) => w.replace(/^Waiting for /, '')).join('; ')}.`);
+    }
+    if (c.incomplete.length > 0) {
+      notes.push(`Not complete yet, so no verdict on profit: ${c.incomplete.join('; ')}.`);
     }
 
     if (notes.length === 0) return;

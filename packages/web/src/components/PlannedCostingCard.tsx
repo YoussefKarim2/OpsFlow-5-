@@ -48,21 +48,24 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
   const { can } = useAuth();
   const qc = useQueryClient();
   const costing = useQuery({ queryKey: ['costing', order.id], queryFn: () => api.steps.costing(order.id) });
-  const editable = can('costing:write') && costing.isSuccess;
+  // On the data, not the last fetch's success: a failed background refetch
+  // keeps the data and must not stop the saving mid-edit.
+  const editable = can('costing:write') && costing.data != null;
 
   // What is typed, as typed: a half-written "0." must survive a re-render.
   const [text, setText] = useState<Record<string, string>>({});
   const seededFor = useRef<string | null>(null);
-  const lastSaved = useRef('{}');
+  /** The figures as this screen last saved them (or loaded them). */
+  const savedRef = useRef<Record<string, number>>({});
   const [save, setSave] = useState<'clean' | 'saving' | 'error'>('clean');
 
   useEffect(() => {
-    if (!costing.isSuccess || seededFor.current === order.id) return;
+    if (!costing.data || seededFor.current === order.id) return;
     seededFor.current = order.id;
     const typed = costing.data.expectedTyped ?? {};
-    lastSaved.current = JSON.stringify(typed);
+    savedRef.current = { ...typed };
     setText(Object.fromEntries(Object.entries(typed).map(([k, v]) => [k, String(v)])));
-  }, [costing.isSuccess, costing.data, order.id]);
+  }, [costing.data, order.id]);
 
   const parsed = useMemo(() => {
     const out: Record<string, number> = {};
@@ -85,26 +88,63 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
     typed: parsed,
   }), [c, lines, parsed]);
 
-  // Saved a moment after typing stops. Only the figures the order still lacks
-  // are worth keeping, but a typed one is kept even after the order fills it,
-  // so it comes back if the order's figure is cleared again.
+  // Saving. Only what changed since this screen's last save is sent, and the
+  // server applies it onto the stored figures, so two people typing different
+  // prices both keep theirs. One request at a time; a change made while one is
+  // out goes when it lands. Leaving the page sends whatever is still unsaved.
+  const parsedRef = useRef(parsed);
+  parsedRef.current = parsed;
+  const editableRef = useRef(editable);
+  editableRef.current = editable;
+  const inFlight = useRef(false);
+  const queued = useRef(false);
+
+  const pendingChange = () => {
+    const now = parsedRef.current;
+    const was = savedRef.current;
+    const set: Record<string, number> = {};
+    for (const [k, v] of Object.entries(now)) if (was[k] !== v) set[k] = v;
+    const remove = Object.keys(was).filter((k) => !(k in now));
+    return Object.keys(set).length > 0 || remove.length > 0 ? { set, remove, snapshot: now } : null;
+  };
+
+  const flush = async (): Promise<void> => {
+    if (!editableRef.current || seededFor.current !== order.id) return;
+    const change = pendingChange();
+    if (!change) return;
+    if (inFlight.current) { queued.current = true; return; }
+    inFlight.current = true;
+    setSave('saving');
+    try {
+      const r = await api.steps.saveExpectedCosting(order.id, { set: change.set, remove: change.remove });
+      savedRef.current = { ...change.snapshot };
+      qc.setQueryData<CostingQuery>(['costing', order.id], (old) => (old ? { ...old, expectedTyped: r.typed } : old));
+      setSave('clean');
+    } catch {
+      setSave('error');
+    } finally {
+      inFlight.current = false;
+    }
+    if (queued.current) { queued.current = false; await flush(); }
+  };
+  const flushRef = useRef(flush);
+  flushRef.current = flush;
+
   useEffect(() => {
-    if (!editable || seededFor.current !== order.id) return;
-    const body = JSON.stringify(parsed);
-    if (body === lastSaved.current) return;
-    const t = setTimeout(async () => {
-      setSave('saving');
-      try {
-        const r = await api.steps.saveExpectedCosting(order.id, parsed);
-        lastSaved.current = JSON.stringify(r.typed);
-        qc.setQueryData<CostingQuery>(['costing', order.id], (old) => (old ? { ...old, expectedTyped: r.typed } : old));
-        setSave('clean');
-      } catch {
-        setSave('error');
-      }
-    }, 700);
+    if (!editable || seededFor.current !== order.id || !pendingChange()) return;
+    const t = setTimeout(() => { void flushRef.current(); }, 700);
     return () => clearTimeout(t);
-  }, [parsed, editable, order.id, qc]);
+  }, [parsed, editable, order.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Switching to the actual costing or another tab within the pause still saves.
+  useEffect(() => () => { void flushRef.current(); }, []);
+  useEffect(() => {
+    const warn = (ev: BeforeUnloadEvent) => {
+      if (pendingChange() || inFlight.current) { ev.preventDefault(); ev.returnValue = ''; }
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const type = (key: string) => (v: string) => setText((t) => ({ ...t, [key]: v }));
 
@@ -131,7 +171,7 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
   // somebody opens or closes one, theirs wins.
   const [fold, setFold] = useState<Record<string, boolean>>({});
   const startOpen = useRef<Record<string, boolean> | null>(null);
-  if (startOpen.current == null && costing.isSuccess && seededFor.current === order.id) {
+  if (startOpen.current == null && costing.data != null && seededFor.current === order.id) {
     startOpen.current = Object.fromEntries(groups.map((g) => [g.key, g.rows.some((l) => lineMissing(l) > 0)]));
   }
   const isOpen = (key: string, missing: number) => fold[key] ?? startOpen.current?.[key] ?? missing > 0;
@@ -480,7 +520,12 @@ function GroupRows({
     <>
       <tr className="cursor-pointer bg-ink-50/70 hover:bg-ink-100/60" onClick={onToggle}>
         <td className="td font-semibold text-ink-800" colSpan={4}>
-          <span className="flex items-center gap-2">
+          <button
+            type="button"
+            className="flex items-center gap-2 text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-400 rounded"
+            aria-expanded={open}
+            onClick={(ev) => { ev.stopPropagation(); onToggle(); }}
+          >
             <ChevronDown className={clsx('h-4 w-4 text-ink-400 transition-transform', !open && '-rotate-90')} />
             <span className={clsx('inline-block h-2.5 w-2.5 rounded-sm', swatch)} />
             {title}
@@ -488,7 +533,7 @@ function GroupRows({
             {missing > 0 && (
               <span className="rounded-full bg-amber-100 px-2 py-0.5 text-2xs font-medium text-amber-800">{missing} to fill</span>
             )}
-          </span>
+          </button>
         </td>
         <td className="td tnum text-right font-semibold">{money(total)}</td>
         <td className="td tnum text-right text-ink-500">{price(perPiece)}</td>

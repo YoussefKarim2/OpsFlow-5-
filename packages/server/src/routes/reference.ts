@@ -237,7 +237,10 @@ referenceRouter.get('/costing/overview', requirePermission('costing:read'), asyn
       cmCostUsd: c.cmCostUsd, otherCostUsd: c.otherCostUsd, totalCostUsd: c.totalCostUsd,
       unitActualCostUsd: c.unitActualCostUsd, profitPerUnitUsd: c.profitPerUnitUsd, profitPct: c.profitPct,
       totalProfitUsd: c.totalProfitUsd, isProfitable: c.isProfitable,
-      waitingFor: c.profitPerUnitUsd == null ? costingHeadlineReason(c.waiting) : null,
+      // A profit worked out from an incomplete costing is not a result yet:
+      // the row says what is still missing rather than counting as costed.
+      waitingFor: c.profitPerUnitUsd == null ? costingHeadlineReason(c.waiting)
+        : c.incomplete.length > 0 ? `Not complete: ${c.incomplete.join('; ')}` : null,
     };
   });
   const body: CostingOverviewDto = { summary: summariseCostingOverview(rows), rows };
