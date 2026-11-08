@@ -42,6 +42,11 @@ export interface PoLine {
   unitPrice: number;
   extended: number;
   requestDate: string | null;
+  /**
+   * The quantity split by size, when the item is followed by a row of size
+   * names and a row of numbers under them that add up to its quantity.
+   */
+  sizes?: Record<string, number> | null;
 }
 
 export interface PoHeader {
@@ -347,6 +352,45 @@ function tokensOf(line: PoTextLine): string[] {
   return line.flatMap((c) => c.text.split(/\s+/)).filter(Boolean);
 }
 
+/** Size names as a PO prints them over a row of quantities: two or more, nothing else. */
+const PRINTED_SIZE = /^(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|XXXXL|[2-6]XL|[2-4]XS|OS|ONE\s*SIZE|\d{1,2}[YT]|\d{1,2}-\d{1,2}Y?|YXS|YS|YM|YL|YXL)$/i;
+function sizeRow(tokens: readonly string[]): string[] | null {
+  if (tokens.length < 2 || !tokens.every((t) => PRINTED_SIZE.test(t))) return null;
+  return tokens.map((t) => t.toUpperCase());
+}
+
+interface Columns { line: PoTextLine; cols: Array<{ kind: 'code' | 'description' | 'colour' | 'other'; x: number }> }
+const COLUMN_KIND: Array<[RegExp, Columns['cols'][number]['kind']]> = [
+  [/^(item\s*code|item\s*no\.?|article(\s*(no\.?|code))?|style(\s*(no\.?|code))?|sku|code)$/i, 'code'],
+  [/^(description|item\s*description|product)$/i, 'description'],
+  [/^colou?r$/i, 'colour'],
+];
+/** The heading line of the item table, when it names a colour column and a description. */
+function findColumns(lines: readonly PoTextLine[]): Columns | null {
+  for (const line of lines) {
+    const cols = line.map((c) => ({ kind: COLUMN_KIND.find(([re]) => re.test(c.text.trim()))?.[1] ?? ('other' as const), x: c.x }));
+    if (cols.some((c) => c.kind === 'colour') && cols.some((c) => c.kind === 'description') && cols.length >= 4) {
+      return { line, cols: cols.sort((a, b) => a.x - b.x) };
+    }
+  }
+  return null;
+}
+/** An item line's code, description and colour, by the column each cell sits under. */
+function readByColumns(line: PoTextLine, columns: Columns): { code: string | null; description: string | null; colour: string | null } {
+  const parts: Record<'code' | 'description' | 'colour', string[]> = { code: [], description: [], colour: [] };
+  for (const cell of line) {
+    let col: Columns['cols'][number] | undefined;
+    for (const c of columns.cols) if (c.x <= cell.x + 6) col = c;
+    if (col && col.kind !== 'other') parts[col.kind].push(cell.text.trim());
+  }
+  const code = parts.code.join(' ').trim();
+  return {
+    code: code && /\d/.test(code) && code.length <= 40 ? code : null,
+    description: parts.description.join(' ').trim() || null,
+    colour: parts.colour.join(' ').trim() || null,
+  };
+}
+
 /**
  * Every priced item line, with the short lines beneath it read as its code,
  * colour and size.
@@ -359,9 +403,19 @@ export function readPoLines(lines: readonly PoTextLine[], boilerplate: ReadonlyS
   const out: PoLine[] = [];
   let current: PoLine | null = null;
   let followers = 0;
+  /** Size names read on the line under the current item, waiting for their numbers. */
+  let pendingSizes: string[] | null = null;
+  // The document's own column headings, when it prints them ("Item Code |
+  // Description | Color | … | Pcs | Price | Amount"): a cell under Color is the
+  // colour and a cell under Item Code is the code, rather than both running
+  // into the description with the date.
+  const columns = findColumns(lines);
 
   for (const line of lines) {
     const text = line.map((c) => c.text).join(' ').trim();
+    // The heading line repeats on every page and is skipped as boilerplate;
+    // on a one-page order it is skipped here.
+    if (columns && line === columns.line) continue;
     if (!text || boilerplate.has(boilerplateKey(text))) continue;
     if (TOTAL_LINE.test(text)) { current = null; continue; }
     const tokens = tokensOf(line);
@@ -372,15 +426,17 @@ export function readPoLines(lines: readonly PoTextLine[], boilerplate: ReadonlyS
       const unitTok = tokens.find((t, i) => i > priced.qtyIdx && i < priced.extIdx && UNIT_WORDS.has(t.toUpperCase()));
       const lead = tokens.slice(0, priced.qtyIdx);
       const lineNumber = lead.length > 0 && num(lead[0]!) != null ? lead[0]! : null;
-      const description = lead
+      const byColumn = columns ? readByColumns(line, columns) : null;
+      const description = byColumn?.description ?? lead
         .filter((t, i) => !(i <= 1 && num(t) != null))   // line number and revision
+        .filter((t) => !DATE_RE.test(t))
         .join(' ').trim();
       const dateTok = tokens.slice(priced.extIdx + 1).find((t) => DATE_RE.test(t));
       const date = dateTok ? parseDate(dateTok, dayFirst) : null;
       current = {
         lineNumber,
         description: description || 'Item',
-        itemCode: null, colour: null, size: null,
+        itemCode: byColumn?.code ?? null, colour: byColumn?.colour ?? null, size: null,
         quantity: priced.qty, unit: unitTok ? normaliseUnit(unitTok) : 'PCS',
         unitPrice: priced.price, extended: priced.ext,
         requestDate: date ? date.toISOString().slice(0, 10) : null,
@@ -390,7 +446,24 @@ export function readPoLines(lines: readonly PoTextLine[], boilerplate: ReadonlyS
       if (own.size) { current.size = own.size; }
       out.push(current);
       followers = 0;
+      pendingSizes = null;
       continue;
+    }
+
+    // A row of size names under the item, then the numbers under them: the
+    // item's quantity by size ("XS S M L XL XXL XXXL" / "10 40 80 100 100 60 10").
+    if (current && followers < 4) {
+      const asSizes = sizeRow(tokens);
+      if (asSizes) { pendingSizes = asSizes; followers += 1; continue; }
+      if (pendingSizes && tokens.length === pendingSizes.length && tokens.every((t) => /^\d{1,6}$/.test(t.replace(/,/g, '')))) {
+        const qtys = tokens.map((t) => Number(t.replace(/,/g, '')));
+        if (qtys.reduce((a, b) => a + b, 0) === current.quantity && !current.sizes) {
+          current.sizes = Object.fromEntries(pendingSizes.map((sz, i) => [sz, qtys[i]!]).filter(([, q]) => (q as number) > 0));
+        }
+        pendingSizes = null;
+        followers += 1;
+        continue;
+      }
     }
 
     // A short line under an item is part of it: its code, then its colour and size.
@@ -421,8 +494,8 @@ function normaliseUnit(u: string): string {
 
 // ── Header ──────────────────────────────────────────────────────────────────
 
-const PO_LABELS = ['order number', 'po number', 'po no', 'po no.', 'po #', 'po', 'purchase order', 'purchase order number', 'order no', 'order no.', 'order #', 'p.o. number', 'p.o. no', 'p.o. no.', 'p.o.', 'p.o. #', 'p.o number', 'p.o no'];
-const ORDER_DATE_LABELS = ['ordered', 'order date', 'po date', 'date ordered', 'issue date', 'date of order'];
+const PO_LABELS = ['purchasenr.', 'purchasenr', 'purchase nr.', 'purchase nr', 'purchase no.', 'purchase no', 'purchase number', 'order number', 'po number', 'po no', 'po no.', 'po #', 'po', 'purchase order', 'purchase order number', 'order no', 'order no.', 'order #', 'p.o. number', 'p.o. no', 'p.o. no.', 'p.o.', 'p.o. #', 'p.o number', 'p.o no'];
+const ORDER_DATE_LABELS = ['purchase date', 'ordered', 'order date', 'po date', 'date ordered', 'issue date', 'date of order'];
 const DELIVERY_LABELS = ['requested', 'request date', 'requested delivery', 'delivery date', 'required date', 'due date', 'need by', 'deliver by', 'ship by', 'ex factory', 'ex-factory'];
 const SHIP_TO_LABELS = ['ship to', 'deliver to', 'delivery address', 'consignee', 'ship-to'];
 const SELF = /soccertex|al\s*shimaa|\bAGE\b/i;
@@ -559,7 +632,7 @@ export interface PoOrder {
   /** Things changed while reading, for the import's issues: a dozen turned into pieces. */
   notes: string[];
   /** Colour rows × size columns, for the order's quantity matrix. */
-  matrix: { sizes: string[]; rows: Array<{ color: string; cells: Record<string, number>; total: number }> } | null;
+  matrix: { sizes: string[]; rows: Array<{ color: string; cells: Record<string, number>; total: number; unitPrice?: number }> } | null;
   orderName: string | null;
   styleNumber: string | null;
   /** The single price per piece, or the revenue-weighted average when prices differ. */
@@ -590,17 +663,22 @@ export function poLinesToOrder(input: readonly PoLine[]): PoOrder {
   const styles = [...new Set(lines.map((l) => l.description))];
   const multi = styles.length > 1;
   const byRow = new Map<string, Record<string, number>>();
+  const rowPrices = new Map<string, Set<number>>();
   const sizes = new Set<string>();
   for (const l of lines) {
     const colour = l.colour ?? 'As ordered';
     const row = multi ? `${titleCase(l.description)} — ${colour}` : colour;
-    const size = l.size ?? 'One Size';
-    sizes.add(size);
     const cells = byRow.get(row) ?? {};
-    cells[size] = (cells[size] ?? 0) + l.quantity;
+    const split = l.sizes && Object.keys(l.sizes).length > 0 ? l.sizes : { [l.size ?? 'One Size']: l.quantity };
+    for (const [size, q] of Object.entries(split)) {
+      sizes.add(size);
+      cells[size] = (cells[size] ?? 0) + q;
+    }
     byRow.set(row, cells);
+    rowPrices.set(row, (rowPrices.get(row) ?? new Set()).add(l.unitPrice));
   }
-  const sortedSizes = [...sizes].sort((a, b) => sizeSortKey(a) - sizeSortKey(b));
+  // In wearing order whatever the PO calls them: "S", "Small" and "XXXL" alike.
+  const sortedSizes = orderSizes([...sizes]);
   const totalQty = lines.reduce((a, l) => a + l.quantity, 0);
   const totalValue = Math.round(lines.reduce((a, l) => a + l.extended, 0) * 100) / 100;
   const prices = new Set(lines.map((l) => l.unitPrice));
@@ -609,7 +687,11 @@ export function poLinesToOrder(input: readonly PoLine[]): PoOrder {
     notes,
     matrix: lines.length === 0 ? null : {
       sizes: sortedSizes,
-      rows: [...byRow].map(([color, cells]) => ({ color, cells, total: Object.values(cells).reduce((a, b) => a + b, 0) })),
+      // Each row keeps its own price when its lines agree on one, for the proforma.
+      rows: [...byRow].map(([color, cells]) => {
+        const p = rowPrices.get(color);
+        return { color, cells, total: Object.values(cells).reduce((a, b) => a + b, 0), ...(p && p.size === 1 ? { unitPrice: [...p][0]! } : {}) };
+      }),
     },
     orderName: styles.length === 1 ? titleCase(styles[0]!) : null,
     styleNumber: codes.length === 1 ? codes[0]! : null,

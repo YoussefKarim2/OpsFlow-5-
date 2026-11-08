@@ -262,3 +262,57 @@ describe('sizes shown smallest on the left', () => {
     assert.deepEqual(inWearingOrder(axis(['L', 'S'])).map((s) => [s.name, s.position]), [['S', 0], ['L', 1]]);
   });
 });
+
+// Donkey / Meyba PO 600772 (Senor Sisig club order, 2026-11-08): an item line
+// under "Item Code | Description | Color | Ex Factory date | Pcs | Price |
+// Amount", then a row of size names and a row of quantities under them, then
+// a "TOTAL FOR PRODUCTION" block restating it. "XXL XXXL" arrives as one cell.
+describe('a size row under each item (Donkey PO 600772)', () => {
+  const c = (x: number, text: string) => ({ x, text });
+  const lines = [
+    [c(23, 'Purchasenr.'), c(106, '600772'), c(178, 'Account Payable'), c(261, '17602')],
+    [c(23, 'Purchase Date'), c(106, '13-04-2026'), c(178, 'Vendor Ref.'), c(262, 'Senor Sisig Club order')],
+    [c(23, 'Item Code'), c(90, 'Description'), c(330, 'Color'), c(473, 'Ex Factory date'), c(625, 'Pcs'), c(670, 'Price'), c(778, 'Amount')],
+    [c(23, 'MA261061'), c(90, 'MEYBA x SENOR SISIG Track Jacket - 100% Polyester'), c(330, '158'), c(372, 'White/Grey'), c(495, '13-04-2026'), c(624, '400'), c(670, '25.00'), c(776, '10,000.00')],
+    [c(109, 'XS'), c(141, 'S'), c(167, 'M'), c(197, 'L'), c(221, 'XL'), c(245, 'XXL XXXL')],
+    [c(110, '10'), c(139, '40'), c(167, '80'), c(192, '100'), c(221, '100'), c(252, '60'), c(280, '10')],
+    [c(20, 'TOTAL FOR PRODUCTION')],
+    [c(48, 'MA261061'), c(131, 'MEYBA x SENOR SISIG Track Jacket -'), c(330, '158'), c(372, 'White/Grey'), c(624, '400'), c(704, '10,000.00')],
+    [c(131, '100% Polyester')],
+    [c(119, 'XS'), c(151, 'S'), c(178, 'M'), c(207, 'L'), c(232, 'XL'), c(256, 'XXL'), c(281, 'XXXL')],
+    [c(121, '10'), c(149, '40'), c(177, '80'), c(203, '100'), c(231, '100'), c(262, '60'), c(291, '10')],
+    [c(23, 'MA261062'), c(90, 'MEYBA x SENOR SISIG 26 JERSEY - 100% Polyester'), c(330, '158'), c(372, 'White/Grey'), c(495, '13-04-2026'), c(624, '600'), c(670, '15.00'), c(779, '9,000.00')],
+    [c(109, 'XS'), c(141, 'S'), c(167, 'M'), c(197, 'L'), c(221, 'XL'), c(245, 'XXL XXXL')],
+    [c(110, '15'), c(139, '60'), c(164, '120'), c(192, '150'), c(221, '150'), c(252, '90'), c(280, '15')],
+    [c(20, 'TOTAL FOR PRODUCTION')],
+    [c(48, 'MA261062'), c(131, 'MEYBA x SENOR SISIG 26 JERSEY -'), c(330, '158'), c(372, 'White/Grey'), c(624, '600'), c(707, '9,000.00')],
+    [c(480, 'Total Pieces'), c(619, '1,000')],
+  ];
+
+  test('each item is split by size, named without its code, colour or date', () => {
+    const items = readPoLines(lines, new Set(), true);
+    assert.equal(items.length, 2, 'the TOTAL FOR PRODUCTION restatements are not counted again');
+    assert.deepEqual(items[0]!.sizes, { XS: 10, S: 40, M: 80, L: 100, XL: 100, XXL: 60, XXXL: 10 });
+    assert.equal(items[0]!.description, 'MEYBA x SENOR SISIG Track Jacket - 100% Polyester');
+    assert.equal(items[0]!.colour, '158 White/Grey');
+    assert.equal(items[0]!.itemCode, 'MA261061');
+    assert.deepEqual(items[1]!.sizes, { XS: 15, S: 60, M: 120, L: 150, XL: 150, XXL: 90, XXXL: 15 });
+
+    const order = poLinesToOrder(items);
+    assert.deepEqual(order.matrix!.sizes, ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL']);
+    assert.equal(order.totalQty, 1000);
+    assert.deepEqual(order.matrix!.rows.map((r) => [r.total, r.unitPrice]), [[400, 25], [600, 15]]);
+  });
+
+  test('"Purchasenr." is the PO number and "Purchase Date" the order date', () => {
+    const h = readPoHeader(lines, true);
+    assert.equal(h.poNumber, '600772');
+    assert.equal(h.orderDate?.toISOString().slice(0, 10), '2026-04-13');
+  });
+
+  test('a size row whose numbers do not add up to the item is not used', () => {
+    const off = lines.map((l) => (l[0]!.text === '10' ? [c(110, '11'), ...l.slice(1)] : l));
+    const items = readPoLines(off, new Set(), true);
+    assert.equal(items[0]!.sizes ?? null, null);
+  });
+});

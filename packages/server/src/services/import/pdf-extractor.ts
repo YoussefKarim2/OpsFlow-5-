@@ -1029,7 +1029,7 @@ export async function extractFromPdf(
           + 'so the costing totals are right; each line keeps its own price for the proforma invoice.',
       });
     }
-    const unsized = poLines.filter((l) => !l.size).length;
+    const unsized = poLines.filter((l) => !l.size && !(l.sizes && Object.keys(l.sizes).length > 0)).length;
     if (unsized > 0) {
       issues.push({
         level: 'WARNING', field: null, sheet: null, cell: null,
