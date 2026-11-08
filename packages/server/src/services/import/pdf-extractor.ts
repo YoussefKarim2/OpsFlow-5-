@@ -1222,6 +1222,17 @@ export async function extractFromPdf(
   const lineIndex: Partial<Record<ImportConcept, number>> = {};
   for (const [i, concept] of conceptFor) if (lineIndex[concept] == null) lineIndex[concept] = i;
 
+  // The reading checked against the page: a PO that prints a row of sizes
+  // read into a single size, or a model named after its own sizes or date,
+  // is the reader having misread the layout. Said on the review screen, so a
+  // new layout is caught before it becomes an order (Donkey PO 600772).
+  const orderMatrix = matrices.find((m) => m.ledger === 'ORDER');
+  if (orderMatrix) {
+    for (const message of sizeSanityIssues(gridLines.map((l) => l.cells.map((c) => c.text).join(' ')), orderMatrix)) {
+      issues.push({ level: 'WARNING', field: null, sheet: null, cell: null, message });
+    }
+  }
+
   return {
     ...emptyResult(issues, pages),
     profileKey: 'pdf',
@@ -1252,3 +1263,45 @@ function emptyResult(issues: ImportIssue[], pages: readonly PdfPage[]): Extracti
     matrices: [], lineItems: [], bom: [], lays: [], externalColors: [], costing: {}, issues,
   };
 }
+
+/** A size as a PO prints it over its quantities: XS, S, M, L, XL, XXL, 3XL… */
+const LETTERED_SIZE = /^(X{1,4}S|S|M|L|X{1,4}L|[2-6]X[LS])$/i;
+const DATE_TOKEN = /^\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}$/;
+
+/**
+ * Signs that a reading has the sizes wrong, as sentences for the review
+ * screen: the document prints three or more sizes on one line but every piece
+ * was read into one size, or a row's name carries sizes or a date — the size
+ * row having been read as part of the name.
+ */
+export function sizeSanityIssues(
+  lineTexts: readonly string[],
+  matrix: { sizes: readonly string[]; rows: ReadonlyArray<{ color: string }> },
+): string[] {
+  const out: string[] = [];
+  let printed: string[] = [];
+  for (const text of lineTexts) {
+    const tokens = text.split(/\s+/).filter(Boolean);
+    const sizeTokens = tokens.filter((t) => LETTERED_SIZE.test(t));
+    // A size heading is mostly sizes; a letter-spaced title ("P A C K I N G
+    // L I S T") holds an S, an M and an L among many other letters.
+    if (sizeTokens.length < 0.7 * tokens.length) continue;
+    const found = [...new Set(sizeTokens.map((t) => t.toUpperCase()))];
+    if (found.length > printed.length) printed = found;
+  }
+  if (printed.length >= 3 && matrix.sizes.length <= 1 && matrix.rows.length > 0) {
+    out.push(`The document prints sizes ${printed.join(' ')}, but every piece was read as ${matrix.sizes[0] ? `"${matrix.sizes[0]}"` : 'one size'}. `
+      + 'The sizes are probably misread — check the Main Order grid against the PDF before importing.');
+  }
+  const odd = matrix.rows.map((r) => r.color).filter((name) => {
+    const words = name.split(/\s+/);
+    const sizeRun = words.some((w, i) => LETTERED_SIZE.test(w) && LETTERED_SIZE.test(words[i + 1] ?? '') && LETTERED_SIZE.test(words[i + 2] ?? ''));
+    return sizeRun || words.some((w) => DATE_TOKEN.test(w));
+  });
+  if (odd.length > 0) {
+    out.push(`${odd.length === 1 ? 'A model name contains' : `${odd.length} model names contain`} sizes or a date ("${odd[0]!.slice(0, 80)}"), `
+      + 'so the size row was probably read as part of the name. Check the Main Order grid against the PDF before importing.');
+  }
+  return out;
+}
+

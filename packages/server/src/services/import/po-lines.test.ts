@@ -316,3 +316,26 @@ describe('a size row under each item (Donkey PO 600772)', () => {
     assert.equal(items[0]!.sizes ?? null, null);
   });
 });
+
+describe('the reading checked against the page', () => {
+  test('a PO printing a size row read into one size is flagged', async () => {
+    const { sizeSanityIssues } = await import('./pdf-extractor.js');
+    const lines = ['Item Code Description Color Pcs', 'XS S M L XL XXL XXXL', '10 40 80 100 100 60 10'];
+    const bad = sizeSanityIssues(lines, { sizes: ['3XL'], rows: [{ color: 'MA261061 Track Jacket 13-04-2026 — XS S M L XL XXL' }] });
+    assert.equal(bad.length, 2, bad.join(' | '));
+    assert.match(bad[0]!, /prints sizes XS S M L XL XXL XXXL/);
+    assert.match(bad[1]!, /sizes or a date/);
+    const good = sizeSanityIssues(lines, { sizes: ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL'], rows: [{ color: 'Track Jacket — 158 White/Grey' }] });
+    assert.deepEqual(good, []);
+  });
+
+  test('an ordinary one-size order is not flagged', async () => {
+    const { sizeSanityIssues } = await import('./pdf-extractor.js');
+    assert.deepEqual(sizeSanityIssues(['Bag 100 pcs', 'Size: One Size'], { sizes: ['One Size'], rows: [{ color: 'Navy' }] }), []);
+  });
+});
+
+test('a letter-spaced title is not a size row', async () => {
+  const { sizeSanityIssues } = await import('./pdf-extractor.js');
+  assert.deepEqual(sizeSanityIssues(['P A C K I N G L I S T / M A N I F E S T'], { sizes: ['One Size'], rows: [{ color: 'Cover' }] }), []);
+});
