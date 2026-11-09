@@ -75,6 +75,17 @@ describe('a screenshot of a PO', () => {
     assert.throws(() => packOcrBundle(Buffer.from('GIF89a'), screenshot), /not a PNG, JPEG or WebP/);
   });
 
+  test('a stored picture is served as what its bytes are, never as a type it claims', () => {
+    const magic = Buffer.from('OPSFLOW-OCR1\n', 'latin1');
+    const forge = (mime: string, image: Buffer) => {
+      const json = Buffer.from(JSON.stringify({ mime, passes: screenshot }), 'utf8');
+      return Buffer.concat([magic, Buffer.from(`${json.length}\n`, 'latin1'), json, image]);
+    };
+    assert.throws(() => unpackOcrBundle(forge('text/html', Buffer.from('<script>alert(1)</script>'))), /could not be read back/);
+    assert.throws(() => unpackOcrBundle(forge('text/html', PNG)), /could not be read back/);
+    assert.equal(unpackOcrBundle(forge('image/png', PNG)).mime, 'image/png');
+  });
+
   test('a damaged stored bundle is refused by name', () => {
     const bundle = packOcrBundle(PNG, screenshot);
     assert.throws(() => unpackOcrBundle(bundle.subarray(0, 40)), /could not be read back/);

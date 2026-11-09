@@ -34,7 +34,7 @@ export function isUnsafeUploadName(name: string): boolean {
 }
 
 /** The picture types the order import reads (screenshots), read in the browser first. */
-const PICTURE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const PICTURE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/jpg', 'image/pjpeg', 'image/webp', 'application/octet-stream']);
 
 function makeUpload(pictures: boolean) {
   return multer({

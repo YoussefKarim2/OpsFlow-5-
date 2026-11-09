@@ -980,9 +980,8 @@ export async function extractFromPdf(
     if (gridOrder.pricePerPiece != null) { named.pricePerPieceUsd = gridOrder.pricePerPiece; fields[ImportConcept.UNIT_PRICE] = String(gridOrder.pricePerPiece); }
     if (gridOrder.pricesVary && gridOrder.totalValue != null) {
       issues.push({
-        level: 'WARNING', field: 'pricePerPieceUsd', sheet: null, cell: null,
-        message: `Prices differ by style or colour. The order's price per piece is the average, $${gridOrder.pricePerPiece?.toFixed(4)} `
-          + `(total $${gridOrder.totalValue.toFixed(2)} ÷ ${gridOrder.totalQty} pcs); each line keeps its own price for the proforma invoice.`,
+        level: 'INFO', field: 'pricePerPieceUsd', sheet: null, cell: null,
+        message: `Prices differ by model; each keeps its own. The order shows the average, $${gridOrder.pricePerPiece?.toFixed(2)}.`,
       });
     }
     for (const problem of gridOrder.problems) {
@@ -1028,10 +1027,9 @@ export async function extractFromPdf(
     if (poOrder.pricesVary) {
       const prices = poLines.map((l) => l.unitPrice);
       issues.push({
-        level: 'WARNING', field: 'pricePerPieceUsd', sheet: null, cell: null,
-        message: `Prices differ by line, from $${Math.min(...prices).toFixed(2)} to $${Math.max(...prices).toFixed(2)}. `
-          + `The order's price per piece is the average, $${poOrder.pricePerPiece?.toFixed(4)} (total $${poOrder.totalValue.toFixed(2)} ÷ ${poOrder.totalQty} pcs), `
-          + 'so the costing totals are right; each line keeps its own price for the proforma invoice.',
+        level: 'INFO', field: 'pricePerPieceUsd', sheet: null, cell: null,
+        message: `Prices differ by model ($${Math.min(...prices).toFixed(2)}–$${Math.max(...prices).toFixed(2)}); each keeps its own. `
+          + `The order shows the average, $${poOrder.pricePerPiece?.toFixed(2)}.`,
       });
     }
     const unsized = poLines.filter((l) => !l.size && !(l.sizes && Object.keys(l.sizes).length > 0)).length;

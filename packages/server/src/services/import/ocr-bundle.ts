@@ -31,7 +31,7 @@ export const ocrWordsSchema = z.object({
     /** Where the word's line sits (its baseline), when the engine reports one. */
     baseline: z.number().finite().nullable().optional(),
     conf: z.number().finite().optional(),
-  })).max(60_000),
+  })).max(20_000),
 });
 export type OcrWords = z.infer<typeof ocrWordsSchema>;
 type OcrWord = OcrWords['words'][number];
@@ -76,9 +76,13 @@ export function unpackOcrBundle(buffer: Buffer): { passes: OcrPasses; image: Buf
   let parsed: unknown;
   try { parsed = JSON.parse(buffer.toString('utf8', nl + 1, nl + 1 + len)); } catch { throw bad(); }
   const passes = ocrPassesSchema.safeParse((parsed as { passes?: unknown }).passes);
-  const mime = (parsed as { mime?: unknown }).mime;
-  if (!passes.success || typeof mime !== 'string') throw bad();
-  return { passes: passes.data, image: buffer.subarray(nl + 1 + len), mime };
+  const image = buffer.subarray(nl + 1 + len);
+  // The type is the picture's own, never the stored claim: it is the type the
+  // file is served with from the order, and a claimed "text/html" on bytes
+  // of our choosing would be a web page on OpsFlow's own address.
+  const mime = imageMimeOf(image);
+  if (!passes.success || !mime || (parsed as { mime?: unknown }).mime !== mime) throw bad();
+  return { passes: passes.data, image, mime };
 }
 
 /**
@@ -154,17 +158,26 @@ export function consensusWords(passes: OcrPasses): OcrWords {
   if (passes.length === 1) return first;
   type Cluster = { words: Array<OcrWord & { pass: number }> };
   const clusters: Cluster[] = [];
+  // Words are looked up by the band of the page they sit in, so each is
+  // compared with its neighbours only — not with every word on the page,
+  // which for ten joined screenshots was hundreds of millions of comparisons.
+  const band = Math.max(1, median(passes.flatMap((p) => p.words.map((w) => w.y1 - w.y0)).filter((h) => h > 0)));
+  const bandOf = (w: OcrWord) => Math.floor((w.y0 + w.y1) / 2 / band);
+  const byBand = new Map<number, Cluster[]>();
   passes.forEach((p, pass) => {
     for (const w of p.words) {
       if (!w.text.trim() || !(w.x1 > w.x0 && w.y1 > w.y0)) continue;
       let best: Cluster | null = null; let bestO = 0.45;
-      for (const c of clusters) {
+      const b = bandOf(w);
+      for (const c of [...(byBand.get(b - 1) ?? []), ...(byBand.get(b) ?? []), ...(byBand.get(b + 1) ?? [])]) {
         if (c.words.some((x) => x.pass === pass)) continue;
         const o = overlap(c.words[0]!, w);
         if (o > bestO) { best = c; bestO = o; }
       }
-      if (best) best.words.push({ ...w, pass });
-      else clusters.push({ words: [{ ...w, pass }] });
+      if (best) { best.words.push({ ...w, pass }); continue; }
+      const made: Cluster = { words: [{ ...w, pass }] };
+      clusters.push(made);
+      byBand.set(b, [...(byBand.get(b) ?? []), made]);
     }
   });
 
@@ -184,7 +197,10 @@ export function consensusWords(passes: OcrPasses): OcrWords {
     return { word: { ...box, text: win.text } as OcrWord, seen: c.words.length };
   });
 
-  const kept = chosen.filter((c) => !(c.seen === 1 && chosen.some((o) => o.seen > 1 && covers(c.word, o.word))));
+  const shared = new Map<number, typeof chosen>();
+  for (const c of chosen) if (c.seen > 1) shared.set(bandOf(c.word), [...(shared.get(bandOf(c.word)) ?? []), c]);
+  const near = (w: OcrWord) => [-1, 0, 1].flatMap((d) => shared.get(bandOf(w) + d) ?? []);
+  const kept = chosen.filter((c) => !(c.seen === 1 && near(c.word).some((o) => covers(c.word, o.word))));
   return { width: first.width, height: first.height, words: kept.map((c) => c.word) };
 }
 
@@ -238,4 +254,9 @@ export async function extractFromPicture(
         + 'Check every model, size, quantity and price against the picture before confirming.',
     });
   return best;
+}
+
+function median(xs: number[]): number {
+  const s = [...xs].sort((a, b) => a - b);
+  return s.length === 0 ? 0 : s[Math.floor(s.length / 2)]!;
 }

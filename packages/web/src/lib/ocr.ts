@@ -121,7 +121,15 @@ export async function readPictures(
   }
 
   onProgress({ label: 'Loading the text reader…', fraction: 0 });
-  const { createWorker } = await import('tesseract.js');
+  const unavailable = () => new Error(
+    'The text reader could not be loaded, so the screenshot was not read. Check the internet connection and refresh the page, then try again — or import the PDF or spreadsheet instead.',
+  );
+  let createWorker: typeof import('tesseract.js')['createWorker'];
+  try {
+    ({ createWorker } = await import('tesseract.js'));
+  } catch {
+    throw unavailable();
+  }
   // Each screenshot is read twice; progress runs across all of those readings.
   const steps = files.length * 2;
   let step = 0;
@@ -136,7 +144,7 @@ export async function readPictures(
     logger: (m: { status: string; progress: number }) => {
       if (m.status === 'recognizing text') { current.within = m.progress; report(); }
     },
-  });
+  }).catch(() => { throw unavailable(); });
   try {
     const pictures: OcrPass[][] = [];
     for (const [i, bitmap] of bitmaps.entries()) {

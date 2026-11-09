@@ -707,143 +707,6 @@ function reviewFields(order: Record<string, unknown>): Array<{ field: string; la
   return [...REVIEW_FIELDS, ...found];
 }
 
-const CONFIDENCE: Record<string, { label: string; chip: string }> = {
-  HIGH:   { label: 'High confidence',   chip: 'bg-emerald-50 text-emerald-700 ring-emerald-600/20' },
-  MEDIUM: { label: 'Please confirm',    chip: 'bg-amber-50 text-amber-800 ring-amber-600/20' },
-  LOW:    { label: 'Low confidence',    chip: 'bg-orange-50 text-orange-700 ring-orange-600/20' },
-  NONE:   { label: 'Not found',         chip: 'bg-ink-100 text-ink-500 ring-ink-300/40' },
-};
-
-/**
- * What the importer found, and where it found it.
- *
- * The point of this panel is that the coordinator can check the import against
- * the workbook open on their other screen without guessing: every row names the
- * sheet and the cell. Anything the importer is not sure about is separated out
- * at the top with the question stated, rather than being applied quietly and
- * discovered three weeks later when the order ships on the wrong date.
- */
-function DetectedPanel({
-  result, onField,
-}: {
-  result: ImportAnalysisDto;
-  onField: (field: string, value: string) => void;
-}) {
-  // One row per field: a PDF can name the same field in its header and as a
-  // table column, and two rows with one key confused React's list updates.
-  const mappings = (result.mappings ?? []).filter((m, i, all) => all.findIndex((x) => x.field === m.field) === i);
-  if (mappings.length === 0) return null;
-
-  const uncertain = mappings.filter(
-    (m) => m.resolved && m.confidence !== 'HIGH' && m.sampleValue,
-  );
-  const confident = mappings.filter((m) => m.resolved && m.confidence === 'HIGH');
-  const missing = mappings.filter((m) => !m.resolved);
-
-  return (
-    <>
-      {uncertain.length > 0 && (
-        <Card className="border-amber-300">
-          <CardHeader
-            title="Please confirm these"
-            subtitle="OpsFlow read them, but is not certain. Nothing is guessed silently."
-          />
-          <ul className="divide-y divide-ink-100">
-            {uncertain.map((m) => (
-              <li key={m.field} className="px-4 py-3">
-                <div className="flex flex-wrap items-baseline gap-2">
-                  <span className="text-sm font-medium text-ink-900">{m.label}</span>
-                  <span className={clsx('chip', CONFIDENCE[m.confidence].chip)}>
-                    {CONFIDENCE[m.confidence].label}
-                  </span>
-                  {m.sheet && (
-                    <span className="font-mono text-2xs text-ink-500">
-                      {m.sheet}{m.cell ? ` · ${m.cell}` : ''}
-                    </span>
-                  )}
-                </div>
-                {m.interpretation && (
-                  <p className="mt-0.5 text-xs text-ink-600">{m.interpretation}</p>
-                )}
-
-                {/* An ambiguous date gets both readings as buttons. This is the
-                    03/09 case: third of September, or ninth of March. */}
-                {m.alternative ? (
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <span className="text-xs text-ink-600">Which is right?</span>
-                    <button
-                      className="btn-secondary btn-sm"
-                      onClick={() => onField(m.field, m.sampleValue ?? '')}
-                    >
-                      {m.sampleValue}
-                    </button>
-                    <span className="text-xs text-ink-400">or</span>
-                    <button
-                      className="btn-secondary btn-sm"
-                      onClick={() => onField(m.field, m.alternative!.value)}
-                    >
-                      {m.alternative.value}
-                    </button>
-                    <span className="text-2xs text-ink-400">
-                      ({m.alternative.interpretation})
-                    </span>
-                  </div>
-                ) : (
-                  <p className="mt-1 text-sm font-semibold text-ink-900">{m.sampleValue}</p>
-                )}
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
-
-      <Card>
-        <CardHeader
-          title="What was found, and where"
-          subtitle={`${confident.length} read with confidence${missing.length ? ` · ${missing.length} not in the file` : ''}`}
-        />
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="border-b border-ink-200 bg-ink-50">
-              <tr>
-                <th className="th">Field</th>
-                <th className="th">Value</th>
-                <th className="th">Sheet</th>
-                <th className="th">Cell</th>
-                <th className="th" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-ink-100">
-              {[...confident, ...uncertain, ...missing].map((m) => (
-                <tr key={m.field} className={clsx(!m.resolved && 'bg-ink-50/70')}>
-                  <td className="td text-sm font-medium text-ink-800">
-                    {m.label}
-                    {m.required && <span className="ml-1 text-red-500">*</span>}
-                  </td>
-                  <td className={clsx('td text-sm', m.sampleValue ? 'text-ink-900' : 'italic text-ink-400')}>
-                    {m.sampleValue ?? 'not in the file'}
-                  </td>
-                  <td className="td text-xs text-ink-600">{m.sheet ?? '—'}</td>
-                  <td className="td font-mono text-2xs text-ink-600">{m.cell ?? '—'}</td>
-                  <td className="td">
-                    <span className={clsx('chip', CONFIDENCE[m.confidence].chip)}>
-                      {CONFIDENCE[m.confidence].label}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <p className="border-t border-ink-100 bg-ink-50 px-4 py-2 text-2xs text-ink-500">
-          A field marked <strong>not in the file</strong> was genuinely absent. It is left empty
-          rather than guessed, and can be filled in on the order afterwards.
-        </p>
-      </Card>
-    </>
-  );
-}
-
 function ReviewStep({
   result, fieldOverrides, onField, applying, rows, edited, onRows, onResetRows,
   parts, assign, onSplit, pictureUrl,
@@ -876,6 +739,8 @@ function ReviewStep({
   const liveAssign = Object.fromEntries(Object.entries(assign).filter(([k]) => rows.some((r) => r.key === k)));
   const splitIssue = problem ? null : splitProblem(rows, parts, liveAssign, mainPo, p.sizes);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  // A re-read numbers the rows afresh: a tick would land on another model.
+  useEffect(() => { setSelected(new Set()); }, [result]);
   const toggle = (key: string) => setSelected((cur) => {
     const next = new Set(cur);
     if (next.has(key)) next.delete(key); else next.add(key);
@@ -924,6 +789,10 @@ function ReviewStep({
   // document did not carry is not shown here, and can be filled on the order.
   const value = (field: string) => fieldOverrides[field] ?? String(p.order[field] ?? '');
   const found = reviewFields(p.order as Record<string, unknown>).filter((f) => value(f.field).trim() !== '');
+  // A date the file wrote ambiguously (03/09: March or September?), not yet answered.
+  const dateChoices = (result.mappings ?? [])
+    .filter((m, i, all) => all.findIndex((x) => x.field === m.field) === i)
+    .filter((m) => m.resolved && m.alternative && m.sampleValue && fieldOverrides[m.field] == null);
 
   return (
     <div className="space-y-4">
@@ -941,21 +810,18 @@ function ReviewStep({
 
       {warnings.length > 0 && (
         <Card className="border-amber-300">
-          <CardHeader title="Check before confirming" subtitle="What the reader noticed about this file. Nothing here stops the import." />
+          <CardHeader title="Check before confirming" />
           <ul className="space-y-1.5 px-4 py-3 text-sm text-amber-900">
             {warnings.map((w, i) => <li key={i} className="flex gap-2"><span aria-hidden>•</span><span>{w.message}</span></li>)}
           </ul>
         </Card>
       )}
 
-      <DetectedPanel result={result} onField={onField} />
-
+      {/* The one place the order's details are checked: what will be saved, plus
+          the only real question a file can raise — which reading of a date it meant. */}
       <Card>
-        <CardHeader
-          title="Order details read from the file"
-          subtitle={applying ? 'Re-reading the file…' : 'As they will be saved. Anything the file did not state is left for the order itself.'}
-        />
-        <dl className="grid gap-x-6 gap-y-2 p-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
+        <CardHeader title="Order details" subtitle={applying ? 'Re-reading the file…' : undefined} />
+        <dl className="grid gap-x-6 gap-y-3 p-4 text-sm sm:grid-cols-2 lg:grid-cols-3">
           {found.map((f) => (
             <div key={f.field}>
               <dt className="label">{f.label}</dt>
@@ -963,6 +829,18 @@ function ReviewStep({
             </div>
           ))}
         </dl>
+        {dateChoices.map((m) => (
+          <div key={m.field} className="flex flex-wrap items-center gap-2 border-t border-ink-100 px-4 py-3 text-sm">
+            <span className="font-medium text-ink-900">Which {m.label.toLowerCase()} is right?</span>
+            <button className="btn-secondary btn-sm" disabled={applying} onClick={() => onField(m.field, m.sampleValue ?? '')}>
+              {m.sampleValue}
+            </button>
+            <span className="text-xs text-ink-400">or</span>
+            <button className="btn-secondary btn-sm" disabled={applying} onClick={() => onField(m.field, m.alternative!.value)}>
+              {m.alternative!.value}
+            </button>
+          </div>
+        ))}
       </Card>
 
       {pictureUrl && (
@@ -984,8 +862,8 @@ function ReviewStep({
           <CardHeader
             title="Main Order quantities"
             subtitle={edited
-              ? 'Changed from what the file read. The Cut Order is calculated from this grid.'
-              : 'As read from the file. Remove a model, add one the file did not carry, or tick models to make them a separate order. The Cut Order is calculated from this grid.'}
+              ? 'Changed from the file.'
+              : 'Tick models to make them a separate order.'}
             action={edited ? (
               <button type="button" className="btn-ghost btn-sm" onClick={onResetRows}>
                 <RotateCcw className="h-3.5 w-3.5" /> Back to the file
@@ -1129,7 +1007,7 @@ function ReviewStep({
         <Card className="border-accent-300">
           <CardHeader
             title={`${parts.length + 1} orders will be created`}
-            subtitle="Each is its own order with its own process — cut order, production, packing and invoice. The BOM, lay plan and costing read from the file stay with Order 1."
+            subtitle="Each becomes its own order. A BOM, lay plan or costing from the file stays with Order 1."
           />
           <ul className="divide-y divide-ink-100">
             {[{ id: 0, poNumber: mainPo }, ...parts].map((part, i) => {
@@ -1229,10 +1107,6 @@ function ReviewStep({
           />
           <label htmlFor="reserve" className="text-sm">
             <span className="font-medium text-ink-900">Reserve materials as soon as the order exists</span>
-            <span className="mt-0.5 block text-xs text-ink-500">
-              Commits available stock to this order and reports anything genuinely short. Nothing is
-              issued or consumed — the material stays on the shelf.
-            </span>
           </label>
         </div>
       </Card>

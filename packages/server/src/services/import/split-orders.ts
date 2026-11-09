@@ -128,10 +128,10 @@ export function splitExtraction(extraction: ExtractionResult, splits: readonly S
  * average weighted by pieces — across the whole document. A jacket order
  * split off at $25 kept the document's $19, and its costing said so.
  */
-function ownPrice(extraction: ExtractionResult, rows: ExtractedMatrix['rows']): { pricePerPieceUsd?: number } {
+function ownPrice(_extraction: ExtractionResult, rows: ExtractedMatrix['rows']): { pricePerPieceUsd?: number } {
   if (rows.length === 0 || rows.some((r) => r.unitPrice == null)) return {};
   const pcs = rows.reduce((a, r) => a + piecesOf(r), 0);
-  if (pcs === 0 || typeof extraction.fields.pricePerPieceUsd !== 'number') return {};
+  if (pcs === 0) return {};
   const value = rows.reduce((a, r) => a + piecesOf(r) * r.unitPrice!, 0);
   return { pricePerPieceUsd: Math.round((value / pcs) * 10_000) / 10_000 };
 }

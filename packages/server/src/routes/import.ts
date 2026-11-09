@@ -442,7 +442,13 @@ importRouter.post('/upload', requirePermission('import:run'), upload.single('fil
   if (!req.file) throw new BadRequestError('No file was uploaded.');
   // A screenshot arrives with the words the browser read from it, and the two
   // are stored together so every later read sees the same words.
+  // Only OpsFlow writes the stored picture-and-words form; one arriving from
+  // outside is refused, so what is stored as a picture is always one.
+  if (isOcrBundle(req.file.buffer)) throw new BadRequestError('That file is not a spreadsheet, a PDF or a picture.');
   const picture = imageMimeOf(req.file.buffer);
+  if (!picture && /\.(png|jpe?g|webp)$/i.test(req.file.originalname)) {
+    throw new BadRequestError('That file is named as a picture but is not a PNG, JPEG or WebP image. Take the screenshot again and drop it here.');
+  }
   let stored = req.file.buffer;
   if (picture) {
     stored = packOcrBundle(req.file.buffer, picturePasses(req.body?.ocr));
