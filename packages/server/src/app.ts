@@ -91,6 +91,10 @@ export function createApp() {
     contentSecurityPolicy: {
       useDefaults: true,
       directives: {
+        // 'wasm-unsafe-eval' lets the import page's text recognition (for
+        // screenshots) run its WebAssembly engine, served from /ocr/. It allows
+        // compiling WebAssembly only — not eval() of JavaScript.
+        'script-src': ["'self'", "'wasm-unsafe-eval'"],
         'img-src': ["'self'", 'data:', 'blob:'],
         'media-src': ["'self'", 'blob:'],
         'object-src': ["'self'", 'blob:'],
@@ -186,7 +190,8 @@ export function createApp() {
     app.use(express.static(webDist, {
       index: false,
       setHeaders: (res, filePath) => {
-        if (filePath.includes(`${path.sep}assets${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        // The text-recognition engine's folder is named by its version, so it never changes either.
+        if (filePath.includes(`${path.sep}assets${path.sep}`) || filePath.includes(`${path.sep}ocr${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
         else res.setHeader('Cache-Control', 'no-cache');
       },
     }));

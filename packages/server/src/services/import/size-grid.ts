@@ -73,7 +73,10 @@ export function parseAmount(raw: string): number | null {
     const commas = (t.match(/,/g) ?? []).length;
     t = commas === 1 && decimals !== 3 ? t.replace(',', '.') : t.replace(/,/g, '');
   } else if ((t.match(/\./g) ?? []).length > 1) {
-    t = t.replace(/\./g, ''); // "1.234.567"
+    // "1.234.567" is thousands; "9.000.00" is thousands then a decimal — how
+    // a picture's "9,000.00" often reads back from text recognition.
+    const decimals = t.length - lastDot - 1;
+    t = decimals === 3 ? t.replace(/\./g, '') : t.slice(0, lastDot).replace(/\./g, '') + t.slice(lastDot);
   }
   const n = Number(t);
   return Number.isFinite(n) ? n : null;

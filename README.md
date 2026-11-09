@@ -319,37 +319,25 @@ layer. `.xls` (the pre-2007 binary format) and `.ods` are detected and refused
 with the instruction that fixes them, because a parse error that reads like a
 bug is worse than an explanation.
 
-### OCR for scanned PDFs — measured, not yet installed
+### Screenshots — read in the browser
 
-A scanned or photographed PDF has no text layer. Reading one needs OCR, which is
-a deployment decision rather than a code one, so the numbers were measured
-rather than guessed:
+The order import reads screenshots (.png, .jpg, .webp — dropped, browsed or pasted
+with Ctrl+V, up to ten joined top to bottom). Text recognition (tesseract.js) runs
+**in the browser**, not on the server: one picture peaks at a few hundred
+megabytes, which the API cannot spare and an office computer can.
 
-| | Installed size |
-|---|---|
-| `tesseract.js` | 1.6 MB |
-| `tesseract.js-core` (WASM) | 29 MB |
-| `eng.traineddata` | ~15 MB, **downloaded from a CDN on first use** unless vendored |
-| `@napi-rs/canvas`, if pages must be rasterised | ~26 MB per platform |
+- `web/src/lib/ocr-read.ts` — the procedure: each screenshot is enlarged and read
+  twice (≈2× and at the size that makes words ~24px tall), and garbled cells in
+  rows of numbers are re-read digits-only. `ocr.ts` is the engine around it.
+- The engine's files (≈7 MB, cached after the first use) are copied from
+  `node_modules` into `dist/ocr/<version>/` by `vite.config.ts` and served by
+  OpsFlow itself; the CSP allows `'wasm-unsafe-eval'` for it.
+- The server stores the picture together with the words read
+  (`server/src/services/import/ocr-bundle.ts`) and reads them with the PDF
+  readers, keeping the pass the document's own totals confirm. The review screen
+  shows the picture beside the grid and warns that it was read from a picture.
 
-The recommended shape avoids the canvas entirely: most scanned PDFs are one
-full-page image per page, so the embedded image can be pulled straight out of
-the PDF with the `pdfjs-dist` already installed and handed to Tesseract. That is
-roughly **+46 MB** installed, against ~395 MB today.
-
-Size is not the blocker. Memory is: a 300 DPI A4 page is a ~35 MB raster before
-Tesseract's own working set, and a single OCR job realistically peaks at
-**300–600 MB**. This project deploys on a Railway **trial** plan, where that is
-likely to exhaust the container mid-request and take the API down with it —
-which is a worse outcome than declining to read the file.
-
-So OCR is **not installed**, and the seam for it is marked in
-`pdf-extractor.ts`. It becomes straightforward once the service has headroom;
-the honest prerequisite is a paid plan with a known memory limit, and running
-OCR outside the request path so a large document cannot take the API with it.
-
-Until then a scanned PDF is named as one, with what to do about it, and nothing
-is imported.
+A scanned PDF (no text layer) is still not read: it says so, with what to do.
 
 ## Layout
 

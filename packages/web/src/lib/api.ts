@@ -1222,9 +1222,11 @@ export const api = {
 
   import: {
     profiles: () => get<{ data: unknown[] }>('/import/profiles'),
-    upload: (file: File) => {
+    /** `passes`: for a screenshot, what the browser read from it (lib/ocr.ts). */
+    upload: (file: File, passes?: unknown[]) => {
       const fd = new FormData();
       fd.append('file', file);
+      if (passes) fd.append('ocr', JSON.stringify(passes));
       return request<ImportAnalysisDto>('/import/upload', { method: 'POST', body: fd });
     },
     job: (jobId: string) => get<ImportPreviewDto>(`/import/${jobId}`),
@@ -1242,8 +1244,12 @@ export const api = {
       reserveMaterials?: boolean;
       /** The Main Order grid as corrected on the review screen. */
       matrix?: { sizes: string[]; rows: Array<{ color: string; cells: Record<string, number> }> };
+      /** Models moved into separate orders, each with its own PO number. */
+      splits?: Array<{ poNumber: string; colors: string[] }>;
     }) => post<{
       orderId: string; poNumber: string; order: OrderDetailDto;
+      /** Every order created, the document's own first. */
+      orders: Array<{ orderId: string; poNumber: string }>;
       reservation: {
         reserved: Array<{ materialName: string; qty: number; unit: string }>;
         short: Array<{ materialName: string; shortQty: number; unit: string }>;

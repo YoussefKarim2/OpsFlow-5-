@@ -104,6 +104,11 @@ export function toNum(v: string | undefined): number | null {
     const decimals = t.length - lastComma - 1;
     const commas = (t.match(/,/g) ?? []).length;
     t = commas === 1 && decimals !== 3 ? t.replace(',', '.') : t.replace(/,/g, '');
+  } else if ((t.match(/\./g) ?? []).length > 1) {
+    // Only dots, several of them: thousands ("1.000.000"), or thousands then a
+    // decimal ("9.000.00" — how a picture's "9,000.00" often reads back).
+    const decimals = t.length - lastDot - 1;
+    t = decimals === 3 ? t.replace(/\./g, '') : t.slice(0, lastDot).replace(/\./g, '') + t.slice(lastDot);
   }
   const n = Number(t);
   return Number.isFinite(n) ? n : null;

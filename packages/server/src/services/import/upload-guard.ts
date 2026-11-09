@@ -33,43 +33,64 @@ export function isUnsafeUploadName(name: string): boolean {
   return /[/\\]/.test(name) || name.startsWith('..');
 }
 
-export const workbookUpload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024, files: 1 },
-  fileFilter: (_req, file, cb) => {
-    // multer's callback is an overload pair: cb(error) to reject, or
-    // cb(null, true) to accept. Passing both an error and a flag is invalid.
-    file.originalname = decodeUploadName(file.originalname);
+/** The picture types the order import reads (screenshots), read in the browser first. */
+const PICTURE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 
-    // A filename is attacker-controlled: reject any path separator or traversal
-    // before it can reach a storage key. Traversal is a ".." *segment* — a
-    // leading one, or one before a separator — not two dots anywhere:
-    // "PO..final.xlsx" is a name people really type, and was refused.
-    if (isUnsafeUploadName(file.originalname)) {
-      cb(new BadRequestError('That file name is not allowed.'));
-      return;
-    }
-    // The extension is a first filter only; `detectFileKind` decides from the
-    // bytes once the file is in memory. `.xls` and `.ods` are allowed through
-    // here so they reach that check and get an explanation rather than a flat
-    // "wrong extension" that does not say what to do about it.
-    if (!/\.(xlsx|xlsm|xls|csv|ods|pdf)$/i.test(file.originalname)) {
-      cb(new BadRequestError('Upload a spreadsheet (.xlsx, .xlsm, .csv) or a PDF.'));
-      return;
-    }
-    const isPdf = /\.pdf$/i.test(file.originalname);
-    const allowed = isPdf ? PDF_MIME_TYPES : WORKBOOK_MIME_TYPES;
-    const mime = (file.mimetype ?? '').toLowerCase();
-    if (!allowed.has(mime) && !/^text\//.test(mime)) {
-      cb(new BadRequestError(
-        `"${file.mimetype}" is not a ${isPdf ? 'PDF' : 'spreadsheet'}. ` +
-        'Upload an .xlsx, .xlsm or .pdf file.',
-      ));
-      return;
-    }
-    cb(null, true);
-  },
-});
+function makeUpload(pictures: boolean) {
+  return multer({
+    storage: multer.memoryStorage(),
+    // A picture arrives with the words the browser read from it, as a field:
+    // tens of thousands of words for several joined screenshots.
+    limits: { fileSize: 25 * 1024 * 1024, files: 1, fieldSize: pictures ? 12 * 1024 * 1024 : 1024 * 1024 },
+    fileFilter: (_req, file, cb) => {
+      // multer's callback is an overload pair: cb(error) to reject, or
+      // cb(null, true) to accept. Passing both an error and a flag is invalid.
+      file.originalname = decodeUploadName(file.originalname);
+
+      // A filename is attacker-controlled: reject any path separator or traversal
+      // before it can reach a storage key. Traversal is a ".." *segment* — a
+      // leading one, or one before a separator — not two dots anywhere:
+      // "PO..final.xlsx" is a name people really type, and was refused.
+      if (isUnsafeUploadName(file.originalname)) {
+        cb(new BadRequestError('That file name is not allowed.'));
+        return;
+      }
+      if (pictures && /\.(png|jpe?g|webp)$/i.test(file.originalname)) {
+        if (!PICTURE_MIME_TYPES.has((file.mimetype ?? '').toLowerCase())) {
+          cb(new BadRequestError(`"${file.mimetype}" is not a PNG, JPEG or WebP picture.`));
+          return;
+        }
+        cb(null, true);
+        return;
+      }
+      // The extension is a first filter only; `detectFileKind` decides from the
+      // bytes once the file is in memory. `.xls` and `.ods` are allowed through
+      // here so they reach that check and get an explanation rather than a flat
+      // "wrong extension" that does not say what to do about it.
+      if (!/\.(xlsx|xlsm|xls|csv|ods|pdf)$/i.test(file.originalname)) {
+        cb(new BadRequestError(pictures
+          ? 'Upload a spreadsheet (.xlsx, .xlsm, .csv), a PDF, or a screenshot (.png, .jpg).'
+          : 'Upload a spreadsheet (.xlsx, .xlsm, .csv) or a PDF.'));
+        return;
+      }
+      const isPdf = /\.pdf$/i.test(file.originalname);
+      const allowed = isPdf ? PDF_MIME_TYPES : WORKBOOK_MIME_TYPES;
+      const mime = (file.mimetype ?? '').toLowerCase();
+      if (!allowed.has(mime) && !/^text\//.test(mime)) {
+        cb(new BadRequestError(
+          `"${file.mimetype}" is not a ${isPdf ? 'PDF' : 'spreadsheet'}. ` +
+          'Upload an .xlsx, .xlsm or .pdf file.',
+        ));
+        return;
+      }
+      cb(null, true);
+    },
+  });
+}
+
+export const workbookUpload = makeUpload(false);
+/** The order import: everything above, and screenshots read in the browser. */
+export const orderImportUpload = makeUpload(true);
 
 /**
  * The extension and the declared MIME type are both claims made by the client.

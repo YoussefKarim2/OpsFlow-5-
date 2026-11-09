@@ -12,7 +12,11 @@ import { asyncHandler } from '../util/async-handler.js';
 import { NotFoundError, BadRequestError } from '../errors.js';
 import { extractWorkbook, applyFieldOverrides, type ExtractionResult } from '../services/import/extractor.js';
 import { extractTabular, type TabularAnalysis } from '../services/import/tabular-extractor.js';
-import { axisKey, commitImport, mergeMatrixAxes } from '../services/import/committer.js';
+import { axisKey, commitImports, mergeMatrixAxes } from '../services/import/committer.js';
+import { splitExtraction, MAX_SPLITS } from '../services/import/split-orders.js';
+import {
+  extractFromPicture, imageMimeOf, isOcrBundle, ocrPassesSchema, packOcrBundle, unpackOcrBundle,
+} from '../services/import/ocr-bundle.js';
 import { normalisePoNumber } from '../services/rules.js';
 import { announceChange } from '../services/change-service.js';
 import { PROFILES } from '../services/import/profiles.js';
@@ -20,7 +24,7 @@ import { storage } from '../services/storage/index.js';
 import { refreshOrderCache } from '../services/order-service.js';
 import { orderDetailFor } from './orders.js';
 import { reserveOrderMaterials } from '../services/inventory-service.js';
-import { workbookUpload as upload } from '../services/import/upload-guard.js';
+import { orderImportUpload as upload } from '../services/import/upload-guard.js';
 import { detectFileKind } from '../services/import/file-kind.js';
 import { logActivity } from '../services/activity-service.js';
 import { extractFromPdf } from '../services/import/pdf-extractor.js';
@@ -150,6 +154,15 @@ async function readDocument(
   // one: "Apply changes" on a PDF or a recognised workbook used to change
   // nothing on the preview, while the commit applied them anyway — so what was
   // approved and what was written were not the same order.
+  // A screenshot, stored with the words the browser read from it. Read by the
+  // PDF readers from those words (services/import/ocr-bundle.ts).
+  if (isOcrBundle(buffer)) {
+    const picture = await extractFromPicture(buffer, {
+      placeholderPoNumber: options.job ? placeholderPoFor(options.job) : undefined,
+    });
+    applyFieldOverrides(picture, options.fieldOverrides);
+    return picture;
+  }
   const kind = detectFileKind(buffer);
   if (kind === 'pdf') {
     const pdf = await extractFromPdf(buffer, {
@@ -331,6 +344,9 @@ function toResponse(result: ExtractionResult & { analysis?: TabularAnalysis }) {
  * a PDF in its viewer rather than download it.
  */
 export function mimeForImport(buffer: Buffer, fileName: string): string {
+  if (isOcrBundle(buffer)) return unpackOcrBundle(buffer).mime;
+  const picture = imageMimeOf(buffer);
+  if (picture) return picture;
   switch (detectFileKind(buffer, fileName)) {
     case 'pdf': return 'application/pdf';
     case 'csv': return 'text/csv';
@@ -359,6 +375,8 @@ async function attachImportedDocument(
   orderId: string, job: { fileName: string }, buffer: Buffer, actor: { id: string; name: string },
 ): Promise<void> {
   try {
+    // A screenshot is filed as the picture itself, not with the words read from it.
+    if (isOcrBundle(buffer)) buffer = unpackOcrBundle(buffer).image;
     const mimeType = mimeForImport(buffer, job.fileName);
     const storageKey = await storage.put(buffer, {
       fileName: job.fileName, mimeType, prefix: `orders/${orderId}`,
@@ -393,6 +411,18 @@ async function attachImportedDocument(
   }
 }
 
+/** The words the browser read from a screenshot, checked. */
+function picturePasses(raw: unknown) {
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    throw new BadRequestError('A screenshot is read on the import page before it is uploaded. Open Import, and drop the picture there.');
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { throw new BadRequestError('What was read from the screenshot did not arrive whole. Try again.'); }
+  const passes = ocrPassesSchema.safeParse(parsed);
+  if (!passes.success) throw new BadRequestError('What was read from the screenshot did not arrive whole. Try again.');
+  return passes.data;
+}
+
 importRouter.get('/profiles', requirePermission('import:run'), asyncHandler(async (_req, res) => {
   res.json({
     data: PROFILES.map((p) => ({
@@ -410,12 +440,20 @@ importRouter.get('/profiles', requirePermission('import:run'), asyncHandler(asyn
 importRouter.post('/upload', requirePermission('import:run'), upload.single('file'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
   if (!req.file) throw new BadRequestError('No file was uploaded.');
-  // Accepts a workbook, a CSV or a PDF, and explains anything else.
-  detectFileKind(req.file.buffer, req.file.originalname);
+  // A screenshot arrives with the words the browser read from it, and the two
+  // are stored together so every later read sees the same words.
+  const picture = imageMimeOf(req.file.buffer);
+  let stored = req.file.buffer;
+  if (picture) {
+    stored = packOcrBundle(req.file.buffer, picturePasses(req.body?.ocr));
+  } else {
+    // Accepts a workbook, a CSV or a PDF, and explains anything else.
+    detectFileKind(req.file.buffer, req.file.originalname);
+  }
 
-  const key = await storage.put(req.file.buffer, {
+  const key = await storage.put(stored, {
     fileName: req.file.originalname,
-    mimeType: req.file.mimetype,
+    mimeType: picture ? 'application/octet-stream' : req.file.mimetype,
     prefix: 'imports',
   });
 
@@ -423,7 +461,7 @@ importRouter.post('/upload', requirePermission('import:run'), upload.single('fil
     data: { fileName: req.file.originalname, storageKey: key, uploadedById: actor.id, status: 'UPLOADED' },
   });
 
-  const result = await runExtraction(req.file.buffer, { job });
+  const result = await runExtraction(stored, { job });
   await warnIfPoExists(result);
   await warnIfAlreadyImported(result, req.file.buffer);
   await persistJob(job.id, result);
@@ -608,6 +646,14 @@ const commitSchema = z.object({
       cells: z.record(z.string(), z.number().int().min(0).max(10_000_000)),
     })).max(500),
   }).optional(),
+  /**
+   * Models moved into orders of their own, each with its own PO number. The
+   * rest stay in the document's order. All are created together, or none.
+   */
+  splits: z.array(z.object({
+    poNumber: z.string().trim().min(1).max(64),
+    colors: z.array(z.string().trim().min(1).max(120)).min(1).max(500),
+  })).max(MAX_SPLITS).optional(),
 });
 
 /**
@@ -742,6 +788,8 @@ importRouter.post('/:jobId/commit', requirePermission('import:run'), asyncHandle
     );
   }
   refuseUnbelievable(extraction);
+  // One document, several orders, when models were split off on the review screen.
+  const orders = splitExtraction(extraction, input.splits);
 
   // Claim the job before creating anything. The status check above is a read,
   // and two clicks — or two tabs — both pass it; each then created its own
@@ -759,9 +807,9 @@ importRouter.post('/:jobId/commit', requirePermission('import:run'), asyncHandle
     throw new BadRequestError('This file is already being imported. Refresh in a moment to see the order.');
   }
 
-  let result: Awaited<ReturnType<typeof commitImport>>;
+  let results: Awaited<ReturnType<typeof commitImports>>;
   try {
-    result = await commitImport(prisma, extraction, {
+    results = await commitImports(prisma, orders, {
       actorId: actor.id, actorName: actor.name, generateCutOrder: input.generateCutOrder,
     });
   } catch (err) {
@@ -777,51 +825,61 @@ importRouter.post('/:jobId/commit', requirePermission('import:run'), asyncHandle
     throw err;
   }
 
-  // From here on the order exists. Nothing below may mark the job FAILED.
+  // From here on the orders exist. Nothing below may mark the job FAILED.
+  const result = results[0]!;
   await afterCommit('recording the import as done', () => prisma.importJob.update({
     where: { id: job.id },
     data: { status: 'COMMITTED', createdOrderId: result.orderId, committedAt: new Date(), errorMessage: null },
   }));
 
-  // The customer's own paperwork, filed against the order it produced, so it
-  // can be opened from Customer Reference for as long as the order exists.
-  await attachImportedDocument(result.orderId, job, buffer, actor);
+  for (const made of results) {
+    // The customer's own paperwork, filed against each order it produced, so
+    // it can be opened from Customer Reference for as long as the order exists.
+    await attachImportedDocument(made.orderId, job, buffer, actor);
+    await afterCommit('refreshing the order summary', () => refreshOrderCache(made.orderId));
+  }
 
   // §10: reserving on confirmation is what turns a BOM into a stock
   // commitment. Partial by design — securing what exists and reporting the
-  // rest is more useful than refusing because one trim is missing.
+  // rest is more useful than refusing because one trim is missing. The BOM
+  // stays with the document's own order, so that is the one reserved for.
   const reservation = input.reserveMaterials
     ? await afterCommit('reserving materials', () => reserveOrderMaterials(actor, result.orderId))
     : null;
 
-  await afterCommit('refreshing the order summary', () => refreshOrderCache(result.orderId));
-
-  // One announcement for the whole file. `commitImport` suppressed the
-  // per-row events, so this is the only thing the factory hears — which is
-  // the right amount of news for "an order arrived".
-  await afterCommit('announcing the new order', () => announceChange({
-    entityType: 'Order',
-    entityId: result.orderId,
-    action: 'CREATE',
-    category: ChangeCategory.ORDER,
-    summary: `Order PO ${result.poNumber} imported from a spreadsheet`,
-    subject: `PO ${result.poNumber}`,
-    priority: NotificationPriority.NORMAL,
-    orderId: result.orderId,
-    link: `/orders/${result.orderId}`,
-    fields: [
-      { label: 'Colours', oldValue: null, newValue: String(result.created.colors) },
-      { label: 'Sizes', oldValue: null, newValue: String(result.created.sizes) },
-      { label: 'Quantity cells', oldValue: null, newValue: String(result.created.quantityCells) },
-      { label: 'BOM lines', oldValue: null, newValue: String(result.created.bomItems) },
-    ],
-    actorId: actor.id,
-    actorName: actor.name,
-  }));
+  // One announcement per order. `commitImports` suppressed the per-row
+  // events, so this is the only thing the factory hears — which is the right
+  // amount of news for "an order arrived".
+  const splitNote = results.length > 1
+    ? ` — split from one document into ${results.length} orders (${results.map((r) => r.poNumber).join(', ')})`
+    : '';
+  for (const made of results) {
+    await afterCommit('announcing the new order', () => announceChange({
+      entityType: 'Order',
+      entityId: made.orderId,
+      action: 'CREATE',
+      category: ChangeCategory.ORDER,
+      summary: `Order PO ${made.poNumber} imported from ${job.fileName}${splitNote}`,
+      subject: `PO ${made.poNumber}`,
+      priority: NotificationPriority.NORMAL,
+      orderId: made.orderId,
+      link: `/orders/${made.orderId}`,
+      fields: [
+        { label: 'Colours', oldValue: null, newValue: String(made.created.colors) },
+        { label: 'Sizes', oldValue: null, newValue: String(made.created.sizes) },
+        { label: 'Quantity cells', oldValue: null, newValue: String(made.created.quantityCells) },
+        { label: 'BOM lines', oldValue: null, newValue: String(made.created.bomItems) },
+      ],
+      actorId: actor.id,
+      actorName: actor.name,
+    }));
+  }
 
   res.status(201).json({
     ...result,
     reservation,
+    /** Every order created, the document's own first. */
+    orders: results.map((r) => ({ orderId: r.orderId, poNumber: r.poNumber })),
     // Through the same gate as GET /orders/:id, so the import response does not
     // hand costing to a role that cannot read it anywhere else.
     order: await afterCommit('loading the new order', () => orderDetailFor(req, result.orderId)),

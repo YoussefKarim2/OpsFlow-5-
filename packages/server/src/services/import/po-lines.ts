@@ -355,9 +355,23 @@ function tokensOf(line: PoTextLine): string[] {
 /** Size names as a PO prints them over a row of quantities: two or more, nothing else. */
 const PRINTED_SIZE = /^(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|XXXXL|[2-6]XL|[2-4]XS|OS|ONE\s*SIZE|\d{1,2}[YT]|\d{1,2}-\d{1,2}Y?|YXS|YS|YM|YL|YXL)$/i;
 function sizeRow(tokens: readonly string[]): string[] | null {
-  if (tokens.length < 2 || !tokens.every((t) => PRINTED_SIZE.test(t))) return null;
-  return tokens.map((t) => t.toUpperCase());
+  if (tokens.length < 2) return null;
+  const sizes = tokens.map((t) => (PRINTED_SIZE.test(t) ? t.toUpperCase() : null));
+  const unread = sizes.flatMap((s, i) => (s == null ? [i] : []));
+  if (unread.length === 0) return sizes as string[];
+  // One cell that is not a size, between two that are a step apart on the
+  // ladder, can only be the size between them: "XS ? M" is "XS S M". A
+  // picture's tiny lone "S" is read back as "3", "N" or "R]".
+  if (unread.length > 1 || tokens.length < 4) return null;
+  const i = unread[0]!;
+  const before = LADDER.indexOf(sizes[i - 1] ?? '');
+  const after = LADDER.indexOf(sizes[i + 1] ?? '');
+  if (before < 0 || after !== before + 2) return null;
+  sizes[i] = LADDER[before + 1]!;
+  return sizes as string[];
 }
+/** Letter sizes, smallest first: what lies between two of them is known. */
+const LADDER = ['XXXS', 'XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL'];
 
 interface Columns { line: PoTextLine; cols: Array<{ kind: 'code' | 'description' | 'colour' | 'other'; x: number }> }
 const COLUMN_KIND: Array<[RegExp, Columns['cols'][number]['kind']]> = [
