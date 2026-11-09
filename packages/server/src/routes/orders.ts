@@ -478,7 +478,11 @@ ordersRouter.get('/:id/matrix', requirePermission('order:read'), asyncHandler(as
   }
 
   res.json({
-    colors: order.colors.map((c) => ({ id: c.id, name: c.color.name, hex: c.color.hex, position: c.position })),
+    colors: order.colors.map((c) => ({
+      id: c.id, name: c.color.name, hex: c.color.hex, position: c.position,
+      // The model's own price on the customer's PO, when the PO priced it.
+      unitPriceUsd: c.unitPriceUsd == null ? null : Number(c.unitPriceUsd.toString()),
+    })),
     sizes: inWearingOrder(order.sizes.map((s) => ({ id: s.id, name: s.size.name, position: s.position }))),
     matrices,
     // The shipped total follows the one rule the rest of the order uses
@@ -497,6 +501,59 @@ const setQtySchema = z.object({
     qty: z.number().int().nonnegative(),
   })),
 });
+
+/**
+ * The order's price per piece, from its models' PO prices.
+ *
+ * When every model on the order carries its own price, the order's price is
+ * their average weighted by the Main Order pieces — what the costing sells
+ * at. A model without a price leaves the order's price as it was typed.
+ * Returns the new price, or null when it was left alone.
+ */
+export async function syncOrderPriceFromModels(orderId: string): Promise<number | null> {
+  const colors = await prisma.orderColor.findMany({ where: { orderId }, select: { id: true, unitPriceUsd: true } });
+  if (colors.length === 0 || colors.some((c) => c.unitPriceUsd == null)) return null;
+  const qty = await prisma.stageQuantity.groupBy({
+    by: ['orderColorId'], where: { orderId, ledger: 'ORDER' }, _sum: { qty: true },
+  });
+  const pcs = new Map(qty.map((q) => [q.orderColorId, q._sum.qty ?? 0]));
+  const total = colors.reduce((a, c) => a + (pcs.get(c.id) ?? 0), 0);
+  if (total <= 0) return null;
+  const value = colors.reduce((a, c) => a + (pcs.get(c.id) ?? 0) * Number(c.unitPriceUsd!.toString()), 0);
+  const price = Math.round((value / total) * 10_000) / 10_000;
+  await prisma.order.update({ where: { id: orderId }, data: { pricePerPieceUsd: price } });
+  return price;
+}
+
+const modelPriceSchema = z.object({
+  /** Dollars per piece; null clears it, and the order's own price applies. */
+  unitPriceUsd: z.number().finite().min(0).max(999_999.9999).nullable(),
+});
+
+/** A model's price on the customer's PO, typed or corrected on the Main Order. */
+ordersRouter.put('/:id/colors/:colorId/price', requirePermission('order:edit'), asyncHandler(async (req, res) => {
+  const actor = currentUser(req);
+  const { unitPriceUsd } = modelPriceSchema.parse(req.body ?? {});
+  const color = await prisma.orderColor.findFirst({
+    where: { id: req.params.colorId, orderId: req.params.id },
+    include: { color: true, order: { select: { id: true, poNumber: true } } },
+  });
+  if (!color) throw new NotFoundError('Model');
+  const before = color.unitPriceUsd == null ? null : Number(color.unitPriceUsd.toString());
+  const price = unitPriceUsd == null ? null : Math.round(unitPriceUsd * 10_000) / 10_000;
+  await prisma.orderColor.update({ where: { id: color.id }, data: { unitPriceUsd: price } });
+  const orderPrice = await syncOrderPriceFromModels(color.orderId);
+  const money = (n: number | null) => (n == null ? 'no price' : `$${n.toFixed(2)}`);
+  await logActivity({
+    orderId: color.orderId, actorId: actor.id, actorName: actor.name,
+    action: 'MODEL_PRICE_UPDATED',
+    summary: `set the PO price of ${color.color.name} from ${money(before)} to ${money(price)}`
+      + (orderPrice != null ? `; order price per piece now $${orderPrice.toFixed(4)}` : ''),
+    entityType: 'OrderColor', entityId: color.id,
+  });
+  await refreshOrderCache(color.orderId);
+  res.json({ unitPriceUsd: price, orderPricePerPieceUsd: orderPrice });
+}));
 
 ordersRouter.put('/:id/matrix', requirePermission('order:edit'), asyncHandler(async (req, res) => {
   const actor = currentUser(req);
@@ -571,6 +628,9 @@ ordersRouter.put('/:id/matrix', requirePermission('order:edit'), asyncHandler(as
   if (ledger === QtyLedger.STOCK) {
     await applyLedgerToStockRecords(order.id);
   }
+  // The order's price is the PO's models' prices averaged over their pieces;
+  // new quantities move that average.
+  if (ledger === QtyLedger.ORDER) await syncOrderPriceFromModels(order.id);
 
   let refreshedCut: number | null = null;
   if (CUT_ORDER_INPUT_LEDGERS.includes(ledger)) {

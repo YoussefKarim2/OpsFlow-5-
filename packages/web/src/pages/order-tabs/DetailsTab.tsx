@@ -12,6 +12,7 @@ import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Card, CardHeader, FreeText, ErrorNote, clsx } from '../../components/ui';
 import { ComboSelect } from '../../components/ComboSelect';
+import { PoPricesCard } from '../../components/PoPricesCard';
 
 export function DetailsTab({ order }: { order: OrderDetailDto }) {
   const qc = useQueryClient();
@@ -247,6 +248,7 @@ export function DetailsTab({ order }: { order: OrderDetailDto }) {
         </Card>
       </div>
 
+      <PoPricesCard order={order} />
     </div>
   );
 }

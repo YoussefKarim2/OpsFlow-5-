@@ -252,3 +252,19 @@ describe('one PO split into separate orders', () => {
     assert.equal(wrote, false);
   });
 });
+
+describe('prices on the review grid', () => {
+  test('a model added on the review screen keeps the price typed for it; read ones keep the file\'s', async () => {
+    const { applyReviewedMatrix } = await import('../../routes/import.js');
+    const r = reading();
+    applyReviewedMatrix(r, {
+      sizes: ['S', 'M'],
+      rows: [
+        { color: 'Jersey — White', cells: { S: 100, M: 200 } },
+        { color: 'Shorts — Black', cells: { S: 50 }, unitPrice: 9.5 },
+      ],
+    });
+    const rows = r.matrices.find((m) => m.ledger === 'ORDER')!.rows;
+    assert.deepEqual(rows.map((x) => [x.color, x.unitPrice]), [['Jersey — White', 15], ['Shorts — Black', 9.5]]);
+  });
+});

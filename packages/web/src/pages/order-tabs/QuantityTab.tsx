@@ -18,6 +18,7 @@ import { api, ApiError } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Card, CardHeader, Spinner, ErrorNote, clsx, useToast, ColourSwatch } from '../../components/ui';
 import { GridEditor, cleanGrid, gridTotal, type GridDraft } from '../../components/GridEditor';
+import { PoPricesCard } from '../../components/PoPricesCard';
 
 /**
  * An order whose Main Order is empty — imported before its PO could be read,
@@ -561,6 +562,7 @@ export function QuantityTab({
         </div>
       </Card>
 
+      {ledger === QtyLedger.ORDER && <PoPricesCard order={order} />}
     </div>
   );
 }

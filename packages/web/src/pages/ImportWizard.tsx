@@ -43,6 +43,8 @@ interface GridRow {
   color: string;
   cells: Record<string, string>;
   added: boolean;
+  /** The price per piece: as read from the PO, or typed for an added model. */
+  price: string;
 }
 
 function rowsFromPreview(p: ImportAnalysisDto['preview']): GridRow[] {
@@ -51,8 +53,18 @@ function rowsFromPreview(p: ImportAnalysisDto['preview']): GridRow[] {
     color: r.color,
     cells: Object.fromEntries(Object.entries(r.cells).map(([k, v]) => [k, String(v)])),
     added: false,
+    price: r.unitPrice == null ? '' : String(r.unitPrice),
   }));
 }
+
+/** A price as typed: dollars, or null when blank or not a number. */
+const priceOfText = (v: string): number | null => {
+  const t = v.trim().replace(/[$,\s]/g, '');
+  if (t === '') return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+};
+const money = (n: number) => `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const pieces = (v: string | undefined): number => {
   const n = Number((v ?? '').trim());
@@ -171,6 +183,7 @@ export function ImportWizardPage() {
         rows: grid.map((r) => ({
           color: r.color.trim(),
           cells: Object.fromEntries(result!.preview.sizes.map((sz) => [sz, pieces(r.cells[sz])]).filter(([, q]) => (q as number) > 0)),
+          ...(r.added && priceOfText(r.price) != null ? { unitPrice: priceOfText(r.price) } : {}),
         })),
       } : undefined,
       splits: parts.length > 0 ? parts.map((part) => ({
@@ -776,7 +789,12 @@ function ReviewStep({
   };
   const piecesOf = (rs: GridRow[]) => rs.reduce((a, r) => a + rowTotal(r), 0);
   const removeRow = (key: string) => onRows(rows.filter((r) => r.key !== key));
-  const addRow = () => onRows([...rows, { key: `added-${Date.now()}`, color: '', cells: {}, added: true }]);
+  const addRow = () => onRows([...rows, { key: `added-${Date.now()}`, color: '', cells: {}, added: true, price: '' }]);
+  // The order's price stands in for a model the PO did not price.
+  const orderPrice = typeof p.order.pricePerPieceUsd === 'number' ? p.order.pricePerPieceUsd : null;
+  const priceOf = (r: GridRow) => priceOfText(r.price) ?? orderPrice;
+  const amountOf = (r: GridRow) => { const pr = priceOf(r); return pr == null ? null : rowTotal(r) * pr; };
+  const totalValue = rows.every((r) => amountOf(r) != null) ? rows.reduce((a, r) => a + amountOf(r)!, 0) : null;
   const editRow = (key: string, patch: Partial<GridRow>) =>
     onRows(rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
   const errors = result.issues.filter((i) => i.level === 'ERROR');
@@ -798,12 +816,13 @@ function ReviewStep({
     <div className="space-y-4">
       <Card>
         <CardHeader title="Import preview" subtitle="Nothing has been created yet." />
-        <div className="grid gap-4 p-4 sm:grid-cols-3 lg:grid-cols-6">
+        <div className="grid gap-4 p-4 sm:grid-cols-4 lg:grid-cols-7">
           <Summary label={parts.length > 0 ? `Orders (${parts.length + 1})` : 'Order'} value={parts.length > 0 ? [mainPo || '—', ...parts.map((x) => x.poNumber.trim() || '?')].join(', ') : String(p.order.poNumber ?? '—')} mono />
           <Summary label="Customer" value={String(p.order.clientName ?? '—')} />
           <Summary label="Models" value={String(rows.length)} />
           <Summary label="Sizes" value={String(p.sizes.length)} />
           <Summary label="Total quantity" value={fmtNumber(total, { places: 0 })} strong />
+          <Summary label="PO value" value={totalValue == null ? '—' : money(totalValue)} strong />
           <Summary label="Rows read" value={String(result.analysis?.rowsDetected ?? p.matrixRows.length)} />
         </div>
       </Card>
@@ -885,6 +904,8 @@ function ReviewStep({
                   <th className="th">Model / colour</th>
                   {p.sizes.map((s) => <th key={s} className="th text-right">{s}</th>)}
                   <th className="th text-right">Total</th>
+                  <th className="th text-right">Price</th>
+                  <th className="th text-right">Amount</th>
                   <th className="th w-10"><span className="sr-only">Remove</span></th>
                 </tr>
               </thead>
@@ -936,6 +957,21 @@ function ReviewStep({
                       </td>
                     ))}
                     <td className="td tnum text-right font-semibold">{rowTotal(r).toLocaleString()}</td>
+                    <td className="td tnum text-right">
+                      {r.added ? (
+                        <input
+                          className="input h-8 w-24 text-right tnum"
+                          inputMode="decimal"
+                          placeholder={orderPrice != null ? String(orderPrice) : '0.00'}
+                          aria-label={`Price per piece for ${r.color.trim() || 'this model'}`}
+                          value={r.price}
+                          onChange={(e) => { if (/^\$?[\d,]*\.?\d{0,4}$/.test(e.target.value.trim())) editRow(r.key, { price: e.target.value }); }}
+                        />
+                      ) : priceOf(r) == null ? <span className="text-ink-300">—</span> : (
+                        <span className={priceOfText(r.price) == null ? 'text-ink-500' : undefined}>{money(priceOf(r)!)}</span>
+                      )}
+                    </td>
+                    <td className="td tnum text-right">{amountOf(r) == null ? <span className="text-ink-300">—</span> : money(amountOf(r)!)}</td>
                     <td className="td text-right">
                       <button
                         type="button"
@@ -960,6 +996,8 @@ function ReviewStep({
                     </td>
                   ))}
                   <td className="td tnum text-right font-bold">{total.toLocaleString()}</td>
+                  <td className="td tnum text-right text-xs text-ink-600">{totalValue != null && total > 0 ? `avg ${money(totalValue / total)}` : ''}</td>
+                  <td className="td tnum text-right font-bold">{totalValue == null ? <span className="text-ink-300">—</span> : money(totalValue)}</td>
                   <td className="td" />
                 </tr>
               </tfoot>
@@ -1059,8 +1097,11 @@ function ReviewStep({
                       {mine.length === 0 && <span className="text-xs text-red-700">No models</span>}
                     </div>
                   </div>
-                  <div className="tnum w-28 shrink-0 pt-1.5 text-right text-sm font-semibold">
-                    {piecesOf(mine).toLocaleString()} pcs
+                  <div className="tnum w-36 shrink-0 pt-1.5 text-right text-sm">
+                    <div className="font-semibold">{piecesOf(mine).toLocaleString()} pcs</div>
+                    {mine.every((r) => amountOf(r) != null) && mine.length > 0 && (
+                      <div className="text-xs text-ink-500">{money(mine.reduce((a, r) => a + amountOf(r)!, 0))}</div>
+                    )}
                   </div>
                   <div className="w-8 shrink-0 pt-0.5 text-right">
                     {i > 0 && (

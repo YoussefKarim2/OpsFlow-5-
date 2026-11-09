@@ -944,6 +944,9 @@ export const api = {
     setMatrix: (id: string, ledger: string, cells: Array<{ orderColorId: string; orderSizeId: string; qty: number }>) =>
       put<OrderDetailDto>(`/orders/${id}/matrix`, { ledger, cells }),
     generateCut: (id: string) => post<OrderDetailDto>(`/orders/${id}/matrix/generate-cut`),
+    /** A model's price on the customer's PO; null clears it. */
+    setModelPrice: (id: string, colorId: string, unitPriceUsd: number | null) =>
+      put<{ unitPriceUsd: number | null; orderPricePerPieceUsd: number | null }>(`/orders/${id}/colors/${colorId}/price`, { unitPriceUsd }),
     addSize: (id: string, name: string) => post<{ data: OrderDetailDto }>(`/orders/${id}/sizes`, { name }),
     fillFromDocument: (id: string) =>
       post<{ pieces: number; cut: number; fileName: string; warnings: string[] }>(`/orders/${id}/matrix/from-document`),

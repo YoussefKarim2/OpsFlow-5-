@@ -188,7 +188,8 @@ export interface OrderDetailDto {
 }
 
 export interface MatrixResponseDto {
-  colors: Array<{ id: string; name: string; hex: string | null; position: number }>;
+  /** `unitPriceUsd`: the model's own price on the customer's PO, when it has one. */
+  colors: Array<{ id: string; name: string; hex: string | null; position: number; unitPriceUsd?: number | null }>;
   sizes: Array<{ id: string; name: string; position: number }>;
   matrices: Partial<Record<QtyLedger, QuantityMatrix>>;
   totals: Record<QtyLedger, number>;
@@ -631,7 +632,8 @@ export interface ImportPreviewDto {
     colors: string[];
     sizes: string[];
     matrixTotal: number;
-    matrixRows: Array<{ color: string; cells: Record<string, number>; total: number }>;
+    /** `unitPrice`: the row's own price on the PO, when the PO priced it. */
+    matrixRows: Array<{ color: string; cells: Record<string, number>; total: number; unitPrice?: number | null }>;
     bomLines: number;
     externalOps: number;
     lays: number;

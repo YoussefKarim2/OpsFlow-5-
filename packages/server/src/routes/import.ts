@@ -650,6 +650,8 @@ const commitSchema = z.object({
     rows: z.array(z.object({
       color: z.string().trim().min(1).max(120),
       cells: z.record(z.string(), z.number().int().min(0).max(10_000_000)),
+      /** A price typed for a model added on the review screen. */
+      unitPrice: z.number().finite().min(0).max(999_999.9999).nullable().optional(),
     })).max(500),
   }).optional(),
   /**
@@ -668,16 +670,17 @@ const commitSchema = z.object({
  */
 export function applyReviewedMatrix(
   extraction: ExtractionResult,
-  matrix: { sizes: string[]; rows: Array<{ color: string; cells: Record<string, number> }> } | undefined,
+  matrix: { sizes: string[]; rows: Array<{ color: string; cells: Record<string, number>; unitPrice?: number | null }> } | undefined,
 ): void {
   if (!matrix) return;
   const sizes = matrix.sizes;
-  // The review grid carries no prices; a colour keeps the rate the file gave it.
+  // A colour keeps the rate the file gave it; a model added on the review
+  // screen carries the price typed for it.
   const read = extraction.matrices.find((m) => m.ledger === 'ORDER');
   const priceOf = new Map((read?.rows ?? []).filter((r) => r.unitPrice != null).map((r) => [axisKey(r.color), r.unitPrice!] as const));
   const rows = matrix.rows.map((r) => {
     const cells = Object.fromEntries(Object.entries(r.cells).filter(([s, q]) => sizes.includes(s) && q > 0));
-    const unitPrice = priceOf.get(axisKey(r.color));
+    const unitPrice = r.unitPrice ?? priceOf.get(axisKey(r.color));
     return { color: r.color, cells, total: Object.values(cells).reduce((a, b) => a + b, 0), ...(unitPrice != null ? { unitPrice } : {}) };
   });
   const others = extraction.matrices.filter((m) => m.ledger !== 'ORDER');
