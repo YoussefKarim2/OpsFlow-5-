@@ -52,10 +52,38 @@ describe('expected costing', () => {
     assert.deepEqual(filled.missing, []);
   });
 
-  test("the order's own figure wins over an old typed one", () => {
+  test("a typed figure wins over the order's, which is kept to put back", () => {
     const r = computeExpectedCosting({ ...base, typed: { sellPriceUsd: 99, 'price:bom:FABRIC:a': 1 } });
-    assert.equal(r.sellPriceUsd.value, 10);
-    assert.equal(r.lines[0]!.price.value, 5);
+    assert.deepEqual(r.sellPriceUsd, { value: 99, source: 'typed', base: 10 });
+    assert.deepEqual(r.lines[0]!.price, { value: 1, source: 'typed', base: 5 });
+    assert.equal(r.fabricCostUsd, 90);
+  });
+
+  test('calculated figures can be typed over too, and the rest follows', () => {
+    const days = computeExpectedCosting({ ...base, typed: { daysInLine: 4 } });
+    assert.equal(days.daysInLine, 4);
+    assert.deepEqual(days.derived.daysInLine, { value: 4, source: 'typed', base: 2 });
+    assert.ok(Math.abs(days.cmCostUsd! - 2240) < 1e-9);
+
+    const cm = computeExpectedCosting({ ...base, typed: { cmPerPieceUsd: 2 } });
+    assert.equal(cm.cmCostUsd, 600);
+    assert.ok(Math.abs(cm.derived.cmPerPieceUsd.base! - 1120 / 300) < 1e-9);
+    assert.ok(Math.abs(cm.totalCostUsd! - (450 + 30 + 150 + 600)) < 1e-9);
+
+    const ext = computeExpectedCosting({ ...base, typed: { externalCostUsd: 60, fabricCostUsd: 400 } });
+    assert.equal(ext.externalCostUsd, 60);
+    assert.equal(ext.derived.externalCostUsd.base, 150);
+    assert.equal(ext.fabricCostUsd, 400);
+    assert.ok(Math.abs(ext.totalCostUsd! - (400 + 30 + 60 + 1120)) < 1e-9);
+
+    const total = computeExpectedCosting({ ...base, typed: { totalCostUsd: 3000 } });
+    assert.equal(total.unitCostUsd, 10);
+    assert.equal(total.profitPerUnitUsd, 0);
+    assert.ok(Math.abs(total.derived.totalCostUsd.base! - 1750) < 1e-9);
+
+    const loss = computeExpectedCosting({ ...base, typed: { profitPerUnitUsd: -1 } });
+    assert.equal(loss.profitPerUnitUsd, -1);
+    assert.equal(loss.derived.profitPerUnitUsd.source, 'typed');
   });
 
   test('other costs join the total', () => {
@@ -68,6 +96,7 @@ describe('expected costing', () => {
       sanitiseExpectedTyped({ sellPriceUsd: '7.5', bogus: 3, 'price:x': -1, 'qty:y': 'abc', 'qty:z': 4, targetPerDay: Infinity }),
       { sellPriceUsd: 7.5, 'qty:z': 4 },
     );
+    assert.deepEqual(sanitiseExpectedTyped({ profitPct: -5, totalCostUsd: -5, daysInLine: 3 }), { profitPct: -5, daysInLine: 3 });
     assert.deepEqual(sanitiseExpectedTyped(null), {});
     assert.deepEqual(sanitiseExpectedTyped([1]), {});
   });

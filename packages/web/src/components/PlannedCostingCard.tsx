@@ -9,15 +9,18 @@
  * cost and machines, the Production step's line plan and target per day, the
  * bill of materials' required quantities and prices, and the External Order's
  * prices. Whatever the order does not hold is a box to type in, outlined in
- * amber until it is filled. A typed figure stands in only until the order has
- * its own; then the order's figure is used.
+ * amber until it is filled.
+ *
+ * Every figure is a box: the order's, the calculated ones (days in line, C.M,
+ * subtotals, the total, the profit) and the missing ones. A typed figure wins
+ * and turns violet; ↺ beside it puts the order's or the calculated figure back.
  */
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ChevronDown, Cloud, CloudOff, TriangleAlert } from 'lucide-react';
+import { ChevronDown, Cloud, CloudOff, RotateCcw, TriangleAlert } from 'lucide-react';
 import {
-  computeExpectedCosting, fmtMoney, fmtNumber, fmtPct, readTypedNumber,
+  EXPECTED_SIGNED_KEYS, computeExpectedCosting, fmtMoney, fmtNumber, fmtPct, readTypedNumber,
   type CostingResult, type ExpectedFigure, type ExpectedLineResult, type ExpectedSourceLine, type OrderDetailDto,
 } from '@opsflow/shared';
 import { api, type CostLineDto } from '../lib/api';
@@ -25,12 +28,16 @@ import { useAuth } from '../lib/auth';
 import { Card, CardHeader, clsx } from './ui';
 
 type CostingQuery = Awaited<ReturnType<typeof api.steps.costing>>;
-type Kind = 'money' | 'price' | 'number';
+type Kind = 'money' | 'price' | 'number' | 'pct';
 
 const money = (n: number | null | undefined) => (n == null ? '—' : fmtMoney(n));
 const price = (n: number | null | undefined) => (n == null ? '—' : fmtMoney(n, '$', Math.abs(n) < 1 ? 4 : 2));
 const show = (n: number | null, kind: Kind) =>
-  kind === 'money' ? money(n) : kind === 'price' ? price(n) : n == null ? '—' : fmtNumber(n, { places: Number.isInteger(n) ? 0 : 2 });
+  kind === 'money' ? money(n) : kind === 'price' ? price(n) : n == null ? '—'
+    : kind === 'pct' ? fmtPct(n, 1) : fmtNumber(n, { places: Number.isInteger(n) ? 0 : 2 });
+/** A figure as it sits in its box, ready to be typed over. */
+const plain = (n: number | null, kind: Kind) =>
+  n == null ? '' : String(Number(n.toFixed(kind === 'money' || kind === 'price' ? 4 : 2)));
 
 function plannedLines(planned: CostLineDto[]): ExpectedSourceLine[] {
   return planned.map((l, i) => ({
@@ -71,7 +78,7 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
     const out: Record<string, number> = {};
     for (const [k, v] of Object.entries(text)) {
       const r = readTypedNumber(v);
-      if (r.ok && r.value != null && r.value >= 0) out[k] = r.value;
+      if (r.ok && r.value != null && (r.value >= 0 || EXPECTED_SIGNED_KEYS.includes(k))) out[k] = r.value;
     }
     return out;
   }, [text]);
@@ -147,22 +154,33 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const type = (key: string) => (v: string) => setText((t) => ({ ...t, [key]: v }));
+  const reset = (key: string) => setText((t) => { const n = { ...t }; delete n[key]; return n; });
+  /** Leaving a box: an empty one, or one typed back to the order's figure, is not an override. */
+  const settle = (key: string, f: ExpectedFigure) => {
+    const v = text[key];
+    if (v == null) return;
+    const r = readTypedNumber(v);
+    if (v.trim() === '' || (r.ok && r.value != null && f.base != null && Math.abs(r.value - f.base) < 1e-9)) reset(key);
+  };
 
-  const fig = (key: string, f: ExpectedFigure, kind: Kind, opts: { allowZero?: boolean } = {}) => (
+  const fig = (key: string, f: ExpectedFigure, kind: Kind, opts: { allowZero?: boolean; dark?: boolean } = {}) => (
     <Figure
-      figure={f} kind={kind} editable={editable} text={text[key] ?? ''} onText={type(key)} allowZero={opts.allowZero}
+      figure={f} kind={kind} editable={editable} typing={key in text} text={text[key] ?? ''}
+      onText={type(key)} onDone={() => settle(key, f)} onReset={() => reset(key)}
+      allowZero={opts.allowZero} signed={EXPECTED_SIGNED_KEYS.includes(key)} dark={opts.dark} worked={key in e.derived}
     />
   );
+  const d = e.derived;
 
   const qty = e.orderQty.value;
   const perPc = (n: number | null) => (n != null && qty != null && qty > 0 ? n / qty : null);
   const lineMissing = (l: ExpectedLineResult) => (l.qty.value == null ? 1 : 0) + (l.price.value == null ? 1 : 0);
 
-  const groups: Array<{ key: string; title: string; swatch: string; rows: ExpectedLineResult[]; total: number | null }> = [
-    { key: 'fabric', title: 'Fabric', swatch: 'bg-accent-500', rows: e.lines.filter((l) => l.group === 'FABRIC'), total: e.fabricCostUsd },
-    { key: 'acc', title: 'Accessories', swatch: 'bg-accent-300', rows: e.lines.filter((l) => l.group === 'ACCESSORY'), total: e.accessoryCostUsd },
-    { key: 'ext', title: 'Outside work', swatch: 'bg-ink-300', rows: e.lines.filter((l) => l.group === 'EXTERNAL'), total: e.externalCostUsd },
-    { key: 'other', title: 'Other', swatch: 'bg-ink-600', rows: e.lines.filter((l) => l.group === 'LABOUR' || l.group === 'OTHER'), total: null },
+  const groups: Array<{ key: string; title: string; swatch: string; rows: ExpectedLineResult[]; total: number | null; typeKey: string | null }> = [
+    { key: 'fabric', title: 'Fabric', swatch: 'bg-accent-500', rows: e.lines.filter((l) => l.group === 'FABRIC'), total: e.fabricCostUsd, typeKey: 'fabricCostUsd' },
+    { key: 'acc', title: 'Accessories', swatch: 'bg-accent-300', rows: e.lines.filter((l) => l.group === 'ACCESSORY'), total: e.accessoryCostUsd, typeKey: 'accessoryCostUsd' },
+    { key: 'ext', title: 'Outside work', swatch: 'bg-ink-300', rows: e.lines.filter((l) => l.group === 'EXTERNAL'), total: e.externalCostUsd, typeKey: 'externalCostUsd' },
+    { key: 'other', title: 'Other', swatch: 'bg-ink-600', rows: e.lines.filter((l) => l.group === 'LABOUR' || l.group === 'OTHER'), total: null, typeKey: null },
   ].filter((g) => g.rows.length > 0);
 
   // A section that has figures to fill when the page opens starts open; a
@@ -192,7 +210,6 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
   const provisional = toFill > 0;
   const profitTone = profit == null || provisional ? 'text-white' : profit < 0 ? 'text-red-300' : 'text-emerald-300';
   const provisionalNote = `provisional — ${toFill} figure${toFill === 1 ? '' : 's'} still to fill`;
-  const machineCostPerDay = e.dailyCostUsd.value != null && e.machineCount.value ? e.dailyCostUsd.value / e.machineCount.value : null;
   const revenue = qty != null && e.sellPriceUsd.value != null ? qty * e.sellPriceUsd.value : null;
   const identity = [c.identity.customer, c.identity.orderName, c.identity.poNumber && `PO ${c.identity.poNumber}`]
     .filter(Boolean).join(' · ');
@@ -313,8 +330,10 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
             <Row label="Order quantity" note="Main Order total, pieces">{fig('orderQty', e.orderQty, 'number')}</Row>
             <Row label="Selling price" note="per piece, from the PO">{fig('sellPriceUsd', e.sellPriceUsd, 'price')}</Row>
             <Row label="Planned revenue" note="quantity × selling price"><Calc value={money(revenue)} /></Row>
-            <Row label="Planned profit" note="revenue − planned total">
-              <Calc value={money(revenue != null && e.totalCostUsd != null ? revenue - e.totalCostUsd : null)} />
+            <Row label="Profit per piece" note="selling price − planned cost per piece">{fig('profitPerUnitUsd', d.profitPerUnitUsd, 'price', { allowZero: true })}</Row>
+            <Row label="Planned margin" note="profit ÷ selling price, %">{fig('profitPct', d.profitPct, 'pct', { allowZero: true })}</Row>
+            <Row label="Planned profit" note="profit per piece × quantity">
+              <Calc value={money(profit != null && qty != null ? profit * qty : null)} />
             </Row>
           </div>
         </Card>
@@ -325,9 +344,9 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
             <Row label="Factory machines" note="all machines">{fig('machineCount', e.machineCount, 'number')}</Row>
             <Row label="Machines on the line" note="from the Production line plan">{fig('lineMachines', e.lineMachines, 'number')}</Row>
             <Row label="Target per day" note="pieces, from Production">{fig('targetPerDay', e.targetPerDay, 'number')}</Row>
-            <Row label="Machine cost per day" note="daily cost ÷ factory machines"><Calc value={price(machineCostPerDay)} /></Row>
-            <Row label="Days in line" note="quantity ÷ target, rounded up"><Calc value={e.daysInLine == null ? '—' : String(e.daysInLine)} /></Row>
-            <Row label="C.M per piece" note="same formula as the actual costing"><Calc value={price(e.cmCostPerPieceUsd)} strong /></Row>
+            <Row label="Machine cost per day" note="daily cost ÷ factory machines">{fig('machineCostPerDay', d.machineCostPerDay, 'price')}</Row>
+            <Row label="Days in line" note="quantity ÷ target, rounded up">{fig('daysInLine', d.daysInLine, 'number')}</Row>
+            <Row label="C.M per piece" note="same formula as the actual costing">{fig('cmPerPieceUsd', d.cmPerPieceUsd, 'price', { allowZero: true })}</Row>
           </div>
         </Card>
       </div>
@@ -341,7 +360,7 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
               <span>Planned quantities and prices for the whole order.</span>
               <Legend swatch="text-emerald-600" label="auto — from the order" />
               <Legend swatch="border border-amber-400 bg-amber-50" box label="to fill" />
-              <Legend swatch="border border-violet-300" box label="typed" />
+              <Legend swatch="border border-violet-300" box label="typed — ↺ puts the figure back" />
             </span>
           }
         />
@@ -374,7 +393,9 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
                     missing={missing}
                     open={open}
                     onToggle={() => setFold((f) => ({ ...f, [g.key]: !open }))}
-                    total={g.total}
+                    total={g.typeKey
+                      ? fig(g.typeKey, d[g.typeKey as 'fabricCostUsd' | 'accessoryCostUsd' | 'externalCostUsd'], 'money', { allowZero: true })
+                      : money(g.total)}
                     perPiece={perPc(g.total)}
                     share={share(g.total)}
                   >
@@ -422,8 +443,8 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
               <tr className="bg-ink-900 text-white">
                 <td className="px-4 py-3 font-semibold" colSpan={3}>Planned total</td>
                 <td className="px-4 py-3 text-right text-xs text-ink-300">{qty != null ? `${fmtNumber(qty)} pcs` : ''}</td>
-                <td className="tnum px-4 py-3 text-right font-semibold">{money(e.totalCostUsd)}</td>
-                <td className="tnum px-4 py-3 text-right font-semibold">{price(e.unitCostUsd)}</td>
+                <td className="tnum px-4 py-3 text-right font-semibold">{fig('totalCostUsd', d.totalCostUsd, 'money', { allowZero: true, dark: true })}</td>
+                <td className="tnum px-4 py-3 text-right font-semibold">{fig('unitCostUsd', d.unitCostUsd, 'price', { allowZero: true, dark: true })}</td>
                 <td className="tnum px-4 py-3 text-right text-ink-300">{e.totalCostUsd != null ? '100%' : '—'}</td>
               </tr>
             </tfoot>
@@ -435,34 +456,68 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
 }
 
 function Figure({
-  figure, kind, editable, text, onText, allowZero,
+  figure, kind, editable, typing, text, onText, onDone, onReset, allowZero, signed, dark, worked,
 }: {
-  figure: ExpectedFigure; kind: Kind; editable: boolean; text: string; onText: (v: string) => void; allowZero?: boolean;
+  figure: ExpectedFigure; kind: Kind; editable: boolean; typing: boolean; text: string;
+  onText: (v: string) => void; onDone: () => void; onReset: () => void;
+  /** A worked-out figure: blank only until the figures it comes from are known, so never "to fill". */
+  allowZero?: boolean; signed?: boolean; dark?: boolean; worked?: boolean;
 }) {
-  if (figure.source === 'auto') {
+  const tag = figure.source === 'typed' || typing
+    ? null
+    : figure.source === 'auto'
+      ? <span className="w-7 text-[10px] font-semibold uppercase tracking-wide text-emerald-600" title="From the order">auto</span>
+      : figure.source === 'calc'
+        ? <span className={clsx('w-7 text-[10px] font-semibold uppercase tracking-wide', dark ? 'text-ink-400' : 'text-ink-400')} title="Worked out from the figures above">calc</span>
+        : <span className="w-7" />;
+  if (!editable) {
     return (
-      <span className="inline-flex items-baseline justify-end gap-1.5 whitespace-nowrap" title="Filled from the order">
-        <span className="tnum font-semibold text-ink-900">{show(figure.value, kind)}</span>
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-emerald-600">auto</span>
+      <span className="inline-flex items-baseline justify-end gap-1.5 whitespace-nowrap">
+        <span className={clsx('tnum font-semibold', figure.value == null ? 'text-ink-300' : figure.source === 'typed' ? 'text-violet-700' : dark ? 'text-white' : 'text-ink-900')}>
+          {show(figure.value, kind)}
+        </span>
+        {tag ?? <span className="w-7 text-[10px] font-semibold uppercase tracking-wide text-violet-500">typed</span>}
       </span>
     );
   }
-  if (!editable) return <span className="tnum text-ink-300">{show(figure.value, kind)}</span>;
   const r = readTypedNumber(text);
-  const bad = !r.ok || (r.value != null && (r.value < 0 || (!allowZero && r.value === 0)));
-  const empty = text.trim() === '';
+  const bad = typing && (!r.ok || (r.value != null && !signed && (r.value < 0 || (!allowZero && r.value === 0))));
+  const typed = typing && text.trim() !== '';
+  const empty = !typing && figure.value == null && !worked;
+  const canReset = typing && figure.base != null;
   return (
-    <input
-      className={clsx(
-        'input h-8 w-28 text-right tnum',
-        bad ? 'border-red-400 focus:border-red-500' : empty ? 'border-amber-400 bg-amber-50/60' : 'border-violet-300 text-violet-800',
-      )}
-      inputMode="decimal"
-      placeholder={kind === 'number' ? '0' : '$0.00'}
-      title={bad ? (r.ok ? 'Must be more than 0' : r.reason) : empty ? 'Not on the order — type it here' : 'Typed — the order’s own figure replaces it once known'}
-      value={text}
-      onChange={(ev) => onText(ev.target.value)}
-    />
+    <span className="inline-flex items-center justify-end gap-1.5 whitespace-nowrap">
+      <input
+        className={clsx(
+          'input h-8 w-28 text-right tnum',
+          bad ? 'border-red-400 focus:border-red-500'
+            : typed ? 'border-violet-300 text-violet-800'
+              : empty ? 'border-amber-400 bg-amber-50/60' : 'text-ink-900',
+        )}
+        inputMode="decimal"
+        placeholder={figure.base != null ? plain(figure.base, kind) : worked ? '—' : kind === 'number' || kind === 'pct' ? '0' : '$0.00'}
+        title={bad
+          ? (r.ok ? 'Must be more than 0' : r.reason)
+          : typed ? (figure.base != null ? `Typed — was ${show(figure.base, kind)}` : 'Typed')
+            : empty ? 'Not known yet — type it here'
+              : figure.value == null ? 'Worked out once the figures it comes from are known — or type it'
+              : figure.source === 'auto' ? 'From the order — type to change it' : 'Worked out — type to change it'}
+        value={typing ? text : plain(figure.value, kind)}
+        onChange={(ev) => onText(ev.target.value)}
+        onBlur={onDone}
+      />
+      {canReset ? (
+        <button
+          type="button"
+          className="grid w-7 place-items-center rounded text-violet-500 hover:bg-violet-50 hover:text-violet-700"
+          title={`Put back ${show(figure.base, kind)}`}
+          aria-label={`Put back ${show(figure.base, kind)}`}
+          onClick={onReset}
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+        </button>
+      ) : (tag ?? <span className="w-7" />)}
+    </span>
   );
 }
 
@@ -514,7 +569,7 @@ function GroupRows({
   title, swatch, count, missing, open, onToggle, total, perPiece, share, children,
 }: {
   title: string; swatch: string; count: number; missing: number; open: boolean; onToggle: () => void;
-  total: number | null; perPiece: number | null; share: string; children: ReactNode;
+  total: ReactNode; perPiece: number | null; share: string; children: ReactNode;
 }) {
   return (
     <>
@@ -535,7 +590,7 @@ function GroupRows({
             )}
           </button>
         </td>
-        <td className="td tnum text-right font-semibold">{money(total)}</td>
+        <td className="td tnum text-right font-semibold" onClick={(ev) => ev.stopPropagation()}>{total}</td>
         <td className="td tnum text-right text-ink-500">{price(perPiece)}</td>
         <td className="td tnum text-right text-ink-400">{share}</td>
       </tr>

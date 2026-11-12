@@ -9,20 +9,23 @@
  * `computeCosting`, so the two can be read side by side without a second
  * formula to disagree with the first.
  *
- * Every figure is filled from the order when the order knows it. A figure the
- * order does not know is typed by hand and stored on the order. A typed figure
- * is only a stand-in: once the order learns the real one (a price arrives on
- * the BOM, a target is set on Production), the order's figure is used.
+ * Every figure is filled from the order when the order knows it, and every
+ * figure — the order's and the calculated ones alike (days in line, C.M,
+ * subtotals, the total, the profit) — can be typed over, as on the actual
+ * costing. A typed figure wins and is stored on the order; the figure it
+ * replaced is kept beside it (`base`) so it can be shown and put back.
  */
 
 import { computeCosting, type CostGroup, type CostLineInput } from './costing.js';
 
-/** Where a figure came from: the order, a person, or nowhere yet. */
-export type ExpectedSource = 'auto' | 'typed' | null;
+/** Where a figure came from: the order, a person, the calculation, or nowhere yet. */
+export type ExpectedSource = 'auto' | 'typed' | 'calc' | null;
 
 export interface ExpectedFigure {
   value: number | null;
   source: ExpectedSource;
+  /** The order's own (or the calculated) figure — what a typed one replaced. */
+  base: number | null;
 }
 
 /** One planned material or outside-work row, as the order holds it. */
@@ -40,8 +43,15 @@ export interface ExpectedSourceLine {
 /** Keys of figures that can be typed; per-row ones are `qty:<ref>` and `price:<ref>`. */
 export const EXPECTED_ORDER_KEYS = [
   'orderQty', 'sellPriceUsd', 'dailyCostUsd', 'machineCount', 'lineMachines', 'targetPerDay', 'otherCostUsd',
+  // Calculated figures, typed over.
+  'machineCostPerDay', 'daysInLine', 'cmPerPieceUsd',
+  'fabricCostUsd', 'accessoryCostUsd', 'externalCostUsd',
+  'totalCostUsd', 'unitCostUsd', 'profitPerUnitUsd', 'profitPct',
 ] as const;
 export type ExpectedOrderKey = (typeof EXPECTED_ORDER_KEYS)[number];
+
+/** Figures that may be typed below zero: a planned loss is a loss. */
+export const EXPECTED_SIGNED_KEYS: readonly string[] = ['profitPerUnitUsd', 'profitPct'];
 
 export type ExpectedTyped = Record<string, number>;
 
@@ -71,8 +81,14 @@ export interface ExpectedCostingResult {
   targetPerDay: ExpectedFigure;
   /** Typed only: anything else the order will cost, in dollars for the whole order. */
   otherCostUsd: ExpectedFigure;
-  /** Working days the line is expected to need: quantity ÷ target per day, rounded up. */
+  /** Working days the line is expected to need: quantity ÷ target per day, rounded up, or typed. */
   daysInLine: number | null;
+  /** The calculated figures, each with what was calculated and whether it was typed over. */
+  derived: Record<
+    'machineCostPerDay' | 'daysInLine' | 'cmPerPieceUsd' | 'fabricCostUsd' | 'accessoryCostUsd' | 'externalCostUsd'
+    | 'totalCostUsd' | 'unitCostUsd' | 'profitPerUnitUsd' | 'profitPct',
+    ExpectedFigure
+  >;
   lines: ExpectedLineResult[];
   fabricCostUsd: number | null;
   accessoryCostUsd: number | null;
@@ -90,13 +106,21 @@ export interface ExpectedCostingResult {
 
 const positive = (n: number | null | undefined): n is number => n != null && Number.isFinite(n) && n > 0;
 
-/** The order's figure when it has one, else the typed one. */
+/** The typed figure when there is one, else the order's. */
 function resolve(auto: number | null | undefined, typed: number | undefined, allowZero = false): ExpectedFigure {
   const ok = (n: number | null | undefined): n is number =>
     n != null && Number.isFinite(n) && (allowZero ? n >= 0 : n > 0);
-  if (ok(auto)) return { value: auto, source: 'auto' };
-  if (ok(typed)) return { value: typed, source: 'typed' };
-  return { value: null, source: null };
+  const base = ok(auto) ? auto : null;
+  if (ok(typed)) return { value: typed, source: 'typed', base };
+  if (base != null) return { value: base, source: 'auto', base };
+  return { value: null, source: null, base: null };
+}
+
+/** A calculated figure, or the one typed over it. */
+function derivedFigure(calculated: number | null | undefined, typed: number | null | undefined): ExpectedFigure {
+  const base = calculated ?? null;
+  if (typed != null && Number.isFinite(typed)) return { value: typed, source: 'typed', base };
+  return { value: base, source: base == null ? null : 'calc', base };
 }
 
 /** A typed map with anything that is not a finite, non-negative number dropped. */
@@ -108,7 +132,8 @@ export function sanitiseExpectedTyped(raw: unknown): ExpectedTyped {
     const known = (EXPECTED_ORDER_KEYS as readonly string[]).includes(k) || /^(qty|price):.+/.test(k);
     if (!known) continue;
     const n = typeof v === 'number' ? v : typeof v === 'string' && v.trim() !== '' ? Number(v) : NaN;
-    if (Number.isFinite(n) && n >= 0 && n < 1e12) out[k] = n;
+    const floor = EXPECTED_SIGNED_KEYS.includes(k) ? -1e12 : 0;
+    if (Number.isFinite(n) && n >= floor && n < 1e12) out[k] = n;
   }
   return out;
 }
@@ -124,7 +149,15 @@ export function computeExpectedCosting(input: ExpectedCostingInput): ExpectedCos
   const otherCostUsd = resolve(null, typed.otherCostUsd, true);
 
   const qty = orderQty.value;
-  const daysInLine = positive(qty) && positive(targetPerDay.value) ? Math.ceil(qty / targetPerDay.value) : null;
+  const typedOver = (key: string, allowZero = true): number | null => {
+    const v = typed[key];
+    if (v == null || !Number.isFinite(v)) return null;
+    if (EXPECTED_SIGNED_KEYS.includes(key)) return v;
+    return allowZero ? (v >= 0 ? v : null) : (v > 0 ? v : null);
+  };
+  const daysCalc = positive(qty) && positive(targetPerDay.value) ? Math.ceil(qty / targetPerDay.value) : null;
+  const daysTyped = typedOver('daysInLine', false);
+  const daysInLine = daysTyped ?? daysCalc;
 
   const lines: ExpectedLineResult[] = input.lines.map((l) => {
     const q = resolve(l.plannedQty, typed[`qty:${l.ref}`]);
@@ -132,9 +165,17 @@ export function computeExpectedCosting(input: ExpectedCostingInput): ExpectedCos
     return { ...l, qty: q, price: p, cost: q.value != null && p.value != null ? q.value * p.value : null };
   });
 
-  const costLines: CostLineInput[] = lines.map((l) => ({
-    group: l.group, label: l.label, unit: l.unit, quantity: l.qty.value, unitPriceUsd: l.price.value, sourceRef: l.ref,
-  }));
+  // Outside work typed as one figure replaces its rows, as a typed figure
+  // does on the actual costing.
+  const externalTyped = typedOver('externalCostUsd');
+  const externalRows = lines.filter((l) => l.group === 'EXTERNAL');
+  const externalCalc = externalRows.length === 0 || externalRows.every((l) => l.cost == null)
+    ? null : externalRows.reduce((a, l) => a + (l.cost ?? 0), 0);
+  const costLines: CostLineInput[] = lines
+    .filter((l) => externalTyped == null || l.group !== 'EXTERNAL')
+    .map((l) => ({
+      group: l.group, label: l.label, unit: l.unit, quantity: l.qty.value, unitPriceUsd: l.price.value, sourceRef: l.ref,
+    }));
   if (otherCostUsd.value != null) {
     costLines.push({ group: 'OTHER', label: 'Other costs', unit: 'ORDER', quantity: 1, unitPriceUsd: otherCostUsd.value });
   }
@@ -155,7 +196,37 @@ export function computeExpectedCosting(input: ExpectedCostingInput): ExpectedCos
     targetPerDay: targetPerDay.value,
     sellPriceUsd: sellPriceUsd.value,
     lines: costLines,
+    externalOpCostUsd: externalTyped,
+    overrides: {
+      machineCostPerDay: typedOver('machineCostPerDay'),
+      cmCostUsd: (() => {
+        const perPc = typedOver('cmPerPieceUsd');
+        return perPc != null && positive(qty) ? perPc * qty : null;
+      })(),
+      fabricCostUsd: typedOver('fabricCostUsd'),
+      accessoryCostUsd: typedOver('accessoryCostUsd'),
+      totalCostUsd: typedOver('totalCostUsd'),
+      unitActualCostUsd: typedOver('unitCostUsd'),
+      profitPerUnitUsd: typedOver('profitPerUnitUsd'),
+      profitPct: typedOver('profitPct'),
+    },
   });
+  /** What the engine worked out for a cell, whether or not it was typed over. */
+  const calc = (key: keyof typeof r.calculated, value: number | null): number | null =>
+    r.overridden.includes(key) ? (r.calculated[key] as number | null) ?? null : value;
+  const cmCalc = calc('cmCostUsd', r.cmCostUsd);
+  const derived: ExpectedCostingResult['derived'] = {
+    machineCostPerDay: derivedFigure(calc('machineCostPerDay', r.machineCostPerDay), typedOver('machineCostPerDay')),
+    daysInLine: derivedFigure(daysCalc, daysTyped),
+    cmPerPieceUsd: derivedFigure(cmCalc != null && positive(qty) ? cmCalc / qty : null, positive(qty) ? typedOver('cmPerPieceUsd') : null),
+    fabricCostUsd: derivedFigure(calc('fabricCostUsd', r.fabricCostUsd), typedOver('fabricCostUsd')),
+    accessoryCostUsd: derivedFigure(calc('accessoryCostUsd', r.accessoryCostUsd), typedOver('accessoryCostUsd')),
+    externalCostUsd: derivedFigure(externalCalc, externalTyped),
+    totalCostUsd: derivedFigure(calc('totalCostUsd', r.totalCostUsd), typedOver('totalCostUsd')),
+    unitCostUsd: derivedFigure(calc('unitActualCostUsd', r.unitActualCostUsd), typedOver('unitCostUsd')),
+    profitPerUnitUsd: derivedFigure(calc('profitPerUnitUsd', r.profitPerUnitUsd), typedOver('profitPerUnitUsd')),
+    profitPct: derivedFigure(calc('profitPct', r.profitPct), typedOver('profitPct')),
+  };
 
   const missing: string[] = [];
   if (orderQty.value == null) missing.push('the order quantity');
@@ -172,6 +243,7 @@ export function computeExpectedCosting(input: ExpectedCostingInput): ExpectedCos
   return {
     orderQty, sellPriceUsd, dailyCostUsd, machineCount, lineMachines, targetPerDay, otherCostUsd,
     daysInLine,
+    derived,
     lines,
     fabricCostUsd: r.fabricCostUsd,
     accessoryCostUsd: r.accessoryCostUsd,
