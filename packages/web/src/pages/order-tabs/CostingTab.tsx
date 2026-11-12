@@ -57,7 +57,7 @@ export function CostingTab({ order }: { order: OrderDetailDto }) {
       )}
       {view === 'actual'
         ? <ActualCostingSheet order={order} />
-        : <div className="p-5"><PlannedCostingCard order={order} c={order.costing!} /></div>}
+        : <div className="p-5"><PlannedCostingCard order={order} c={order.costing!} onOpenActual={() => pick('actual')} /></div>}
     </>
   );
 }

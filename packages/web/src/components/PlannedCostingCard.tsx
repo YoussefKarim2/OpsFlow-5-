@@ -51,7 +51,7 @@ function plannedLines(planned: CostLineDto[]): ExpectedSourceLine[] {
   }));
 }
 
-export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: CostingResult }) {
+export function PlannedCostingCard({ order, c, onOpenActual }: { order: OrderDetailDto; c: CostingResult; onOpenActual?: () => void }) {
   const { can } = useAuth();
   const qc = useQueryClient();
   const costing = useQuery({ queryKey: ['costing', order.id], queryFn: () => api.steps.costing(order.id) });
@@ -172,6 +172,81 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
   );
   const d = e.derived;
 
+  // The dark band's figures are edited where they stand: click one, type,
+  // Enter (or click away) keeps it, Esc leaves it. A figure shown for the
+  // whole order (the profit "in all", cut & make) is stored per piece, so
+  // `scale` turns one into the other.
+  const [editing, setEditing] = useState<{ key: string; scale: number; text: string } | null>(null);
+  const cancelled = useRef(false);
+  const finishEdit = (f: ExpectedFigure) => {
+    if (!editing) return;
+    const { key, scale, text: typed } = editing;
+    setEditing(null);
+    if (cancelled.current) { cancelled.current = false; return; }
+    if (typed.trim() === '') { reset(key); return; }
+    const r = readTypedNumber(typed);
+    if (!r.ok || r.value == null || (!EXPECTED_SIGNED_KEYS.includes(key) && r.value < 0)) return;
+    const v = r.value / scale;
+    if (f.base != null && Math.abs(v - f.base) < 1e-9) { reset(key); return; }
+    setText((t) => ({ ...t, [key]: String(v) }));
+  };
+  const band = (
+    key: string, f: ExpectedFigure, kind: Kind,
+    opts: { className: string; scale?: number | null; tone?: string; label: string },
+  ) => {
+    const scale = opts.scale === undefined ? 1 : opts.scale;
+    const can = editable && scale != null && scale > 0;
+    const shown = f.value == null || scale == null ? null : f.value * scale;
+    if (can && editing?.key === key && editing.scale === scale) {
+      return (
+        <input
+          autoFocus
+          aria-label={opts.label}
+          inputMode="decimal"
+          className={clsx(opts.className, 'tnum w-full min-w-0 max-w-[14rem] rounded bg-white/10 px-1.5 text-white outline-none ring-1 ring-violet-300')}
+          value={editing.text}
+          onChange={(ev) => setEditing({ ...editing, text: ev.target.value })}
+          onBlur={() => finishEdit(f)}
+          onKeyDown={(ev) => {
+            if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur();
+            if (ev.key === 'Escape') { cancelled.current = true; (ev.target as HTMLInputElement).blur(); }
+          }}
+        />
+      );
+    }
+    const typed = f.source === 'typed';
+    const baseShown = f.base == null || scale == null ? null : f.base * scale;
+    return (
+      <span className="inline-flex max-w-full items-center gap-1.5">
+        <button
+          type="button"
+          disabled={!can}
+          aria-label={can ? `Edit ${opts.label}` : opts.label}
+          title={can ? (typed ? `Typed${baseShown != null ? ` — was ${show(baseShown, kind)}` : ''}. Click to change.` : 'Click to type a different figure') : undefined}
+          onClick={() => setEditing({ key, scale: scale!, text: plain(shown, kind) })}
+          className={clsx(
+            opts.className, 'tnum truncate rounded text-left disabled:cursor-default',
+            can && '-mx-1 cursor-text px-1 hover:bg-white/10 hover:ring-1 hover:ring-white/25',
+            shown == null ? 'text-ink-500' : typed ? 'text-violet-300' : (opts.tone ?? 'text-white'),
+          )}
+        >
+          {show(shown, kind)}
+        </button>
+        {can && typed && f.base != null && (
+          <button
+            type="button"
+            className="grid shrink-0 place-items-center rounded p-0.5 text-violet-300 hover:bg-white/10 hover:text-white"
+            title={`Put back ${show(baseShown, kind)}`}
+            aria-label={`Put back ${show(baseShown, kind)}`}
+            onClick={() => reset(key)}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </span>
+    );
+  };
+
   const qty = e.orderQty.value;
   const perPc = (n: number | null) => (n != null && qty != null && qty > 0 ? n / qty : null);
   const lineMissing = (l: ExpectedLineResult) => (l.qty.value == null ? 1 : 0) + (l.price.value == null ? 1 : 0);
@@ -214,13 +289,14 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
   const identity = [c.identity.customer, c.identity.orderName, c.identity.poNumber && `PO ${c.identity.poNumber}`]
     .filter(Boolean).join(' · ');
 
-  const parts = [
-    { key: 'fabric', name: 'Fabric', swatch: 'bg-accent-500', cost: e.fabricCostUsd },
-    { key: 'acc', name: 'Accessories', swatch: 'bg-accent-300', cost: e.accessoryCostUsd },
-    { key: 'ext', name: 'Outside work', swatch: 'bg-ink-300', cost: e.externalCostUsd },
-    { key: 'cm', name: 'Cut & make', swatch: 'bg-ink-500', cost: e.cmCostUsd },
-    { key: 'other', name: 'Other', swatch: 'bg-ink-600', cost: e.otherTotalUsd },
-  ].filter((p) => p.key !== 'other' || p.cost != null);
+  const parts: Array<{ key: string; name: string; swatch: string; cost: number | null; typeKey: string; figure: ExpectedFigure; scale?: number | null }> = [
+    { key: 'fabric', name: 'Fabric', swatch: 'bg-accent-500', cost: e.fabricCostUsd, typeKey: 'fabricCostUsd', figure: e.derived.fabricCostUsd },
+    { key: 'acc', name: 'Accessories', swatch: 'bg-accent-300', cost: e.accessoryCostUsd, typeKey: 'accessoryCostUsd', figure: e.derived.accessoryCostUsd },
+    { key: 'ext', name: 'Outside work', swatch: 'bg-ink-300', cost: e.externalCostUsd, typeKey: 'externalCostUsd', figure: e.derived.externalCostUsd },
+    // Cut & make is kept per piece; shown, and typed, for the whole order.
+    { key: 'cm', name: 'Cut & make', swatch: 'bg-ink-500', cost: e.cmCostUsd, typeKey: 'cmPerPieceUsd', figure: e.derived.cmPerPieceUsd, scale: qty },
+    { key: 'other', name: 'Other', swatch: 'bg-ink-600', cost: e.otherTotalUsd, typeKey: 'otherCostUsd', figure: e.otherCostUsd },
+  ];
   const partsSum = parts.reduce((a, p) => a + (p.cost != null && p.cost > 0 ? p.cost : 0), 0);
   const share = (n: number | null) => (n != null && e.totalCostUsd ? fmtPct((n / e.totalCostUsd) * 100, 1) : '—');
 
@@ -246,27 +322,43 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
         <div className="grid lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
           <div className="border-b border-white/10 px-5 py-5 lg:border-b-0 lg:border-r">
             <p className="text-2xs font-semibold uppercase tracking-wider text-ink-300">Planned profit per piece</p>
-            <p className={clsx('tnum mt-1 truncate text-4xl font-semibold leading-none tracking-tight', profit == null ? 'text-ink-500' : profitTone)}>
-              {profit == null ? '—' : price(profit)}
-            </p>
-            <p className="mt-1.5 text-2xs leading-snug text-ink-400">
-              {profit != null && qty != null
-                ? `${money(profit * qty)} in all, on ${fmtNumber(qty)} pieces ordered`
-                : 'selling price − planned cost per piece'}
+            <div className="mt-1">
+              {band('profitPerUnitUsd', d.profitPerUnitUsd, 'price', {
+                label: 'planned profit per piece', className: 'text-4xl font-semibold leading-none tracking-tight', tone: profitTone,
+              })}
+            </div>
+            <p className="mt-1.5 flex flex-wrap items-baseline gap-x-1 text-2xs leading-snug text-ink-400">
+              {profit != null && qty != null ? (
+                <>
+                  {band('profitPerUnitUsd', d.profitPerUnitUsd, 'money', { label: 'planned profit in all', className: 'text-2xs', tone: 'text-ink-300', scale: qty })}
+                  <span>in all, on {fmtNumber(qty)} pieces ordered</span>
+                </>
+              ) : 'selling price − planned cost per piece'}
             </p>
             {provisional && profit != null && (
               <p className="mt-1 text-2xs font-medium text-amber-300">{provisionalNote[0]!.toUpperCase() + provisionalNote.slice(1)}</p>
             )}
           </div>
           <div className="grid grid-cols-2 gap-px bg-white/10 xl:grid-cols-4 [&>*]:bg-ink-900 [&>*]:px-5 [&>*]:py-5">
-            <DarkStat label="Planned cost / piece" value={price(e.unitCostUsd)} note={provisional && e.unitCostUsd != null ? 'so far — figures still to fill' : 'planned total ÷ order quantity'} />
-            <DarkStat label="Planned total" value={money(e.totalCostUsd)} note={provisional && e.totalCostUsd != null ? 'so far — figures still to fill' : 'every cost row, added up'} />
-            <DarkStat label="Selling price" value={price(e.sellPriceUsd.value)} note={e.sellPriceUsd.source === 'typed' ? 'typed here' : 'from the PO'} />
+            <DarkStat
+              label="Planned cost / piece"
+              value={band('unitCostUsd', d.unitCostUsd, 'price', { label: 'planned cost per piece', className: 'text-lg font-semibold leading-none' })}
+              note={provisional && e.unitCostUsd != null ? 'so far — figures still to fill' : 'planned total ÷ order quantity'}
+            />
+            <DarkStat
+              label="Planned total"
+              value={band('totalCostUsd', d.totalCostUsd, 'money', { label: 'planned total', className: 'text-lg font-semibold leading-none' })}
+              note={provisional && e.totalCostUsd != null ? 'so far — figures still to fill' : 'every cost row, added up'}
+            />
+            <DarkStat
+              label="Selling price"
+              value={band('sellPriceUsd', e.sellPriceUsd, 'price', { label: 'selling price', className: 'text-lg font-semibold leading-none' })}
+              note={e.sellPriceUsd.source === 'typed' ? 'typed here' : 'from the PO'}
+            />
             <DarkStat
               label="Planned margin"
-              value={e.profitPct == null ? '—' : fmtPct(e.profitPct, 1)}
+              value={band('profitPct', d.profitPct, 'pct', { label: 'planned margin', className: 'text-lg font-semibold leading-none', tone: profitTone })}
               note="profit ÷ selling price"
-              valueClass={e.profitPct == null ? undefined : profitTone}
             />
           </div>
         </div>
@@ -284,7 +376,7 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
                 <li key={p.key} className="flex items-center gap-1.5 text-xs">
                   <span className={clsx('h-2 w-2 shrink-0 rounded-sm', p.swatch)} />
                   <span className="text-ink-300">{p.name}</span>
-                  <span className={clsx('tnum font-semibold', p.cost == null ? 'text-ink-500' : 'text-white')}>{money(p.cost)}</span>
+                  {band(p.typeKey, p.figure, 'money', { label: p.name, className: 'text-xs font-semibold', scale: p.scale })}
                 </li>
               ))}
             </ul>
@@ -293,8 +385,20 @@ export function PlannedCostingCard({ order, c }: { order: OrderDetailDto; c: Cos
             <p className="text-2xs font-semibold uppercase tracking-wider text-ink-300">Planned against actual</p>
             {diff != null ? (
               <div className="mt-2 flex flex-wrap items-baseline gap-x-6 gap-y-1 text-xs text-ink-300">
-                <span>Planned <span className="tnum font-semibold text-white">{price(e.unitCostUsd)}</span></span>
-                <span>Actual <span className="tnum font-semibold text-white">{price(actualUnit)}</span></span>
+                <span className="inline-flex items-baseline gap-1">Planned {band('unitCostUsd', d.unitCostUsd, 'price', { label: 'planned cost per piece', className: 'text-xs font-semibold' })}</span>
+                <span className="inline-flex items-baseline gap-1">
+                  Actual{' '}
+                  {onOpenActual ? (
+                    <button
+                      type="button"
+                      className="tnum rounded font-semibold text-white underline decoration-white/30 underline-offset-2 hover:decoration-white"
+                      title="The actual cost is changed on the Actual Costing — open it"
+                      onClick={onOpenActual}
+                    >
+                      {price(actualUnit)}
+                    </button>
+                  ) : <span className="tnum font-semibold text-white">{price(actualUnit)}</span>}
+                </span>
                 <span className={clsx('tnum font-semibold', diff > 0.00005 ? 'text-red-300' : 'text-emerald-300')}>
                   {Math.abs(diff) < 0.00005 ? 'on plan' : `${price(Math.abs(diff))} a piece ${diff > 0 ? 'over' : 'under'} plan`}
                 </span>
@@ -546,11 +650,11 @@ function Calc({ value, strong }: { value: string; strong?: boolean }) {
   return <span className={clsx('tnum text-sm', strong ? 'font-semibold text-ink-900' : 'font-medium text-ink-700', value === '—' && 'text-ink-300')}>{value}</span>;
 }
 
-function DarkStat({ label, value, note, valueClass }: { label: string; value: string; note?: string; valueClass?: string }) {
+function DarkStat({ label, value, note }: { label: string; value: ReactNode; note?: string }) {
   return (
     <div className="min-w-0">
       <p className="text-2xs font-semibold uppercase tracking-wider text-ink-300">{label}</p>
-      <p className={clsx('tnum mt-1 truncate text-lg font-semibold leading-none', value === '—' ? 'text-ink-500' : (valueClass ?? 'text-white'))}>{value}</p>
+      <div className="mt-1">{value}</div>
       {note && <p className="mt-1.5 text-2xs leading-snug text-ink-400">{note}</p>}
     </div>
   );
