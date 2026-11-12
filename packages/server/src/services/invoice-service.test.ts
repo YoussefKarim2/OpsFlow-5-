@@ -7,6 +7,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { computeInvoiceTotals, issueBlockers, type CompanyProfileDto } from '@opsflow/shared';
 import {
+  nextSequence, numberFor,
   PROFORMA_VALID_DAYS, baseDescription, buildCombinedDocument, carriedRates, buildInvoiceDocument, qtyPerOrder, defaultCoverNote, manifestFingerprint,
   type BuildOrder, type BuildPackingList, type BuildShipment,
 } from './invoice-service.js';
@@ -359,5 +360,20 @@ describe('carriedRates', () => {
   test('one order to several, and several to one', () => {
     assert.equal(carriedRates([{ description: 'Shirt — Navy', unitPrice: 4 }], ['1001', '1002']).get('Shirt — Navy (PO 1001)'), 4);
     assert.equal(carriedRates([{ description: 'Shirt — Navy (PO 1002)', unitPrice: 6 }], ['1001']).get('Shirt — Navy'), 6);
+  });
+});
+
+describe('numbering around a typed number', () => {
+  test('a number typed onto another document is skipped, and a freed sequence is reused', async () => {
+    const typedNumbers = new Set([numberFor('INVOICE' as never, 2026, 3)]);
+    const tx = {
+      invoice: {
+        findMany: async () => [{ sequence: 1 }, { sequence: 2 }, { sequence: 5 }],
+        findUnique: async ({ where }: { where: { number: string } }) => (typedNumbers.has(where.number) ? { id: 'x' } : null),
+      },
+    };
+    assert.equal(await nextSequence(tx as never, 'INVOICE' as never, 2026), 4);
+    typedNumbers.clear();
+    assert.equal(await nextSequence(tx as never, 'INVOICE' as never, 2026), 3);
   });
 });

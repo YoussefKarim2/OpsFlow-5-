@@ -620,15 +620,19 @@ export function sourcesOf(o: {
 
 // ── Numbering ────────────────────────────────────────────────────────────────
 
-/** The lowest free sequence of this kind and year, so a deleted draft hands its number back. Runs inside the creating transaction. */
+/**
+ * The lowest free sequence of this kind and year, so a deleted draft hands its
+ * number back. A number somebody typed onto another document ("INV-2026-0005"
+ * on the draft holding sequence 2) is skipped too. Runs inside the creating
+ * transaction.
+ */
 export async function nextSequence(tx: Prisma.TransactionClient, kind: InvoiceKind, year: number): Promise<number> {
-  const taken = await tx.invoice.findMany({ where: { kind, year }, select: { sequence: true }, orderBy: { sequence: 'asc' } });
-  let next = 1;
-  for (const { sequence } of taken) {
-    if (sequence > next) break;
-    if (sequence === next) next += 1;
+  const taken = new Set((await tx.invoice.findMany({ where: { kind, year }, select: { sequence: true } })).map((t) => t.sequence));
+  for (let next = 1; ; next += 1) {
+    if (taken.has(next)) continue;
+    const typed = await tx.invoice.findUnique({ where: { number: numberFor(kind, year, next) }, select: { id: true } });
+    if (!typed) return next;
   }
-  return next;
 }
 
 export const numberFor = (kind: InvoiceKind, year: number, sequence: number) =>

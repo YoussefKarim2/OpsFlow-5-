@@ -61,6 +61,8 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
   const s = doc.sheet ?? {};
   const sheet = buildSheet(doc.lines, orders, s);
   const lead = s.leadDays ?? SHEET_DEFAULTS.leadDays;
+  // Typed, it is printed as its own line and the customer's block goes back to "Bill to".
+  const shipTo = s.shipmentTo?.trim() || null;
   const eta = sheetEta(s.etd, lead);
   const dayOf = (d: string | null | undefined) => (d ? fmtDate(`${d.slice(0, 10)}T00:00:00.000Z`) : '');
   const exporter = s.exporterName ?? doc.seller.name;
@@ -139,7 +141,7 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
           {/* Bill to + meta */}
           <div className="grid grid-cols-2 gap-6 px-5 pb-4 pt-4">
             <div>
-              <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-ink-500">{sheet ? 'Shipment to' : 'Bill to'}</p>
+              <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-ink-500">{sheet && !shipTo ? 'Shipment to' : 'Bill to'}</p>
               <p className="mt-1 text-[13px] font-bold"><T>{doc.billTo}</T></p>
               {doc.billToAddress && <p className="mt-0.5 text-ink-700"><T>{doc.billToAddress}</T></p>}
               {doc.billToEmail && <p className="mt-0.5 text-ink-700">{doc.billToEmail}</p>}
@@ -156,9 +158,11 @@ export function InvoiceDocument({ doc }: { doc: InvoiceDto }) {
                   <Meta label="Shipment" value={[doc.shipmentRef, doc.shippedOn ? fmtDate(doc.shippedOn) : null].filter(Boolean).join(' · ')} />
                 )}
                 {!isInvoice && doc.shippedOn && <Meta label="Shipping" value={fmtDate(doc.shippedOn)} />}
+                {!sheet && shipTo && <Meta label="Shipment to" value={shipTo} />}
                 {sheet && (
                   <>
                     <Meta label="Shipment from" value={s.shipmentFrom ?? SHEET_DEFAULTS.shipmentFrom} />
+                    {shipTo && <Meta label="Shipment to" value={shipTo} />}
                     <Meta label="Container" value={s.container ?? SHEET_DEFAULTS.container} />
                     {s.onBoardDate && <Meta label="On board" value={dayOf(s.onBoardDate)} />}
                     {s.etd && <Meta label="ETD" value={dayOf(s.etd)} />}

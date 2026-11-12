@@ -37,6 +37,8 @@ export interface ProformaSheetSettings {
   title?: string | null;
   statement?: string | null;
   shipmentFrom?: string | null;
+  /** Where the goods are shipped to, typed: a country, a city, a warehouse. */
+  shipmentTo?: string | null;
   container?: string | null;
   cartonsPerContainer?: number | null;
   onBoardDate?: string | null;

@@ -199,6 +199,8 @@ const qs = (params: Record<string, unknown>): string => {
 
 /** What a draft invoice's editor sends back. Every field optional; lines replace the set. */
 export interface InvoiceEditBody {
+  /** A draft's number, typed over the one it was given. */
+  number?: string;
   date?: string;
   dueDate?: string | null;
   paymentTerms?: string | null;

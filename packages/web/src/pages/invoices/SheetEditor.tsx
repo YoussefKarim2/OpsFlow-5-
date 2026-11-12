@@ -10,7 +10,7 @@ import { HTS_CODES, SHEET_DEFAULTS, sheetEta, type ProformaSheetSettings, type S
 import { ComboSelect } from '../../components/ComboSelect';
 import { Card, Field, Num } from '../../components/ui';
 
-const TOP_TEXT = ['title', 'statement', 'shipmentFrom', 'container', 'onBoardDate', 'etd', 'portFrom', 'portTo',
+const TOP_TEXT = ['title', 'statement', 'shipmentFrom', 'shipmentTo', 'container', 'onBoardDate', 'etd', 'portFrom', 'portTo',
   'consolidatingVendor', 'cartonSize', 'exporterName', 'exporterAddress', 'qizRef', 'destination', 'signatory'] as const;
 const TOP_NUM = ['cartonsPerContainer', 'leadDays'] as const;
 const ROW_TEXT = ['description', 'po', 'partNo', 'hts', 'unit'] as const;
@@ -89,6 +89,7 @@ export function ShipmentEditor({ draft, onChange }: { draft: SheetDraft; onChang
         <div className="card-header"><h3 className="card-title">Shipment</h3></div>
         <div className="grid grid-cols-2 gap-3 p-4">
           {text('shipmentFrom', 'Shipment from', SHEET_DEFAULTS.shipmentFrom)}
+          {text('shipmentTo', 'Shipment to', 'e.g. Netherlands')}
           {text('container', 'Container', SHEET_DEFAULTS.container)}
           <Field label="On board date"><input type="date" className="input text-xs" value={draft.top.onBoardDate} onChange={(e) => top('onBoardDate', e.target.value)} /></Field>
           <Field label="ETD"><input type="date" className="input text-xs" value={draft.top.etd} onChange={(e) => top('etd', e.target.value)} /></Field>
@@ -103,7 +104,6 @@ export function ShipmentEditor({ draft, onChange }: { draft: SheetDraft; onChang
           {text('consolidatingVendor', 'Consolidating vendor')}
           {text('cartonSize', 'Carton size', '45x45x65CM')}
         </div>
-        <p className="border-t border-ink-100 px-4 py-2 text-2xs text-ink-500">Shipment to and its address are the Bill to block.</p>
       </Card>
   );
 }

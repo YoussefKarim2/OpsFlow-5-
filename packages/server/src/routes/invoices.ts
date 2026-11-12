@@ -511,7 +511,7 @@ const sheetInt = (min: number, max: number) => z.number().int('Whole numbers onl
 const sheetDay = z.string().refine(isCalendarDay, 'A date is written YYYY-MM-DD and must exist.').nullable().optional();
 /** The factory proforma sheet's typed fields. */
 const sheetSchema = z.object({
-  title: text(300), statement: text(300), shipmentFrom: text(120), container: text(40),
+  title: text(300), statement: text(300), shipmentFrom: text(120), shipmentTo: text(200), container: text(40),
   cartonsPerContainer: sheetNum(100_000), onBoardDate: sheetDay, etd: sheetDay, leadDays: sheetNum(365),
   portFrom: text(120), portTo: text(120), consolidatingVendor: text(200), cartonSize: text(60),
   exporterName: text(200), exporterAddress: text(400), qizRef: text(60), destination: text(120), signatory: text(120),
@@ -522,6 +522,9 @@ const sheetSchema = z.object({
 });
 
 const editSchema = z.object({
+  /** The document's number, typed over the one it was given (a draft only). */
+  number: z.string().trim().min(1, 'The document needs a number.').max(40, 'At most 40 characters.')
+    .regex(/^[A-Za-z0-9][A-Za-z0-9 ./#_-]*$/, 'Letters, digits, spaces and . / # _ - only.').optional(),
   date: dateInput.optional(),
   dueDate: dateInput.nullable().optional(),
   paymentTerms: text(200),
@@ -574,12 +577,17 @@ invoicesRouter.put('/:id', requirePermission('invoice:write'), asyncHandler(asyn
   }));
 
   const scalar = <T>(v: T | undefined, current: T): T => (v === undefined ? current : v);
+  if (body.number && body.number !== existing.number) {
+    const clash = await prisma.invoice.findUnique({ where: { number: body.number }, select: { kind: true } });
+    if (clash) throw new ValidationError(`${body.number} is already the number of another ${clash.kind === InvoiceKind.PROFORMA ? 'proforma' : 'invoice'}. Choose another.`);
+  }
   const updated = await prisma.$transaction(async (tx) => {
     const { count } = await tx.invoice.updateMany({
       // The version the editor opened, in the write itself: two saves at the
       // same moment cannot both pass a check made before it.
       where: { id: existing.id, status: InvoiceStatus.DRAFT, ...(body.updatedAt ? { updatedAt: new Date(body.updatedAt) } : {}) },
       data: {
+        number: scalar(body.number, existing.number),
         date: body.date ? new Date(body.date) : existing.date,
         dueDate: body.dueDate === undefined ? existing.dueDate : body.dueDate === null ? null : new Date(body.dueDate),
         paymentTerms: scalar(body.paymentTerms, existing.paymentTerms),

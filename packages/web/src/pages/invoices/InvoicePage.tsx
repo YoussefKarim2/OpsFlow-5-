@@ -40,6 +40,7 @@ interface CartonDraft {
 const contentsLabel = (c: { contents: Array<{ label: string; qty: number }> }) => c.contents.map((x) => `${x.label} × ${x.qty}`).join(', ');
 const cartonPieces = (c: CartonDraft) => (c.contents.length > 0 ? c.contents.reduce((a, x) => a + x.qty, 0) : numOrNull(c.pieces) ?? 0);
 interface Draft {
+  number: string;
   date: string; dueDate: string; paymentTerms: string;
   billTo: string; billToAddress: string; billToEmail: string;
   customerReference: string; shipmentRef: string; shippedOn: string;
@@ -82,6 +83,7 @@ function figureProblem(d: Draft, inv: InvoiceDto): string | null {
 
 function fromServer(inv: InvoiceDto): Draft {
   return {
+    number: inv.number,
     date: day(inv.date), dueDate: day(inv.dueDate), paymentTerms: inv.paymentTerms ?? '',
     billTo: inv.billTo, billToAddress: inv.billToAddress ?? '', billToEmail: inv.billToEmail ?? '',
     customerReference: inv.customerReference ?? '', shipmentRef: inv.shipmentRef ?? '', shippedOn: day(inv.shippedOn),
@@ -127,6 +129,7 @@ function cartonProblem(d: Draft): string | null {
 function toBody(d: Draft, inv: InvoiceDto): InvoiceEditBody {
   const nn = (s: string) => (s.trim() === '' ? null : s.trim());
   return {
+    ...(d.number.trim() && d.number.trim() !== inv.number ? { number: d.number.trim() } : {}),
     date: d.date || undefined, dueDate: d.dueDate || null, paymentTerms: nn(d.paymentTerms),
     billTo: d.billTo.trim(), billToAddress: nn(d.billToAddress), billToEmail: nn(d.billToEmail),
     customerReference: nn(d.customerReference), shipmentRef: nn(d.shipmentRef), shippedOn: d.shippedOn || null,
@@ -165,6 +168,7 @@ function preview(inv: InvoiceDto, d: Draft): InvoiceDto {
   const nn = (s: string) => (s.trim() === '' ? null : s);
   return {
     ...inv, lines, totals, totalInWords: '',
+    number: d.number.trim() || inv.number,
     date: d.date ? `${d.date}T00:00:00.000Z` : inv.date,
     dueDate: d.dueDate ? `${d.dueDate}T00:00:00.000Z` : null,
     shippedOn: d.shippedOn ? `${d.shippedOn}T00:00:00.000Z` : null,
@@ -420,6 +424,11 @@ export function InvoicePage() {
             <Card>
               <div className="card-header"><h3 className="card-title">Dates &amp; references</h3></div>
               <div className="grid grid-cols-2 gap-3 p-4">
+                <div className="col-span-2">
+                  <Field label={inv.kind === 'INVOICE' ? 'Invoice number' : 'Proforma number'} hint={`Given as ${inv.number}; type your own if it is numbered differently.`}>
+                    <input className="input tnum" value={draft.number} maxLength={40} onChange={(e) => set('number', e.target.value)} />
+                  </Field>
+                </div>
                 <Field label={inv.kind === 'INVOICE' ? 'Invoice date' : 'Date'} hint={inv.kind === 'INVOICE' ? 'The day the goods left, unless agreed otherwise.' : undefined}>
                   <input type="date" className="input" value={draft.date} onChange={(e) => set('date', e.target.value)} />
                 </Field>

@@ -130,7 +130,8 @@ export async function proformaSheetWorkbook(inv: InvoiceDto, orders: BuildOrder[
   const address = (inv.billToAddress ?? '').split('\n').map((l) => l.trim()).filter(Boolean);
   label(6, 'Shipment From', s.shipmentFrom ?? SHEET_DEFAULTS.shipmentFrom);
   label(7, 'Date :', day(inv.date), { numFmt: DAY_FMT, merge: true });
-  label(8, 'Shipment To', inv.billTo);
+  // Typed on the document, else the customer, as the factory's sheet has it.
+  label(8, 'Shipment To', s.shipmentTo?.trim() || inv.billTo);
   label(9, 'Address :', address[0] ?? '');
   label(10, '', address[1] ?? '');
   label(11, '', address.slice(2).join(', '));
