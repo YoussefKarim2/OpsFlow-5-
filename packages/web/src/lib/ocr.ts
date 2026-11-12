@@ -8,7 +8,7 @@
  * loaded only when a picture is imported. The procedure is in ocr-read.ts.
  */
 
-import { joinPictures, readPicture, type OcrEngine, type OcrPass, type OcrWord } from './ocr-read';
+import { PAGE_PROBE_WIDTH, findPage, joinPictures, readPicture, type OcrEngine, type OcrPass, type OcrWord } from './ocr-read';
 
 export type { OcrPass } from './ocr-read';
 
@@ -21,6 +21,20 @@ export const MAX_PICTURES = 10;
 const base = `/ocr/${__OCR_VERSION__}`;
 
 type Worker = Awaited<ReturnType<typeof import('tesseract.js')['createWorker']>>;
+
+/** The words of one reading, each with where its line's baseline sits under it. */
+function wordsOf(data: unknown): OcrWord[] {
+  const words: OcrWord[] = [];
+  type Line = { baseline?: { x0: number; y0: number; x1: number; y1: number }; words: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }> };
+  const blocks = (data as { blocks?: Array<{ paragraphs: Array<{ lines: Line[] }> }> }).blocks ?? [];
+  for (const b of blocks) for (const p of b.paragraphs) for (const l of p.lines) for (const w of l.words) {
+    const bl = l.baseline;
+    const mid = (w.bbox.x0 + w.bbox.x1) / 2;
+    const baseline = bl && bl.x1 !== bl.x0 ? bl.y0 + ((bl.y1 - bl.y0) * (mid - bl.x0)) / (bl.x1 - bl.x0) : null;
+    words.push({ text: w.text, ...w.bbox, baseline, conf: w.confidence });
+  }
+  return words;
+}
 
 /** The engine for one picture: the picture enlarged on a canvas, read by the worker. */
 function engineFor(worker: Worker, bitmap: ImageBitmap, onProgress: (p: number) => void): OcrEngine {
@@ -48,16 +62,20 @@ function engineFor(worker: Worker, bitmap: ImageBitmap, onProgress: (p: number) 
       });
       onProgress(0);
       const { data } = await worker.recognize(enlarged(scale), {}, { blocks: true, text: false } as never);
-      const words: OcrWord[] = [];
-      type Line = { baseline?: { x0: number; y0: number; x1: number; y1: number }; words: Array<{ text: string; confidence: number; bbox: { x0: number; y0: number; x1: number; y1: number } }> };
-      const blocks = (data as unknown as { blocks?: Array<{ paragraphs: Array<{ lines: Line[] }> }> }).blocks ?? [];
-      for (const b of blocks) for (const p of b.paragraphs) for (const l of p.lines) for (const w of l.words) {
-        const bl = l.baseline;
-        const mid = (w.bbox.x0 + w.bbox.x1) / 2;
-        const baseline = bl && bl.x1 !== bl.x0 ? bl.y0 + ((bl.y1 - bl.y0) * (mid - bl.x0)) / (bl.x1 - bl.x0) : null;
-        words.push({ text: w.text, ...w.bbox, baseline, conf: w.confidence });
-      }
-      return words;
+      return wordsOf(data);
+    },
+    async line(scale, box) {
+      const page = enlarged(scale);
+      const crop = document.createElement('canvas');
+      crop.width = Math.max(1, Math.min(box.width, page.width - box.left));
+      crop.height = Math.max(1, Math.min(box.height, page.height - box.top));
+      crop.getContext('2d')!.drawImage(page, box.left, box.top, crop.width, crop.height, 0, 0, crop.width, crop.height);
+      await worker.setParameters({ tessedit_pageseg_mode: '7' as never, tessedit_char_whitelist: '', preserve_interword_spaces: '1' });
+      const { data } = await worker.recognize(crop, {}, { blocks: true, text: false } as never);
+      return wordsOf(data).map((w) => ({
+        ...w, x0: w.x0 + box.left, x1: w.x1 + box.left, y0: w.y0 + box.top, y1: w.y1 + box.top,
+        baseline: w.baseline == null ? null : w.baseline + box.top,
+      }));
     },
     async word(scale, box, allowed) {
       const page = enlarged(scale);
@@ -70,6 +88,35 @@ function engineFor(worker: Worker, bitmap: ImageBitmap, onProgress: (p: number) 
       return { text: data.text, conf: data.confidence };
     },
   };
+}
+
+/**
+ * The part of a screenshot to read: the document page, when the screenshot
+ * is of the whole screen with other windows beside it (see findPage).
+ */
+async function pageOf(bitmap: ImageBitmap): Promise<ImageBitmap> {
+  const w = Math.min(PAGE_PROBE_WIDTH, bitmap.width);
+  const h = Math.max(1, Math.round((bitmap.height * w) / bitmap.width));
+  const probe = document.createElement('canvas');
+  probe.width = w;
+  probe.height = h;
+  const ctx = probe.getContext('2d', { willReadFrequently: true });
+  if (!ctx) return bitmap;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  const rgba = ctx.getImageData(0, 0, w, h).data;
+  const light = new Uint8Array(w * h);
+  for (let i = 0; i < light.length; i++) light[i] = Math.min(rgba[i * 4]!, rgba[i * 4 + 1]!, rgba[i * 4 + 2]!);
+  const box = findPage(light, w, h);
+  if (!box) return bitmap;
+  const sx = Math.round(box.x0 * bitmap.width), sy = Math.round(box.y0 * bitmap.height);
+  const sw = Math.round((box.x1 - box.x0) * bitmap.width), sh = Math.round((box.y1 - box.y0) * bitmap.height);
+  try {
+    return await createImageBitmap(bitmap, sx, sy, sw, sh);
+  } catch {
+    return bitmap;
+  }
 }
 
 /** Several screenshots as one picture, top to bottom, at their own size. */
@@ -149,12 +196,18 @@ export async function readPictures(
     const pictures: OcrPass[][] = [];
     for (const [i, bitmap] of bitmaps.entries()) {
       const name = files.length === 1 ? 'the screenshot' : `screenshot ${i + 1} of ${files.length}`;
-      const engine = engineFor(worker, bitmap, () => {});
-      pictures.push(await readPicture(engine, bitmap.width, bitmap.height, (which, done) => {
-        if (done) { step += 1; current = { label: current.label, within: 0 }; report(); return; }
-        current = { label: `Reading ${name}${which === 'second' ? ' again, enlarged' : ''}…`, within: 0 };
-        report();
-      }));
+      // Only the document is read; the screenshot itself is what is kept.
+      const page = await pageOf(bitmap);
+      try {
+        const engine = engineFor(worker, page, () => {});
+        pictures.push(await readPicture(engine, page.width, page.height, (which, done) => {
+          if (done) { step += 1; current = { label: current.label, within: 0 }; report(); return; }
+          current = { label: `Reading ${name}${which === 'second' ? ' again, enlarged' : ''}…`, within: 0 };
+          report();
+        }));
+      } finally {
+        if (page !== bitmap) page.close();
+      }
       // A screenshot read only once still counts its second step as done.
       step = (i + 1) * 2;
     }

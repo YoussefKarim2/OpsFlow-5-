@@ -121,6 +121,34 @@ describe('a screenshot of a PO', () => {
   });
 });
 
+describe('a screenshot with sizes left empty (Meyba PO 265)', () => {
+  // Two styles, each a grid of XS–XXXL with XS and XXXL empty: the reading
+  // the browser now makes, every lone "6", "8" and "M" kept.
+  const meyba: OcrPasses = ocrPassesSchema.parse(JSON.parse(
+    readFileSync(new URL('./fixtures/meyba-265-screenshot.ocr.json', import.meta.url), 'utf8'),
+  ));
+
+  test('a speck in a garment photo, read as a letter, does not join the colour', async () => {
+    const speck = { text: 'A', x0: 88, y0: 711, x1: 93, y1: 712, baseline: 712, conf: 18 };
+    const withSpeck = meyba.map((p) => ({ ...p, words: [...p.words, speck] }));
+    const r = await extractFromPicture(packOcrBundle(PNG, withSpeck));
+    const m = r.matrices.find((x) => x.ledger === 'ORDER')!;
+    assert.equal(m.rows[0]!.color, 'MEYBA x Schott S/S Jersey — Khaki');
+  });
+
+  test('each quantity lands under its own size, each style keeps its own colour', async () => {
+    const r = await extractFromPicture(packOcrBundle(PNG, meyba));
+    const m = r.matrices.find((x) => x.ledger === 'ORDER')!;
+    assert.equal(r.fields.poNumber, '265');
+    assert.deepEqual(m.sizes, ['S', 'M', 'L', 'XL', 'XXL']);
+    assert.deepEqual(m.rows.map((x) => [x.color, x.cells]), [
+      ['MEYBA x Schott S/S Jersey — Khaki', { S: 6, M: 15, L: 15, XL: 8, XXL: 6 }],
+      ['MEYBA x Schott L/S Jersey — Black', { S: 6, M: 15, L: 15, XL: 8, XXL: 6 }],
+    ]);
+    assert.deepEqual(m.rows.map((x) => x.unitPrice), [14, 14.9]);
+  });
+});
+
 describe('numbers as a picture reads them back', () => {
   test('"9.000.00" is nine thousand, "1.234.567" over a million', () => {
     assert.equal(toNum('9.000.00'), 9000);

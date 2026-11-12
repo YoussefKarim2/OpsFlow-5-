@@ -104,7 +104,10 @@ export function ocrPages(words: OcrWords): PdfPage[] {
   const heights = real.map((w) => w.y1 - w.y0).sort((a, b) => a - b);
   const typical = heights[Math.floor(heights.length / 2)]!;
   const scale = TYPICAL_WORD_PT / typical;
-  const items: TextItem[] = real.map((w) => {
+  // A speck in a photo read as a letter — an "A" a pixel tall, beside a
+  // colour's name — is far shorter than any word and barely believed.
+  const kept = real.filter((w) => !(w.y1 - w.y0 < typical * 0.35 && (w.conf ?? 100) < 50));
+  const items: TextItem[] = kept.map((w) => {
     const text = fixDigits(w.text);
     // The line's baseline when known: a "p" or a "g" hangs below the others
     // and would otherwise drop out of its own row.

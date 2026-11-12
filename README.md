@@ -326,9 +326,12 @@ with Ctrl+V, up to ten joined top to bottom). Text recognition (tesseract.js) ru
 **in the browser**, not on the server: one picture peaks at a few hundred
 megabytes, which the API cannot spare and an office computer can.
 
-- `web/src/lib/ocr-read.ts` — the procedure: each screenshot is enlarged and read
-  twice (≈2× and at the size that makes words ~24px tall), and garbled cells in
-  rows of numbers are re-read digits-only. `ocr.ts` is the engine around it.
+- `web/src/lib/ocr-read.ts` — the procedure: in a whole-screen screenshot only
+  the document page (the large white rectangle) is read, so other windows' words
+  do not join the PO's rows; each screenshot is enlarged and read twice (≈2× and
+  at the size that makes words ~24px tall); each table row is read again as one
+  line, which keeps the lone "6" or "M" a whole-page reading drops; and garbled
+  cells in rows of numbers are re-read digits-only. `ocr.ts` is the engine around it.
 - The engine's files (≈7 MB, cached after the first use) are copied from
   `node_modules` into `dist/ocr/<version>/` by `vite.config.ts` and served by
   OpsFlow itself; the CSP allows `'wasm-unsafe-eval'` for it.

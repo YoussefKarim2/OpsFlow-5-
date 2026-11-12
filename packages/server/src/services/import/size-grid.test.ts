@@ -48,6 +48,31 @@ describe('size headings', () => {
     assert.ok(h?.qty != null && h.price != null && h.amount != null);
   });
 
+  test('a size a picture garbled between two others is put back where the spacing has its column', () => {
+    // "XS Ss M L XL": the lone S came back as "Ss".
+    const h = readHeading([
+      cell('XS', 100, 112), cell('Ss', 158, 172), cell('M', 220, 230), cell('L', 281, 287), cell('XL', 338, 352),
+      cell('Quantity', 600, 650), cell('Price', 670, 700), cell('Total', 720, 750),
+    ]);
+    assert.deepEqual(h?.sizes.map((s) => s.label), ['XS', 'S', 'M', 'L', 'XL']);
+    assert.ok(Math.abs(h!.sizes[1]!.centre - 165) <= 2);
+  });
+
+  test('two sizes a picture lost entirely are put back from the spacing', () => {
+    // "XS … L XL XXL": S and M not read at all.
+    const h = readHeading([
+      cell('XS', 100, 112), cell('L', 281, 287), cell('XL', 338, 352), cell('XXL', 397, 413), cell('Quantity', 600, 650),
+    ]);
+    assert.deepEqual(h?.sizes.map((s) => s.label), ['XS', 'S', 'M', 'L', 'XL', 'XXL']);
+  });
+
+  test('a PO that skips a size, evenly spaced, is left as printed', () => {
+    const h = readHeading([
+      cell('S', 100, 106), cell('M', 157, 167), cell('XL', 218, 230), cell('XXL', 277, 293), cell('Quantity', 600, 650),
+    ]);
+    assert.deepEqual(h?.sizes.map((s) => s.label), ['S', 'M', 'XL', 'XXL']);
+  });
+
   test('a line of bare numbers with no quantity heading is data, not a heading', () => {
     assert.equal(readHeading([cell('3', 307, 312), cell('5', 355, 360), cell('5', 403, 408)]), null);
   });

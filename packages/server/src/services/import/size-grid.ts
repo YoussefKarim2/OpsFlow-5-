@@ -202,6 +202,7 @@ export function readHeading(cells: readonly GridCell[], index = 0): Heading | nu
   if (lettered && bare > 0 && bare <= sizes.length - bare) {
     for (let i = sizes.length - 1; i >= 0; i--) if (/^\d{1,3}$/.test(sizes[i]!.label)) sizes.splice(i, 1);
   }
+  other -= fillLadderGaps(sizes);
   if (sizes.length < 2) return null;
   if (!lettered && qty == null && amount == null) return null;
   // Words that are neither sizes nor headings (a description column) are fine
@@ -210,6 +211,48 @@ export function readHeading(cells: readonly GridCell[], index = 0): Heading | nu
   // "Total" with no price beside it is the quantity column.
   if (amount != null && price == null && qty == null) { qty = amount; amount = null; }
   return { index, sizes, qty, price, amount };
+}
+
+/** Letter sizes, smallest first: what lies between two of them is known. */
+const LADDER = ['XXXS', 'XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL'];
+
+/**
+ * Put back letter sizes a picture's reading lost from a heading.
+ *
+ * A screenshot's lone "S" or "M" can come back as "Ss", "H" or nothing, and
+ * the quantities under it then have no column. Between two letter sizes the
+ * missing ones are known ("XS … L" holds S and M), and the heading's even
+ * spacing says whether their columns are there: only a gap as wide as that
+ * many columns is filled, so a PO that skips a size is left as printed.
+ * Returns how many sizes were put back.
+ */
+function fillLadderGaps(sizes: Heading['sizes']): number {
+  const rung = (label: string) => LADDER.indexOf(label.toUpperCase());
+  const steps: number[] = [];
+  for (let i = 1; i < sizes.length; i++) {
+    const a = rung(sizes[i - 1]!.label), b = rung(sizes[i]!.label);
+    if (a >= 0 && b === a + 1) steps.push(sizes[i]!.centre - sizes[i - 1]!.centre);
+  }
+  if (steps.length < 2) return 0;
+  steps.sort((x, y) => x - y);
+  const pitch = steps[Math.floor(steps.length / 2)]!;
+  if (pitch <= 0 || steps.some((d) => Math.abs(d - pitch) > pitch * 0.2)) return 0;
+  let added = 0;
+  for (let i = sizes.length - 1; i >= 1; i--) {
+    const a = sizes[i - 1]!, b = sizes[i]!;
+    const ra = rung(a.label), rb = rung(b.label);
+    if (ra < 0 || rb <= ra + 1 || rb - ra > 3) continue;
+    const each = (b.centre - a.centre) / (rb - ra);
+    if (Math.abs(each - pitch) > pitch * 0.2) continue;
+    const half = Math.min(a.end - a.x, b.end - b.x) / 2;
+    const missing = LADDER.slice(ra + 1, rb).map((label, k) => {
+      const centre = a.centre + each * (k + 1);
+      return { label, centre, x: centre - half, end: centre + half };
+    });
+    sizes.splice(i, 0, ...missing);
+    added += missing.length;
+  }
+  return added;
 }
 
 // ── Grids ───────────────────────────────────────────────────────────────────
@@ -389,7 +432,8 @@ export function readSizeGrids(lines: readonly GridLine[]): GridBlock[] {
 // ── Grids into an order ─────────────────────────────────────────────────────
 
 export interface GridOrder {
-  matrix: { sizes: string[]; rows: Array<{ color: string; cells: Record<string, number>; total: number }> };
+  /** `unitPrice`: the model's own price on the PO, when its grid printed one. */
+  matrix: { sizes: string[]; rows: Array<{ color: string; cells: Record<string, number>; total: number; unitPrice: number | null }> };
   orderName: string | null;
   styleNumber: string | null;
   pricePerPiece: number | null;
@@ -417,6 +461,8 @@ export function gridsToOrder(blocks: readonly GridBlock[]): GridOrder | null {
   const canon = (s: string) => sizes.find((x) => x.toUpperCase() === s.toUpperCase()) ?? s;
 
   const rows = new Map<string, Record<string, number>>();
+  /** Each model's price; null where it was not printed, or two of its rows disagree. */
+  const priceOf = new Map<string, number | null>();
   const lineItems: GridOrder['lineItems'] = [];
   let value = 0, priced = 0;
   const prices = new Set<number>();
@@ -426,6 +472,7 @@ export function gridsToOrder(blocks: readonly GridBlock[]): GridOrder | null {
       const cells = rows.get(name) ?? {};
       for (const [s, q] of Object.entries(r.cells)) cells[canon(s)] = (cells[canon(s)] ?? 0) + q;
       rows.set(name, cells);
+      priceOf.set(name, priceOf.has(name) && priceOf.get(name) !== r.price ? null : r.price);
       if (r.price != null) {
         prices.add(r.price);
         value += r.amount ?? r.total * r.price;
@@ -437,7 +484,9 @@ export function gridsToOrder(blocks: readonly GridBlock[]): GridOrder | null {
       });
     }
   }
-  const matrixRows = [...rows].map(([color, cells]) => ({ color, cells, total: Object.values(cells).reduce((a, b) => a + b, 0) }));
+  const matrixRows = [...rows].map(([color, cells]) => ({
+    color, cells, total: Object.values(cells).reduce((a, b) => a + b, 0), unitPrice: priceOf.get(color) ?? null,
+  }));
   const totalQty = matrixRows.reduce((a, r) => a + r.total, 0);
   const codes = [...new Set(blocks.map((b) => b.styleCode).filter(Boolean))] as string[];
   const names = [...new Set(blocks.map((b) => b.style).filter(Boolean))] as string[];
